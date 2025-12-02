@@ -13,7 +13,8 @@ pub struct Message {
 #[derive(Debug, Serialize, Deserialize)]
 
 pub enum ClientMessage {
-    Login { user_id: String },
+    Register { username: String, password: String },
+    Login { username: String, password: String },
     SendMessage(Message),
     Logout,
 }
@@ -21,6 +22,7 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize)]
 
 pub enum ServerMessage {
+    RegisterSuccess { user_id: String },
     LoginSuccess { user_id: String },
     Message(Message),
     Ack {id: String},

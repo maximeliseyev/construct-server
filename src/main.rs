@@ -1,4 +1,5 @@
 mod message;
+mod db;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -6,6 +7,7 @@ use tokio::sync::{RwLock, mpsc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use message::{ClientMessage, ServerMessage};
+use db::DbPool;
 
 type Clients = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ServerMessage>>>>;
 
@@ -13,6 +15,13 @@ type Clients = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ServerMessage>>>
 #[tokio::main]
 
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set");
+    let db_pool = db::create_pool(&database_url).await?;
+    println!("Connected to database!");
+
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
     println!("Construct server listening on 127.0.0.1:8080");
 
@@ -23,9 +32,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("New connection from: {}", addr);
 
         let clients = clients.clone();
+        let db_pool = db_pool.clone();
 
         tokio::spawn(async move {
-            handle_client(socket, addr, clients).await;
+            handle_client(socket, addr, clients, db_pool).await;
         });
     }
 }
@@ -34,6 +44,7 @@ async fn handle_client(
     mut socket: tokio::net::TcpStream,
     addr: std::net::SocketAddr,
     clients: Clients,
+    db_pool: DbPool,
 ) {
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut user_id: Option<String> = None;
@@ -49,15 +60,79 @@ async fn handle_client(
                     }
                     Ok(n) => {
                         match serde_json::from_slice::<ClientMessage>(&buf[..n]) {
-                            Ok(ClientMessage::Login { user_id: uid }) => {
-                                println!("User {} logged in from {}", uid, addr);
-                                user_id = Some(uid.clone());
+                            Ok(ClientMessage::Register { username, password }) => {
+                                println!("Registration attempt for username: {}", username);
+    
+                                // Генерируем временный identity_key (потом заменим на настоящий)
+                                let identity_key = vec![0u8; 32];
+    
+                                match db::create_user(&db_pool, &username, &password, &identity_key).await {
                                 
-                                clients.write().await.insert(uid.clone(), tx.clone());
+                                    Ok(user) => {
+                                        println!("User {} registered successfully", username);
+                                            let response = ServerMessage::RegisterSuccess { 
+                                                user_id: user.id.to_string() 
+                                            };
+                                            if let Ok(json) = serde_json::to_vec(&response) {
+                                                let _ = socket.write_all(&json).await;
+                                            }
+                                    }
+                                    Err(e) => {
+                                        println!("Registration failed: {}", e);
+                                        let error = ServerMessage::Error { 
+                                            reason: "Registration failed. Username may already exist.".to_string()
+                                        };
+                                        if let Ok(json) = serde_json::to_vec(&error) {
+                                            let _ = socket.write_all(&json).await;
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(ClientMessage::Login { username, password }) => {
+                                println!("Login attempt for username: {}", username);
                                 
-                                let response = ServerMessage::LoginSuccess { user_id: uid };
-                                if let Ok(json) = serde_json::to_vec(&response) {
-                                    let _ = socket.write_all(&json).await;
+                                match db::get_user_by_username(&db_pool, &username).await {
+                                    Ok(Some(user)) => {
+                                        if db::verify_password(&user, &password).await.unwrap_or(false) {
+                                            println!("User {} logged in successfully", username);
+                                            user_id = Some(user.id.to_string());
+                                            
+                                            clients.write().await.insert(user.id.to_string(), tx.clone());
+                                            
+                                            let response = ServerMessage::LoginSuccess { 
+                                                user_id: user.id.to_string() 
+                                            };
+                                            if let Ok(json) = serde_json::to_vec(&response) {
+                                                let _ = socket.write_all(&json).await;
+                                            }
+                                        } else {
+                                            println!("Invalid password for user {}", username);
+                                            let error = ServerMessage::Error { 
+                                                reason: "Invalid username or password".to_string()
+                                            };
+                                            if let Ok(json) = serde_json::to_vec(&error) {
+                                                let _ = socket.write_all(&json).await;
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        println!("User {} not found", username);
+                                        let error = ServerMessage::Error { 
+                                            reason: "Invalid username or password".to_string()
+                                        };
+                                        if let Ok(json) = serde_json::to_vec(&error) {
+                                            let _ = socket.write_all(&json).await;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("Database error: {}", e);
+                                        let error = ServerMessage::Error { 
+                                            reason: "Server error".to_string()
+                                        };
+                                        if let Ok(json) = serde_json::to_vec(&error) {
+                                            let _ = socket.write_all(&json).await;
+                                        }
+                                    }
                                 }
                             }
                             Ok(ClientMessage::SendMessage(msg)) => {
@@ -99,10 +174,9 @@ async fn handle_client(
                 }
             }
             Some(msg) = rx.recv() => {
-                if let Ok(json) = serde_json::to_vec(&msg) {
-                    if socket.write_all(&json).await.is_err() {
-                        break;
-                    }
+                if let Ok(json) = serde_json::to_vec(&msg) && socket.write_all(&json).await.is_err() {
+                } else {
+                    break;
                 }
             }
         }
