@@ -12,3 +12,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 bcrypt = "0.15"
 dotenvy = "0.15"
 anyhow = "1.0"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand = "0.8"
+chacha20poly1305 = "0.10"
+base64 = "0.22"

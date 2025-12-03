@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: construct-db
+    environment:
+      POSTGRES_USER: construct
+      POSTGRES_PASSWORD: construct_dev_password
+      POSTGRES_DB: construct
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

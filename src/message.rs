@@ -7,14 +7,24 @@ pub struct Message {
     pub to: String,
     pub content: String,
     pub timestamp: u64,
+    pub encrypted: bool,
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 
 pub enum ClientMessage {
-    Register { username: String, password: String },
-    Login { username: String, password: String },
+    Register { 
+        username: String, 
+        password: String,
+        public_key: String,
+    },
+    Login {
+        username: String, 
+        password: String
+    },
+    GetPublicKey {
+        username: String
+    },
     SendMessage(Message),
     Logout,
 }
@@ -24,6 +34,11 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     RegisterSuccess { user_id: String },
     LoginSuccess { user_id: String },
+    PublicKey {
+        user_id: String,
+        username: String,
+        public_key: String
+    },
     Message(Message),
     Ack {id: String},
     Error {reason: String},
