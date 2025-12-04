@@ -1,3 +1,6 @@
 /target
 .env
 *.db
+test_*.py
+*.pyc
+__pycache__/
