@@ -1,7 +1,21 @@
-/target
-.env
-*.db
+# Python
 test_*.py
 *.pyc
 __pycache__/
+venv/
+*.egg-info/
+
+# Rust
+target/
 Cargo.lock
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
