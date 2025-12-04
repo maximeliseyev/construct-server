@@ -4,3 +4,4 @@
 test_*.py
 *.pyc
 __pycache__/
+Cargo.lock
