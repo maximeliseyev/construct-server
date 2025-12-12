@@ -58,7 +58,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let queue = queue.clone();
 
         tokio::spawn(async move {
-            // Пытаемся upgrade TCP -> WebSocket
             match accept_async(socket).await {
                 Ok(ws_stream) => {
                     println!("WebSocket connection established: {}", addr);
@@ -94,7 +93,6 @@ async fn handle_websocket(
 
                         match serde_json::from_str::<ClientMessage>(&text) {
                             Ok(ClientMessage::Register { username, display_name, password, public_key }) => {
-                                // Fallback to username if display_name not provided
                                 let final_display_name = display_name.unwrap_or_else(|| username.clone());
                                 println!("Registration: username={}, display_name={}", username, final_display_name);
 
@@ -340,17 +338,14 @@ async fn handle_websocket(
             }
 
             Some(server_msg) = rx.recv() => {
-                if let Ok(json) = serde_json::to_string(&server_msg) {
-                    if let Err(e) = ws_sender.send(WsMessage::Text(json)).await {
-                        println!("Failed to send to {}: {}", addr, e);
-                        break;
-                    }
+                if let Ok(json) = serde_json::to_string(&server_msg) && let Err(e) = ws_sender.send(WsMessage::Text(json)).await {
+                    println!("Failed to send to {}: {}", addr, e);
+                    break;
                 }
             }
         }
     }
 
-    // Cleanup
     if let Some(uid) = user_id {
         clients.write().await.remove(&uid);
         println!("User {} disconnected", uid);
