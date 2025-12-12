@@ -96,22 +96,6 @@ cargo run
 
 Server will start on `127.0.0.1:8080`
 
-## Usage
-
-### Register a user
-```bash
-python3 test_crypto_client.py register alice password123
-```
-
-### Send encrypted message
-```bash
-python3 test_crypto_client.py send alice password123 bob "Secret message"
-```
-
-### Listen for messages
-```bash
-python3 test_crypto_client.py listen bob password456
-```
 
 ## Security Features
 
