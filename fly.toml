@@ -1,16 +1,21 @@
-app = "construct-server"
-primary_region = "nrt"  # Tokyo!
+# fly.toml app configuration file generated for construct-messenger on 2025-12-12T13:46:35+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'construct-messenger'
+primary_region = 'nrt'
 
 [build]
-  dockerfile = "Dockerfile"
 
-[[services]]
+[http_service]
   internal_port = 8080
-  protocol = "tcp"
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
 
-  [[services.ports]]
-    port = 443
-    handlers = ["tls"]
-
-[env]
-  DATABASE_URL = "from secrets"
+[[vm]]
+  memory = '512mb'
+  cpus = 2
+  memory_mb = 512

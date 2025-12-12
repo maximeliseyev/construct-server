@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, RwLock};
 
@@ -26,14 +25,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
     // Redis configuration
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
     // Server configuration
-    let server_host = std::env::var("SERVER_HOST")
-        .unwrap_or_else(|_| "127.0.0.1".to_string());
-    let server_port = std::env::var("SERVER_PORT")
-        .unwrap_or_else(|_| "8080".to_string());
+    let server_host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let server_port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "8080".to_string());
     let bind_address = format!("{}:{}", server_host, server_port);
 
     // Initialize database
@@ -48,7 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start WebSocket server
     let listener = TcpListener::bind(&bind_address).await?;
-    println!("🚀 Construct server listening on {} (WebSocket)", bind_address);
+    println!(
+        "🚀 Construct server listening on {} (WebSocket)",
+        bind_address
+    );
 
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 

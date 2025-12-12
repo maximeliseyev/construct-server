@@ -1,0 +1,7 @@
+target/
+.git/
+.env
+*.md
+.construct_keys.json
+test_*.py
+docker-compose.yml

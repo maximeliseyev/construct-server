@@ -118,19 +118,3 @@ pub struct PublicUserInfo {
 pub async fn verify_password(user: &User, password: &str) -> Result<bool> {
     Ok(bcrypt::verify(password, &user.password_hash)?)
 }
-
-pub async fn get_public_key(pool: &DbPool, username: &str) -> Result<Option<Vec<u8>>> {
-    let result = sqlx::query!(
-        r#"
-        SELECT identity_key
-        FROM users
-        WHERE username = $1
-        "#,
-        username
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(result.map(|r| r.identity_key))
-}
-
