@@ -21,29 +21,26 @@ use uuid::Uuid;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
-    // Database configuration
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
-    // Redis configuration
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-    // Server configuration
-    let server_host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let server_port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "8080".to_string());
-    let bind_address = format!("{}:{}", server_host, server_port);
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(8080);
 
-    // Initialize database
+    let bind_address = format!("0.0.0.0:{}", port);
+
     let db_pool = db::create_pool(&database_url).await?;
     println!("✅ Connected to database");
 
-    // Initialize Redis message queue
     let message_queue = queue::MessageQueue::new(&redis_url).await?;
     println!("✅ Connected to Redis");
 
     let queue = Arc::new(tokio::sync::Mutex::new(message_queue));
 
-    // Start WebSocket server
     let listener = TcpListener::bind(&bind_address).await?;
     println!(
         "🚀 Construct server listening on {} (WebSocket)",
