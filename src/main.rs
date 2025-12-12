@@ -34,18 +34,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_address = format!("0.0.0.0:{}", port);
 
     let db_pool = db::create_pool(&database_url).await?;
-    println!("✅ Connected to database");
+    println!("Connected to database");
 
     let message_queue = queue::MessageQueue::new(&redis_url).await?;
-    println!("✅ Connected to Redis");
+    println!("Connected to Redis");
 
     let queue = Arc::new(tokio::sync::Mutex::new(message_queue));
 
     let listener = TcpListener::bind(&bind_address).await?;
-    println!(
-        "🚀 Construct server listening on {} (WebSocket)",
-        bind_address
-    );
+    println!("Construct server listening on {} (WebSocket)", bind_address);
 
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 
@@ -152,7 +149,7 @@ async fn handle_websocket(
                                             let mut queue_lock = queue.lock().await;
                                             match queue_lock.dequeue_messages(&user.id.to_string()).await {
                                                 Ok(messages) => {
-                                                    println!("📭 Sending {} queued messages", messages.len());
+                                                    println!("Sending {} queued messages", messages.len());
                                                     for msg in messages {
                                                         let _ = tx.send(ServerMessage::Message(msg));
                                                     }
