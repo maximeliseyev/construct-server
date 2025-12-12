@@ -20,3 +20,4 @@ base64 = "0.22"
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 tokio-tungstenite = "0.21"
 futures-util = "0.3"
+chrono = { version = "0.4", features = ["serde"] }

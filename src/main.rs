@@ -16,25 +16,39 @@ mod queue;
 use base64::{engine::general_purpose, Engine as _};
 use db::DbPool;
 use message::{ClientMessage, ServerMessage};
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
+    // Database configuration
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
+    // Redis configuration
+    let redis_url = std::env::var("REDIS_URL")
+        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
+    // Server configuration
+    let server_host = std::env::var("SERVER_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let server_port = std::env::var("SERVER_PORT")
+        .unwrap_or_else(|_| "8080".to_string());
+    let bind_address = format!("{}:{}", server_host, server_port);
+
+    // Initialize database
     let db_pool = db::create_pool(&database_url).await?;
-    println!("Connected to database");
+    println!("✅ Connected to database");
 
+    // Initialize Redis message queue
     let message_queue = queue::MessageQueue::new(&redis_url).await?;
-    println!("Connected to Redis");
+    println!("✅ Connected to Redis");
 
     let queue = Arc::new(tokio::sync::Mutex::new(message_queue));
 
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    println!("Construct server listening on 127.0.0.1:8080 (WebSocket)");
+    // Start WebSocket server
+    let listener = TcpListener::bind(&bind_address).await?;
+    println!("🚀 Construct server listening on {} (WebSocket)", bind_address);
 
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 
@@ -82,8 +96,10 @@ async fn handle_websocket(
                         println!("Received from {}: {}", addr, text);
 
                         match serde_json::from_str::<ClientMessage>(&text) {
-                            Ok(ClientMessage::Register { username, password, public_key }) => {
-                                println!("Registration attempt for username: {}", username);
+                            Ok(ClientMessage::Register { username, display_name, password, public_key }) => {
+                                // Fallback to username if display_name not provided
+                                let final_display_name = display_name.unwrap_or_else(|| username.clone());
+                                println!("Registration: username={}, display_name={}", username, final_display_name);
 
                                 let identity_key = match general_purpose::STANDARD.decode(&public_key) {
                                     Ok(key) => key,
@@ -99,11 +115,13 @@ async fn handle_websocket(
                                     }
                                 };
 
-                                match db::create_user(&db_pool, &username, &password, &identity_key).await {
+                                match db::create_user(&db_pool, &username, &final_display_name, &password, &identity_key).await {
                                     Ok(user) => {
-                                        println!("User {} registered successfully", username);
+                                        println!("User registered: {} (@{})", user.display_name, user.username);
                                         let response = ServerMessage::RegisterSuccess {
-                                            user_id: user.id.to_string()
+                                            user_id: user.id.to_string(),
+                                            username: user.username.clone(),
+                                            display_name: user.display_name.clone(),
                                         };
                                         if let Ok(json) = serde_json::to_string(&response) {
                                             let _ = ws_sender.send(WsMessage::Text(json)).await;
@@ -111,9 +129,12 @@ async fn handle_websocket(
                                     }
                                     Err(e) => {
                                         println!("Registration failed: {}", e);
-                                        let error = ServerMessage::Error {
-                                            reason: "Registration failed. Username may already exist.".to_string()
+                                        let reason = if e.to_string().contains("users_username_key") {
+                                            format!("Username '{}' is already taken", username)
+                                        } else {
+                                            "Registration failed".to_string()
                                         };
+                                        let error = ServerMessage::Error { reason };
                                         if let Ok(json) = serde_json::to_string(&error) {
                                             let _ = ws_sender.send(WsMessage::Text(json)).await;
                                         }
@@ -122,19 +143,21 @@ async fn handle_websocket(
                             }
 
                             Ok(ClientMessage::Login { username, password }) => {
-                                println!("Login attempt for username: {}", username);
+                                println!("Login attempt: {}", username);
 
                                 match db::get_user_by_username(&db_pool, &username).await {
                                     Ok(Some(user)) => {
                                         if db::verify_password(&user, &password).await.unwrap_or(false) {
-                                            println!("User {} logged in successfully", username);
+                                            println!("User logged in: {} (@{})", user.display_name, user.username);
                                             user_id = Some(user.id.to_string());
 
                                             clients.write().await.insert(user.id.to_string(), tx.clone());
+
+                                            // Send queued messages from Redis
                                             let mut queue_lock = queue.lock().await;
                                             match queue_lock.dequeue_messages(&user.id.to_string()).await {
                                                 Ok(messages) => {
-                                                    println!("📭 Sending {} queued messages to {}", messages.len(), username);
+                                                    println!("📭 Sending {} queued messages", messages.len());
                                                     for msg in messages {
                                                         let _ = tx.send(ServerMessage::Message(msg));
                                                     }
@@ -146,13 +169,15 @@ async fn handle_websocket(
                                             drop(queue_lock);
 
                                             let response = ServerMessage::LoginSuccess {
-                                                user_id: user.id.to_string()
+                                                user_id: user.id.to_string(),
+                                                username: user.username.clone(),
+                                                display_name: user.display_name.clone(),
                                             };
                                             if let Ok(json) = serde_json::to_string(&response) {
                                                 let _ = ws_sender.send(WsMessage::Text(json)).await;
                                             }
                                         } else {
-                                            println!("Invalid password for user: {}", username);
+                                            println!("Invalid password for: {}", username);
                                             let error = ServerMessage::Error {
                                                 reason: "Invalid credentials".to_string()
                                             };
@@ -171,7 +196,7 @@ async fn handle_websocket(
                                         }
                                     }
                                     Err(e) => {
-                                        println!("Database error during login: {}", e);
+                                        println!("Database error: {}", e);
                                         let error = ServerMessage::Error {
                                             reason: "Server error".to_string()
                                         };
@@ -182,34 +207,70 @@ async fn handle_websocket(
                                 }
                             }
 
-                            Ok(ClientMessage::GetPublicKey { username }) => {
-                                println!("Public key request for: {}", username);
+                            Ok(ClientMessage::SearchUsers { query }) => {
+                                println!("Search users: '{}'", query);
 
-                                match db::get_user_by_username(&db_pool, &username).await {
-                                    Ok(Some(user)) => {
-                                        let public_key_b64 = general_purpose::STANDARD.encode(&user.identity_key);
-
-                                        let response = ServerMessage::PublicKey {
-                                            user_id: user.id.to_string(),
-                                            username: username.clone(),
-                                            public_key: public_key_b64,
-                                        };
+                                match db::search_users_by_display_name(&db_pool, &query).await {
+                                    Ok(users) => {
+                                        println!("Found {} users", users.len());
+                                        let response = ServerMessage::SearchResults { users };
                                         if let Ok(json) = serde_json::to_string(&response) {
                                             let _ = ws_sender.send(WsMessage::Text(json)).await;
                                         }
                                     }
-                                    Ok(None) => {
+                                    Err(e) => {
+                                        println!("Search error: {}", e);
                                         let error = ServerMessage::Error {
-                                            reason: format!("User {} not found", username),
+                                            reason: "Search failed".to_string(),
                                         };
                                         if let Ok(json) = serde_json::to_string(&error) {
                                             let _ = ws_sender.send(WsMessage::Text(json)).await;
                                         }
                                     }
-                                    Err(e) => {
-                                        println!("Database error: {}", e);
+                                }
+                            }
+
+                            Ok(ClientMessage::GetPublicKey { user_id }) => {
+                                println!("Public key request for user_id: {}", user_id);
+
+                                match Uuid::parse_str(&user_id) {
+                                    Ok(uuid) => {
+                                        match db::get_user_by_id(&db_pool, &uuid).await {
+                                            Ok(Some(user)) => {
+                                                let public_key_b64 = general_purpose::STANDARD.encode(&user.identity_key);
+
+                                                let response = ServerMessage::PublicKey {
+                                                    user_id: user.id.to_string(),
+                                                    username: user.username.clone(),
+                                                    display_name: user.display_name.clone(),
+                                                    public_key: public_key_b64,
+                                                };
+                                                if let Ok(json) = serde_json::to_string(&response) {
+                                                    let _ = ws_sender.send(WsMessage::Text(json)).await;
+                                                }
+                                            }
+                                            Ok(None) => {
+                                                let error = ServerMessage::Error {
+                                                    reason: format!("User {} not found", user_id),
+                                                };
+                                                if let Ok(json) = serde_json::to_string(&error) {
+                                                    let _ = ws_sender.send(WsMessage::Text(json)).await;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                println!("Database error: {}", e);
+                                                let error = ServerMessage::Error {
+                                                    reason: "Server error".to_string(),
+                                                };
+                                                if let Ok(json) = serde_json::to_string(&error) {
+                                                    let _ = ws_sender.send(WsMessage::Text(json)).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
                                         let error = ServerMessage::Error {
-                                            reason: "Server error".to_string(),
+                                            reason: "Invalid user_id format".to_string(),
                                         };
                                         if let Ok(json) = serde_json::to_string(&error) {
                                             let _ = ws_sender.send(WsMessage::Text(json)).await;
