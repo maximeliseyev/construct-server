@@ -145,7 +145,6 @@ async fn handle_websocket(
 
                                             clients.write().await.insert(user.id.to_string(), tx.clone());
 
-                                            // Send queued messages from Redis
                                             let mut queue_lock = queue.lock().await;
                                             match queue_lock.dequeue_messages(&user.id.to_string()).await {
                                                 Ok(messages) => {
