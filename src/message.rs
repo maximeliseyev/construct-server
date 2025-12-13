@@ -19,7 +19,10 @@ pub enum ClientMessage {
     },
     Login {
         username: String,
-        password: String
+        password: String,
+    },
+    Connect {
+        session_token: String,
     },
     SearchUsers {
         query: String,
@@ -28,7 +31,9 @@ pub enum ClientMessage {
         user_id: String,
     },
     SendMessage(Message),
-    Logout,
+    Logout {
+        session_token: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,12 +42,21 @@ pub enum ServerMessage {
         user_id: String,
         username: String,
         display_name: String,
+        session_token: String,
+        expires_at: i64,
     },
     LoginSuccess {
         user_id: String,
         username: String,
         display_name: String,
+        session_token: String,
+        expires_at: i64,
     },
+    ConnectSuccess {
+        user_id: String,
+        display_name: String,
+    },
+    SessionExpired,
     SearchResults {
         users: Vec<crate::db::PublicUserInfo>,
     },
@@ -50,9 +64,13 @@ pub enum ServerMessage {
         user_id: String,
         username: String,
         display_name: String,
-        public_key: String
+        public_key: String,
     },
     Message(Message),
-    Ack {id: String},
-    Error {reason: String},
+    Ack {
+        id: String,
+    },
+    Error {
+        reason: String,
+    },
 }

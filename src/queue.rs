@@ -1,9 +1,7 @@
 use crate::message::Message;
 use anyhow::Result;
 use redis::{AsyncCommands, Client};
-use serde_json;
 
-// Default TTL for queued messages: 7 days (in seconds)
 const DEFAULT_MESSAGE_TTL_DAYS: i64 = 7;
 const SECONDS_PER_DAY: i64 = 86400;
 
@@ -25,7 +23,10 @@ impl MessageQueue {
 
         let message_ttl_seconds = ttl_days * SECONDS_PER_DAY;
 
-        println!("📦 Message queue TTL: {} days ({} seconds)", ttl_days, message_ttl_seconds);
+        println!(
+            "📦 Message queue TTL: {} days ({} seconds)",
+            ttl_days, message_ttl_seconds
+        );
 
         Ok(Self {
             client: conn,
@@ -72,5 +73,60 @@ impl MessageQueue {
         let key = format!("queue:{}", user_id);
         let count: i32 = self.client.llen(&key).await?;
         Ok(count > 0)
+    }
+
+    pub async fn create_session(
+        &mut self,
+        jti: &str,
+        user_id: &str,
+        ttl_seconds: i64,
+    ) -> Result<()> {
+        let session_key = format!("session:{}", jti);
+
+        let _: () = self
+            .client
+            .set_ex(&session_key, user_id, ttl_seconds as u64)
+            .await?;
+
+        // Добавляем jti в список сессий пользователя (для force logout всех устройств)
+        let user_sessions_key = format!("user_sessions:{}", user_id);
+        let _: () = self.client.sadd(&user_sessions_key, jti).await?;
+        let _: () = self.client.expire(&user_sessions_key, ttl_seconds).await?;
+
+        println!("Created session {} for user {}", jti, user_id);
+        Ok(())
+    }
+
+    pub async fn validate_session(&mut self, jti: &str) -> Result<Option<String>> {
+        let session_key = format!("session:{}", jti);
+        let user_id: Option<String> = self.client.get(&session_key).await?;
+        Ok(user_id)
+    }
+
+    pub async fn revoke_session(&mut self, jti: &str, user_id: &str) -> Result<()> {
+        let session_key = format!("session:{}", jti);
+        let user_sessions_key = format!("user_sessions:{}", user_id);
+
+        let _: () = self.client.del(&session_key).await?;
+        let _: () = self.client.srem(&user_sessions_key, jti).await?;
+
+        println!("Revoked session {} for user {}", jti, user_id);
+        Ok(())
+    }
+
+    pub async fn revoke_all_sessions(&mut self, user_id: &str) -> Result<()> {
+        let user_sessions_key = format!("user_sessions:{}", user_id);
+
+        let jtis: Vec<String> = self.client.smembers(&user_sessions_key).await?;
+
+        for jti in jtis {
+            let session_key = format!("session:{}", jti);
+            let _: () = self.client.del(&session_key).await?;
+        }
+
+        let _: () = self.client.del(&user_sessions_key).await?;
+
+        println!("Revoked ALL sessions for user {}", user_id);
+        Ok(())
     }
 }
