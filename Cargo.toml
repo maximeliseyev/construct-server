@@ -5,19 +5,22 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sqlx = { version = "0.7", features = ["postgres", "runtime-tokio", "uuid", "chrono"] }
+tokio-tungstenite = "0.21"
+tokio-rustls = "0.24"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 bcrypt = "0.15"
+anyhow = "1"
 dotenvy = "0.15"
-anyhow = "1.0"
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-rand = "0.8"
-chacha20poly1305 = "0.10"
 base64 = "0.22"
-redis = { version = "0.24", features = ["tokio-comp", "connection-manager", "tls-rustls"] }
-tokio-tungstenite = "0.21"
-futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
+
+# Crypto
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+ed25519-dalek = "2"
+rand = "0.8"
