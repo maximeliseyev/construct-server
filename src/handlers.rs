@@ -337,37 +337,41 @@ async fn handle_connect(
     match auth_manager.verify_token(&session_token) {
         Ok(claims) => {
             let mut queue_lock = queue.lock().await;
-            match queue_lock.validate_session(&claims.jti).await {
-                Ok(Some(uid)) if uid == claims.sub => {
-                    let uuid = match Uuid::parse_str(&uid) {
-                        Ok(u) => u,
-                        Err(_) => {
-                            send_error(ws_sender, "INVALID_USER_ID", "Invalid user ID in token")
-                                .await;
-                            return;
-                        }
-                    };
+            let session_valid = match queue_lock.validate_session(&claims.jti).await {
+                Ok(Some(uid)) if uid == claims.sub => true,
+                _ => false,
+            };
+            drop(queue_lock); // Release lock before calling establish_session
 
-                    match db::get_user_by_id(db_pool, &uuid).await {
-                        Ok(Some(user)) => {
-                            if let Err(e_msg) = establish_session(clients, tx, user_id, &user, queue, &claims.jti).await {
-                                println!("Failed to establish session: {}", e_msg);
-                                send_error(ws_sender, "SESSION_CREATION_FAILED", "Could not create session")
-                                    .await;
-                                return;
-                            }
+            if !session_valid {
+                send_json(ws_sender, &ServerMessage::SessionExpired).await;
+                return;
+            }
 
-                            let response = ServerMessage::ConnectSuccess {
-                                user_id: user.id.to_string(),
-                                username: user.username.clone(),
-                                display_name: user.display_name.clone(),
-                            };
-                            send_json(ws_sender, &response).await;
-                        }
-                        _ => {
-                            send_json(ws_sender, &ServerMessage::SessionExpired).await;
-                        }
+            let uuid = match Uuid::parse_str(&claims.sub) {
+                Ok(u) => u,
+                Err(_) => {
+                    send_error(ws_sender, "INVALID_USER_ID", "Invalid user ID in token")
+                        .await;
+                    return;
+                }
+            };
+
+            match db::get_user_by_id(db_pool, &uuid).await {
+                Ok(Some(user)) => {
+                    if let Err(e_msg) = establish_session(clients, tx, user_id, &user, queue, &claims.jti).await {
+                        println!("Failed to establish session: {}", e_msg);
+                        send_error(ws_sender, "SESSION_CREATION_FAILED", "Could not create session")
+                            .await;
+                        return;
                     }
+
+                    let response = ServerMessage::ConnectSuccess {
+                        user_id: user.id.to_string(),
+                        username: user.username.clone(),
+                        display_name: user.display_name.clone(),
+                    };
+                    send_json(ws_sender, &response).await;
                 }
                 _ => {
                     send_json(ws_sender, &ServerMessage::SessionExpired).await;
