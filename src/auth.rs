@@ -30,7 +30,7 @@ impl AuthManager {
     pub fn create_token(&self, user_id: &Uuid) -> Result<(String, String, i64)> {
         let now = Utc::now();
         let exp = now + Duration::days(TOKEN_ALIVE_DAYS);
-        let jti = Uuid::new_v4().to_string(); // Уникаль
+        let jti = Uuid::new_v4().to_string();
 
         let claims = Claims {
             sub: user_id.to_string(),
@@ -44,7 +44,6 @@ impl AuthManager {
         Ok((token, jti, exp.timestamp()))
     }
 
-    // Проверить JWT токен (только подпись, без Redis)
     pub fn verify_token(&self, token: &str) -> Result<Claims> {
         let validation = Validation::new(Algorithm::HS256);
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)?;

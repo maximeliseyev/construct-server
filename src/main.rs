@@ -4,8 +4,10 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
 use tokio_tungstenite::accept_async;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod auth;
+mod context;
 mod crypto;
 mod db;
 mod handlers;
@@ -13,12 +15,21 @@ mod message;
 mod queue;
 
 use auth::AuthManager;
-use handlers::{handle_websocket, Clients};
+use context::AppContext;
+use handlers::{handle_websocket, session::Clients};
 use queue::MessageQueue;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
+
+    // Initialize tracing
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     // Environment variables
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -36,11 +47,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to database
     let db_pool = db::create_pool(&database_url).await?;
-    println!("✅ Connected to database");
+    tracing::info!("Connected to database");
 
     // Connect to Redis
     let message_queue = MessageQueue::new(&redis_url).await?;
-    println!("✅ Connected to Redis");
+    tracing::info!("Connected to Redis");
 
     let queue = Arc::new(Mutex::new(message_queue));
 
@@ -49,24 +60,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // WebSocket listener
     let listener = TcpListener::bind(&bind_address).await?;
-    println!(
-        "🚀 Construct server listening on {} (WebSocket)",
+    tracing::info!(
+        "Construct server listening on {} (WebSocket)",
         bind_address
     );
 
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 
+    // Create application context
+    let app_context = AppContext::new(db_pool, queue, auth_manager, clients);
+
     loop {
         let (socket, addr) = listener.accept().await?;
 
-        let clients = clients.clone();
-        let db_pool = db_pool.clone();
-        let queue = queue.clone();
-        let auth_manager = auth_manager.clone();
+        let ctx = app_context.clone();
 
         tokio::spawn(async move {
             if let Ok(ws_stream) = accept_async(socket).await {
-                handle_websocket(ws_stream, addr, clients, db_pool, queue, auth_manager).await;
+                handle_websocket(ws_stream, addr, ctx).await;
             }
         });
     }
