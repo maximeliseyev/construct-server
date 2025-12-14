@@ -23,7 +23,7 @@ pub async fn handle_send_message(
                     message_id: msg.id.clone(),
                     status: "delivered".to_string(),
                 };
-                if let Err(e) = handler.send_json(&ack).await {
+                if let Err(e) = handler.send_msgpack(&ack).await {
                     tracing::error!(
                         error = %e,
                         message_id = %msg.id,
@@ -55,7 +55,7 @@ pub async fn handle_send_message(
                             message_id: msg.id.clone(),
                             status: "queued".to_string(),
                         };
-                        if let Err(e) = handler.send_json(&ack).await {
+                        if let Err(e) = handler.send_msgpack(&ack).await {
                             tracing::error!(
                                 error = %e,
                                 message_id = %msg.id,
@@ -81,7 +81,7 @@ pub async fn handle_send_message(
                     message_id: msg.id.clone(),
                     status: "queued".to_string(),
                 };
-                if let Err(e) = handler.send_json(&ack).await {
+                if let Err(e) = handler.send_msgpack(&ack).await {
                     tracing::error!(
                         error = %e,
                         message_id = %msg.id,

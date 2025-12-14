@@ -1,77 +1,123 @@
 use anyhow::Result;
+use bytes::Bytes;
+use http_body_util::Full;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
+
 use tokio::net::TcpListener;
+use tokio::signal;
 use tokio::sync::{Mutex, RwLock};
 use tokio_tungstenite::accept_async;
+use tracing;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, body::Incoming as IncomingBody, StatusCode};
+use hyper_util::rt::TokioIo;
+
+
 mod auth;
+mod config;
 mod context;
 mod crypto;
 mod db;
 mod handlers;
+mod health;
 mod message;
+mod metrics;
 mod queue;
 
 use auth::AuthManager;
+use config::Config;
 use context::AppContext;
+use db::DbPool;
 use handlers::{handle_websocket, session::Clients};
 use queue::MessageQueue;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenvy::dotenv().ok();
+type HttpResult = Result<Response<Full<Bytes>>, Infallible>;
 
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+async fn http_handler(
+    req: Request<IncomingBody>,
+    db_pool: Arc<DbPool>,
+    queue: Arc<Mutex<MessageQueue>>,
+) -> HttpResult {
+    let response = match req.uri().path() {
+        "/health" => match health::health_check(&db_pool, queue).await {
+            Ok(_) => Response::new(Full::new(Bytes::from("OK"))),
+            Err(e) => {
+                tracing::error!("Health check failed: {}", e);
+                let mut res = Response::new(Full::new(Bytes::from("Service Unavailable")));
+                *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+                res
+            }
+        },
+        "/metrics" => match metrics::gather_metrics() {
+            Ok(metrics_data) => {
+                let mut res = Response::new(Full::new(Bytes::from(metrics_data)));
+                res.headers_mut().insert(
+                    "Content-Type",
+                    "text/plain; version=0.0.4".parse().unwrap(),
+                );
+                res
+            }
+            Err(e) => {
+                tracing::error!("Failed to gather metrics: {}", e);
+                let mut res = Response::new(Full::new(Bytes::from("Internal Server Error")));
+                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                res
+            }
+        },
+        _ => {
+            let mut not_found = Response::new(Full::new(Bytes::from("Not Found")));
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            not_found
+        }
+    };
+    Ok(response)
+}
 
-    // Environment variables
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "change-this-secret-in-production".to_string());
-
-    let port = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(8080);
-
-    let bind_address = format!("0.0.0.0:{}", port);
-
-    // Connect to database
-    let db_pool = db::create_pool(&database_url).await?;
-    tracing::info!("Connected to database");
-
-    // Connect to Redis
-    let message_queue = MessageQueue::new(&redis_url).await?;
-    tracing::info!("Connected to Redis");
-
-    let queue = Arc::new(Mutex::new(message_queue));
-
-    // Create auth manager
-    let auth_manager = Arc::new(AuthManager::new(&jwt_secret));
-
-    // WebSocket listener
-    let listener = TcpListener::bind(&bind_address).await?;
-    tracing::info!(
-        "Construct server listening on {} (WebSocket)",
-        bind_address
-    );
-
-    let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
-
-    // Create application context
-    let app_context = AppContext::new(db_pool, queue, auth_manager, clients);
+async fn run_http_server(
+    config: Config,
+    db_pool: Arc<DbPool>,
+    queue: Arc<Mutex<MessageQueue>>,
+) -> Result<()> {
+    let http_addr = format!("0.0.0.0:{}", config.health_port);
+    let listener = TcpListener::bind(&http_addr).await?;
+    tracing::info!("HTTP server listening on http://{}", http_addr);
 
     loop {
-        let (socket, addr) = listener.accept().await?;
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
+
+        let db_pool_clone = db_pool.clone();
+        let queue_clone = queue.clone();
+
+        tokio::task::spawn(async move {
+            let service = service_fn(move |req| {
+                http_handler(req, db_pool_clone.clone(), queue_clone.clone())
+            });
+
+            if let Err(err) = http1::Builder::new()
+                .serve_connection(io, service)
+                .await
+            {
+                tracing::error!("Error serving HTTP connection: {:?}", err);
+            }
+        });
+    }
+}
+
+async fn run_websocket_server(app_context: AppContext, listener: TcpListener) {
+    loop {
+        let (socket, addr) = match listener.accept().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Failed to accept socket: {}", e);
+                continue;
+            }
+        };
 
         let ctx = app_context.clone();
 
@@ -81,4 +127,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+}
+
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // Load configuration
+    let config = Config::from_env()?;
+
+    let bind_address = format!("0.0.0.0:{}", config.port);
+
+    // Connect to database
+    let db_pool = Arc::new(db::create_pool(&config.database_url).await?);
+    tracing::info!("Connected to database");
+
+    // Connect to Redis
+    let message_queue = MessageQueue::new(&config).await?;
+    tracing::info!("Connected to Redis");
+
+    let queue = Arc::new(Mutex::new(message_queue));
+
+    // Create auth manager
+    let auth_manager = Arc::new(AuthManager::new(&config));
+
+    // WebSocket listener
+    let listener = TcpListener::bind(&bind_address).await?;
+    tracing::info!("Construct server listening on {} (WebSocket)", bind_address);
+
+    let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
+
+    // Create application context
+    let app_context = AppContext::new(db_pool.clone(), queue.clone(), auth_manager, clients);
+    
+    let http_server_config = config.clone();
+    let websocket_server = run_websocket_server(app_context, listener);
+    let http_server = run_http_server(http_server_config, db_pool.clone(), queue.clone());
+
+    tokio::select! {
+        _ = websocket_server => {
+            tracing::info!("WebSocket server shut down.");
+        },
+        res = http_server => {
+            if let Err(e) = res {
+                tracing::error!("HTTP server failed: {}", e);
+            }
+        },
+        _ = signal::ctrl_c() => {
+            tracing::info!("Shutdown signal received. Shutting down...");
+        }
+    }
+
+    Ok(())
 }

@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 /// This reduces parameter passing and makes it easier to add new dependencies
 #[derive(Clone)]
 pub struct AppContext {
-    pub db_pool: DbPool,
+    pub db_pool: Arc<DbPool>,
     pub queue: Arc<Mutex<MessageQueue>>,
     pub auth_manager: Arc<AuthManager>,
     pub clients: Clients,
@@ -18,7 +18,7 @@ pub struct AppContext {
 impl AppContext {
     /// Creates a new application context
     pub fn new(
-        db_pool: DbPool,
+        db_pool: Arc<DbPool>,
         queue: Arc<Mutex<MessageQueue>>,
         auth_manager: Arc<AuthManager>,
         clients: Clients,

@@ -180,6 +180,18 @@ pub fn decrypt_message(
     Ok(plaintext)
 }
 
+/// Validates that a public key is a valid X25519 public key.
+/// It must be 32 bytes and a valid point on the curve.
+#[allow(dead_code)]
+pub fn validate_public_key(key: &[u8]) -> Result<()> {
+    if key.len() != 32 {
+        return Err(anyhow::anyhow!("Public key must be 32 bytes"));
+    }
+    // This will fail if the key is not a valid point on the curve
+    let _ = X25519PublicKey::from(<[u8; 32]>::try_from(key)?);
+    Ok(())
+}
+
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     general_purpose::STANDARD.decode(input).map_err(|e| format!("Base64 decode error: {}", e))
 }

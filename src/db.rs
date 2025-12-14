@@ -62,6 +62,8 @@ pub async fn create_user(
 pub async fn get_user_by_username(pool: &DbPool, username: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
         r#"
+        -- CREATE INDEX idx_users_username ON users(username);
+        -- CREATE INDEX idx_users_display_name ON users(display_name);
         SELECT id, username, display_name, password_hash, identity_key,
                avatar_url, bio, created_at, last_seen
         FROM users

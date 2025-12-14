@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use chrono;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -13,6 +15,26 @@ pub struct Message {
     /// The same nonce should never be reused with the same key
     pub nonce: Option<String>,
     pub timestamp: u64,
+}
+
+impl Message {
+    pub fn new(from: String, to: String, content: String, nonce: Option<String>) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            from,
+            to,
+            content,
+            nonce,
+            timestamp: chrono::Utc::now().timestamp() as u64,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.from.is_empty()
+            && !self.to.is_empty()
+            && !self.content.is_empty()
+            && Uuid::parse_str(&self.id).is_ok()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

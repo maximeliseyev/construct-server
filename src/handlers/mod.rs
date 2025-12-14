@@ -6,6 +6,7 @@ mod users;
 
 use crate::context::AppContext;
 use crate::message::ClientMessage;
+use crate::metrics;
 use connection::{ConnectionHandler, WebSocketStreamType};
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -19,6 +20,7 @@ pub async fn handle_websocket(
     addr: SocketAddr,
     ctx: AppContext,
 ) {
+    metrics::CONNECTIONS_TOTAL.inc();
     let span = tracing::info_span!("websocket_connection", addr = %addr);
     let _enter = span.enter();
 
@@ -33,10 +35,10 @@ pub async fn handle_websocket(
         tokio::select! {
             Some(msg) = ws_receiver.next() => {
                 match msg {
-                    Ok(WsMessage::Text(text)) => {
-                        tracing::debug!("Received from {}: {}", addr, text);
+                    Ok(WsMessage::Binary(data)) => {
+                        tracing::debug!("Received {} bytes from {}", data.len(), addr);
 
-                        match serde_json::from_str::<ClientMessage>(&text) {
+                        match rmp_serde::from_slice::<ClientMessage>(&data) {
                             Ok(ClientMessage::Register {
                                 username,
                                 display_name,
@@ -91,6 +93,7 @@ pub async fn handle_websocket(
                             }
 
                             Ok(ClientMessage::SendMessage(mut msg)) => {
+                                metrics::MESSAGES_SENT_TOTAL.inc();
                                 // Assign a new UUID to the message ID
                                 msg.id = Uuid::new_v4().to_string();
                                 messages::handle_send_message(&mut handler, &ctx, msg).await;
@@ -118,8 +121,10 @@ pub async fn handle_websocket(
             }
 
             Some(server_msg) = rx.recv() => {
-                if let Ok(json) = serde_json::to_string(&server_msg) && handler.ws_sender_mut().send(WsMessage::Text(json)).await.is_err() {
+                if let Ok(bytes) = rmp_serde::to_vec(&server_msg) {
+                    if handler.ws_sender_mut().send(WsMessage::Binary(bytes)).await.is_err() {
                         break;
+                    }
                 }
             }
         }

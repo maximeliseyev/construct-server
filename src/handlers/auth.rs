@@ -79,7 +79,7 @@ pub async fn handle_register(
                         session_token: token,
                         expires,
                     };
-                    let _ = handler.send_json(&response).await;
+                    let _ = handler.send_msgpack(&response).await;
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create token");
@@ -141,7 +141,7 @@ pub async fn handle_login(
                             session_token: token,
                             expires,
                         };
-                        let _ = handler.send_json(&response).await;
+                        let _ = handler.send_msgpack(&response).await;
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to create token");
@@ -192,7 +192,7 @@ pub async fn handle_connect(
                 .unwrap_or(false);
 
             if !session_valid {
-                let _ = handler.send_json(&ServerMessage::SessionExpired).await;
+                let _ = handler.send_msgpack(&ServerMessage::SessionExpired).await;
                 return;
             }
 
@@ -224,10 +224,10 @@ pub async fn handle_connect(
                         username: user.username.clone(),
                         display_name: user.display_name.clone(),
                     };
-                    let _ = handler.send_json(&response).await;
+                    let _ = handler.send_msgpack(&response).await;
                 }
                 _ => {
-                    let _ = handler.send_json(&ServerMessage::SessionExpired).await;
+                    let _ = handler.send_msgpack(&ServerMessage::SessionExpired).await;
                 }
             }
         }
@@ -253,5 +253,5 @@ pub async fn handle_logout(
 
         handler.disconnect(&ctx.clients).await;
     }
-    let _ = handler.send_json(&ServerMessage::LogoutSuccess).await;
+    let _ = handler.send_msgpack(&ServerMessage::LogoutSuccess).await;
 }

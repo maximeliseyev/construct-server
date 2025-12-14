@@ -3,10 +3,10 @@ use futures_util::stream::SplitSink;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::WebSocketStream;
-use tokio::net::TcpStream;
 
 pub type WebSocketStreamType = WebSocketStream<TcpStream>;
 
@@ -32,14 +32,14 @@ impl ConnectionHandler {
         }
     }
 
-    pub async fn send_json(&mut self, msg: &ServerMessage) -> Result<(), String> {
+    pub async fn send_msgpack(&mut self, msg: &ServerMessage) -> Result<(), String> {
         use futures_util::SinkExt;
 
-        let json = serde_json::to_string(msg)
+        let bytes = rmp_serde::to_vec(msg)
             .map_err(|e| format!("Failed to serialize message: {}", e))?;
 
         self.ws_sender
-            .send(WsMessage::Text(json))
+            .send(WsMessage::Binary(bytes))
             .await
             .map_err(|e| format!("Failed to send message: {}", e))?;
 
@@ -51,7 +51,7 @@ impl ConnectionHandler {
             code: code.to_string(),
             message: message.to_string(),
         };
-        let _ = self.send_json(&error).await;
+        let _ = self.send_msgpack(&error).await;
     }
 
     #[allow(dead_code)]
@@ -76,14 +76,15 @@ impl ConnectionHandler {
         &mut self.ws_sender
     }
 
-    /// Disconnect user and remove from online clients
-    pub async fn disconnect(&mut self, clients: &Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ServerMessage>>>>) {
+    pub async fn disconnect(
+        &mut self,
+        clients: &Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ServerMessage>>>>,
+    ) {
         if let Some(uid) = &self.user_id {
             clients.write().await.remove(uid);
         }
     }
 
-    /// Check if user is authenticated
     #[allow(dead_code)]
     pub fn is_authenticated(&self) -> bool {
         self.user_id.is_some()

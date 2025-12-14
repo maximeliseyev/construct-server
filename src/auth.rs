@@ -4,7 +4,7 @@ use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-const TOKEN_ALIVE_DAYS: i64 = 30;
+use crate::config::Config;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -12,24 +12,31 @@ pub struct Claims {
     pub jti: String, // JWT ID (unique per token)
     pub exp: i64,    // Expiration time
     pub iat: i64,    // Issued at
+    pub iss: String, // Issuer
 }
 
 pub struct AuthManager {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
+    session_ttl_days: i64,
+    refresh_token_ttl_days: i64,
+    issuer: String,
 }
 
 impl AuthManager {
-    pub fn new(secret: &str) -> Self {
+    pub fn new(config: &Config) -> Self {
         Self {
-            encoding_key: EncodingKey::from_secret(secret.as_bytes()),
-            decoding_key: DecodingKey::from_secret(secret.as_bytes()),
+            encoding_key: EncodingKey::from_secret(config.jwt_secret.as_bytes()),
+            decoding_key: DecodingKey::from_secret(config.jwt_secret.as_bytes()),
+            session_ttl_days: config.session_ttl_days,
+            refresh_token_ttl_days: config.refresh_token_ttl_days,
+            issuer: config.jwt_issuer.clone(),
         }
     }
 
     pub fn create_token(&self, user_id: &Uuid) -> Result<(String, String, i64)> {
         let now = Utc::now();
-        let exp = now + Duration::days(TOKEN_ALIVE_DAYS);
+        let exp = now + Duration::days(self.session_ttl_days);
         let jti = Uuid::new_v4().to_string();
 
         let claims = Claims {
@@ -37,6 +44,25 @@ impl AuthManager {
             jti: jti.clone(),
             exp: exp.timestamp(),
             iat: now.timestamp(),
+            iss: self.issuer.clone(),
+        };
+
+        let token = encode(&Header::default(), &claims, &self.encoding_key)?;
+
+        Ok((token, jti, exp.timestamp()))
+    }
+
+    pub fn create_refresh_token(&self, user_id: &Uuid) -> Result<(String, String, i64)> {
+        let now = Utc::now();
+        let exp = now + Duration::days(self.refresh_token_ttl_days);
+        let jti = Uuid::new_v4().to_string();
+
+        let claims = Claims {
+            sub: user_id.to_string(),
+            jti: jti.clone(),
+            exp: exp.timestamp(),
+            iat: now.timestamp(),
+            iss: self.issuer.clone(),
         };
 
         let token = encode(&Header::default(), &claims, &self.encoding_key)?;
@@ -45,7 +71,8 @@ impl AuthManager {
     }
 
     pub fn verify_token(&self, token: &str) -> Result<Claims> {
-        let validation = Validation::new(Algorithm::HS256);
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_issuer(&[self.issuer.clone()]);
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)?;
         Ok(token_data.claims)
     }

@@ -11,7 +11,7 @@ pub async fn handle_search_users(handler: &mut ConnectionHandler, db_pool: &DbPo
         Ok(users) => {
             let count = users.len();
             let response = ServerMessage::SearchResults { users };
-            let _ = handler.send_json(&response).await;
+            let _ = handler.send_msgpack(&response).await;
             tracing::debug!(query = %query, count = count, "Search completed");
         }
         Err(e) => {
@@ -40,7 +40,7 @@ pub async fn handle_get_public_key(
                     display_name: user.display_name.clone(),
                     public_key: public_key_b64,
                 };
-                let _ = handler.send_json(&response).await;
+                let _ = handler.send_msgpack(&response).await;
                 tracing::debug!(user_id = %user_id, "Public key retrieved");
             }
             Ok(None) => {
