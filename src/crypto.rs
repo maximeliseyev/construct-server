@@ -5,6 +5,8 @@ use chacha20poly1305::{
 };
 use rand::rngs::OsRng;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
+use base64::{engine::general_purpose, Engine as _};
+
 
 pub fn generate_x25519_keypair() -> ([u8; 32], [u8; 32]) {
     let secret = StaticSecret::random_from_rng(OsRng);
@@ -55,4 +57,12 @@ pub fn decrypt_message(encrypted: &[u8], private_key_bytes: &[u8]) -> Result<Vec
         .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
 
     Ok(plaintext)
+}
+
+pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    general_purpose::STANDARD.decode(input).map_err(|e| format!("Base64 decode error: {}", e))
+}
+
+pub fn encode_base64(input: &[u8]) -> String {
+    general_purpose::STANDARD.encode(input)
 }

@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    pub id: String,
     pub from: String,
     pub to: String,
     pub content: String,
     pub timestamp: u64,
-    pub encrypted: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,17 +43,18 @@ pub enum ServerMessage {
         username: String,
         display_name: String,
         session_token: String,
-        expires_at: i64,
+        expires: i64,
     },
     LoginSuccess {
         user_id: String,
         username: String,
         display_name: String,
         session_token: String,
-        expires_at: i64,
+        expires: i64,
     },
     ConnectSuccess {
         user_id: String,
+        username: String,
         display_name: String,
     },
     SessionExpired,
@@ -68,9 +69,12 @@ pub enum ServerMessage {
     },
     Message(Message),
     Ack {
-        id: String,
+        message_id: String,
+        status: String,
     },
     Error {
-        reason: String,
+        code: String,
+        message: String,
     },
+    LogoutSuccess,
 }
