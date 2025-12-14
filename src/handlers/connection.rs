@@ -14,6 +14,7 @@ pub struct ConnectionHandler {
     ws_sender: SplitSink<WebSocketStreamType, WsMessage>,
     tx: mpsc::UnboundedSender<ServerMessage>,
     user_id: Option<String>,
+    #[allow(dead_code)]
     addr: SocketAddr,
 }
 
@@ -53,6 +54,7 @@ impl ConnectionHandler {
         let _ = self.send_json(&error).await;
     }
 
+    #[allow(dead_code)]
     pub fn user_id(&self) -> &Option<String> {
         &self.user_id
     }
@@ -61,14 +63,11 @@ impl ConnectionHandler {
         self.user_id = Some(id);
     }
 
-    pub fn clear_user_id(&mut self) {
-        self.user_id = None;
-    }
-
     pub fn tx(&self) -> &mpsc::UnboundedSender<ServerMessage> {
         &self.tx
     }
 
+    #[allow(dead_code)]
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
@@ -85,6 +84,7 @@ impl ConnectionHandler {
     }
 
     /// Check if user is authenticated
+    #[allow(dead_code)]
     pub fn is_authenticated(&self) -> bool {
         self.user_id.is_some()
     }

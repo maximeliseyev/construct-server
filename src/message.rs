@@ -5,7 +5,13 @@ pub struct Message {
     pub id: String,
     pub from: String,
     pub to: String,
+    /// Encrypted message content (base64 encoded)
+    /// For E2E encryption, this contains the ciphertext that only the recipient can decrypt
     pub content: String,
+    /// Nonce used for encryption (base64 encoded, 12 bytes)
+    /// This is public and must be unique for each message
+    /// The same nonce should never be reused with the same key
+    pub nonce: Option<String>,
     pub timestamp: u64,
 }
 

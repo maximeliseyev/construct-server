@@ -69,6 +69,7 @@ impl MessageQueue {
     }
 
     // Проверить есть ли сообщения
+    #[allow(dead_code)]
     pub async fn has_messages(&mut self, user_id: &str) -> Result<bool> {
         let key = format!("queue:{}", user_id);
         let count: i32 = self.client.llen(&key).await?;
@@ -114,6 +115,7 @@ impl MessageQueue {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn revoke_all_sessions(&mut self, user_id: &str) -> Result<()> {
         let user_sessions_key = format!("user_sessions:{}", user_id);
 

@@ -14,9 +14,13 @@ pub struct User {
     pub display_name: String,
     pub password_hash: String,
     pub identity_key: Vec<u8>,
+    #[allow(dead_code)]
     pub avatar_url: Option<String>,
+    #[allow(dead_code)]
     pub bio: Option<String>,
+    #[allow(dead_code)]
     pub created_at: Option<chrono::NaiveDateTime>,
+    #[allow(dead_code)]
     pub last_seen: Option<chrono::NaiveDateTime>,
 }
 
