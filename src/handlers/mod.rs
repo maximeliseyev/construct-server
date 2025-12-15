@@ -85,11 +85,11 @@ pub async fn handle_websocket(
                             }
 
                             Ok(ClientMessage::SearchUsers { query }) => {
-                                users::handle_search_users(&mut handler, &ctx.db_pool, query).await;
+                                users::handle_search_users(&mut handler, &ctx, query).await;
                             }
 
                             Ok(ClientMessage::GetPublicKey { user_id }) => {
-                                users::handle_get_public_key(&mut handler, &ctx.db_pool, user_id).await;
+                                users::handle_get_public_key(&mut handler, &ctx, user_id).await;
                             }
 
                             Ok(ClientMessage::SendMessage(mut msg)) => {

@@ -1,4 +1,5 @@
 use crate::auth::AuthManager;
+use crate::config::Config;
 use crate::db::DbPool;
 use crate::handlers::session::Clients;
 use crate::queue::MessageQueue;
@@ -13,6 +14,7 @@ pub struct AppContext {
     pub queue: Arc<Mutex<MessageQueue>>,
     pub auth_manager: Arc<AuthManager>,
     pub clients: Clients,
+    pub config: Arc<Config>,
 }
 
 impl AppContext {
@@ -22,12 +24,14 @@ impl AppContext {
         queue: Arc<Mutex<MessageQueue>>,
         auth_manager: Arc<AuthManager>,
         clients: Clients,
+        config: Arc<Config>,
     ) -> Self {
         Self {
             db_pool,
             queue,
             auth_manager,
             clients,
+            config,
         }
     }
 }

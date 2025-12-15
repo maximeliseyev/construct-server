@@ -1,9 +1,10 @@
+use crate::context::AppContext;
 use crate::db::User;
 use crate::message::ServerMessage;
-use crate::queue::MessageQueue;
+use crate::utils::log_safe_id;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 
 pub type Clients = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ServerMessage>>>>;
 
@@ -14,18 +15,17 @@ pub const TOKEN_ALIVE_TIME: i64 = 2592000; // 30 days
 /// 2. Dequeuing pending messages
 /// 3. Adding user to online clients
 pub async fn establish_session(
-    clients: &Clients,
+    ctx: &AppContext,
     tx: &mpsc::UnboundedSender<ServerMessage>,
     current_user_id: &mut Option<String>,
     user: &User,
-    queue: &Arc<Mutex<MessageQueue>>,
     jti: &str,
 ) -> Result<(), String> {
     let uid_str = user.id.to_string();
 
     // Scope the lock to ensure it's dropped early
     {
-        let mut queue_lock = queue.lock().await;
+        let mut queue_lock = ctx.queue.lock().await;
         if let Err(e) = queue_lock
             .create_session(jti, &uid_str, TOKEN_ALIVE_TIME)
             .await
@@ -42,38 +42,56 @@ pub async fn establish_session(
                 match tx.send(ServerMessage::Message(msg.clone())) {
                     Ok(_) => {
                         delivered += 1;
-                        tracing::debug!(
-                            message_id = %msg.id,
-                            from = %msg.from,
-                            to = %msg.to,
-                            "Queued message delivered to reconnected user"
-                        );
+                        if ctx.config.logging.enable_message_metadata {
+                            tracing::debug!(
+                                message_id = %msg.id,
+                                from = %msg.from,
+                                to = %msg.to,
+                                "Queued message delivered to reconnected user"
+                            );
+                        } else {
+                            tracing::debug!(message_id = %msg.id, "Queued message delivered to reconnected user");
+                        }
                     }
                     Err(e) => {
                         failed += 1;
-                        tracing::error!(
-                            error = %e,
-                            message_id = %msg.id,
-                            from = %msg.from,
-                            to = %msg.to,
-                            "Failed to deliver queued message to reconnected user"
-                        );
+                        if ctx.config.logging.enable_message_metadata {
+                            tracing::error!(
+                                error = %e,
+                                message_id = %msg.id,
+                                from = %msg.from,
+                                to = %msg.to,
+                                "Failed to deliver queued message to reconnected user"
+                            );
+                        } else {
+                            tracing::error!(error = %e, message_id = %msg.id, "Failed to deliver queued message to reconnected user");
+                        }
                     }
                 }
             }
 
-            tracing::info!(
-                user_id = %uid_str,
-                total = total,
-                delivered = delivered,
-                failed = failed,
-                "Queued messages delivery completed"
-            );
+            if ctx.config.logging.enable_user_identifiers {
+                tracing::info!(
+                    user_id = %uid_str,
+                    total = total,
+                    delivered = delivered,
+                    failed = failed,
+                    "Queued messages delivery completed"
+                );
+            } else {
+                tracing::info!(
+                    user_hash = %log_safe_id(&uid_str, &ctx.config.logging.hash_salt),
+                    total = total,
+                    delivered = delivered,
+                    failed = failed,
+                    "Queued messages delivery completed"
+                );
+            }
         }
     } // queue_lock is automatically dropped here
 
     *current_user_id = Some(uid_str.clone());
-    clients.write().await.insert(uid_str, tx.clone());
+    ctx.clients.write().await.insert(uid_str, tx.clone());
 
     Ok(())
 }

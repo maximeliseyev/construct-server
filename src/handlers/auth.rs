@@ -4,6 +4,7 @@ use crate::db::{self, User};
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
 use crate::message::ServerMessage;
+use crate::utils::log_safe_id;
 use uuid::Uuid;
 
 /// Helper function to establish session and update handler with user ID
@@ -14,7 +15,7 @@ async fn establish_session_and_set_user(
     jti: &str,
 ) -> Result<(), String> {
     let mut user_id_temp = None;
-    establish_session(&ctx.clients, handler.tx(), &mut user_id_temp, user, &ctx.queue, jti).await?;
+    establish_session(&ctx, handler.tx(), &mut user_id_temp, user, jti).await?;
 
     if let Some(uid) = user_id_temp {
         handler.set_user_id(uid);
@@ -54,11 +55,18 @@ pub async fn handle_register(
     .await
     {
         Ok(user) => {
-            tracing::info!(
-                username = %user.username,
-                display_name = %user.display_name,
-                "User registered"
-            );
+            if ctx.config.logging.enable_user_identifiers {
+                tracing::info!(
+                    username = %user.username,
+                    display_name = %user.display_name,
+                    "User registered"
+                );
+            } else {
+                tracing::info!(
+                    user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
+                    "User registered"
+                );
+            }
 
             match ctx.auth_manager.create_token(&user.id) {
                 Ok((token, jti, expires)) => {
@@ -90,7 +98,11 @@ pub async fn handle_register(
             }
         }
         Err(e) => {
-            tracing::error!(error = %e, username = %username, "Registration failed");
+            if ctx.config.logging.enable_user_identifiers {
+                tracing::error!(error = %e, username = %username, "Registration failed");
+            } else {
+                tracing::error!(error = %e, "Registration failed");
+            }
             let (code, message) = if e.to_string().contains("users_username_key") {
                 (
                     "USERNAME_TAKEN",
@@ -115,17 +127,23 @@ pub async fn handle_login(
     match db::get_user_by_username(&ctx.db_pool, &username).await {
         Ok(Some(user)) => {
             if db::verify_password(&user, &password).await.unwrap_or(false) {
-                tracing::info!(
-                    username = %user.username,
-                    display_name = %user.display_name,
-                    "User logged in"
-                );
+                if ctx.config.logging.enable_user_identifiers {
+                    tracing::info!(
+                        username = %user.username,
+                        display_name = %user.display_name,
+                        "User logged in"
+                    );
+                } else {
+                    tracing::info!(
+                        user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
+                        "User logged in"
+                    );
+                }
 
                 match ctx.auth_manager.create_token(&user.id) {
                     Ok((token, jti, expires)) => {
                         if let Err(e_msg) =
-                            establish_session_and_set_user(handler, ctx, &user, &jti)
-                                .await
+                            establish_session_and_set_user(handler, ctx, &user, &jti).await
                         {
                             tracing::error!(error = %e_msg, "Failed to establish session");
                             handler
@@ -151,14 +169,22 @@ pub async fn handle_login(
                     }
                 }
             } else {
-                tracing::warn!(username = %username, "Invalid password");
+                if ctx.config.logging.enable_user_identifiers {
+                    tracing::warn!(username = %username, "Invalid password");
+                } else {
+                    tracing::warn!("Invalid password attempt");
+                }
                 handler
                     .send_error("INVALID_CREDENTIALS", "Invalid credentials")
                     .await;
             }
         }
         Ok(None) => {
-            tracing::warn!(username = %username, "User not found");
+            if ctx.config.logging.enable_user_identifiers {
+                tracing::warn!(username = %username, "User not found");
+            } else {
+                tracing::warn!("User not found attempt");
+            }
             handler
                 .send_error("INVALID_CREDENTIALS", "Invalid credentials")
                 .await;
@@ -181,7 +207,8 @@ pub async fn handle_connect(
 ) {
     match ctx.auth_manager.verify_token(&session_token) {
         Ok(claims) => {
-            let session_valid = ctx.queue
+            let session_valid = ctx
+                .queue
                 .lock()
                 .await
                 .validate_session(&claims.jti)
@@ -209,8 +236,7 @@ pub async fn handle_connect(
             match db::get_user_by_id(&ctx.db_pool, &uuid).await {
                 Ok(Some(user)) => {
                     if let Err(e_msg) =
-                        establish_session_and_set_user(handler, ctx, &user, &claims.jti)
-                            .await
+                        establish_session_and_set_user(handler, ctx, &user, &claims.jti).await
                     {
                         tracing::error!(error = %e_msg, "Failed to establish session");
                         handler

@@ -28,6 +28,7 @@ mod health;
 mod message;
 mod metrics;
 mod queue;
+mod utils;
 
 use auth::AuthManager;
 use config::Config;
@@ -142,21 +143,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let config = Config::from_env()?;
+    let app_config = Arc::new(config);
 
-    let bind_address = format!("0.0.0.0:{}", config.port);
+    let bind_address = format!("0.0.0.0:{}", app_config.port);
 
     // Connect to database
-    let db_pool = Arc::new(db::create_pool(&config.database_url).await?);
+    let db_pool = Arc::new(db::create_pool(&app_config.database_url).await?);
     tracing::info!("Connected to database");
 
     // Connect to Redis
-    let message_queue = MessageQueue::new(&config).await?;
+    let message_queue = MessageQueue::new(&app_config).await?;
     tracing::info!("Connected to Redis");
 
     let queue = Arc::new(Mutex::new(message_queue));
 
     // Create auth manager
-    let auth_manager = Arc::new(AuthManager::new(&config));
+    let auth_manager = Arc::new(AuthManager::new(&app_config));
 
     // WebSocket listener
     let listener = TcpListener::bind(&bind_address).await?;
@@ -165,9 +167,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 
     // Create application context
-    let app_context = AppContext::new(db_pool.clone(), queue.clone(), auth_manager, clients);
+    let app_context = AppContext::new(db_pool.clone(), queue.clone(), auth_manager, clients, app_config.clone());
     
-    let http_server_config = config.clone();
+    let http_server_config = app_config.as_ref().clone();
     let websocket_server = run_websocket_server(app_context, listener);
     let http_server = run_http_server(http_server_config, db_pool.clone(), queue.clone());
 

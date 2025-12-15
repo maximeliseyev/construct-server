@@ -1,6 +1,7 @@
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::{Message, ServerMessage};
+use crate::utils::log_safe_id;
 
 /// Handles message sending
 /// Delivers immediately if recipient is online, otherwise queues for later delivery
@@ -30,23 +31,36 @@ pub async fn handle_send_message(
                         "Failed to send delivery ACK to sender"
                     );
                 }
-                tracing::debug!(
-                    message_id = %msg.id,
-                    from = %msg.from,
-                    to = %msg.to,
-                    content_len = msg.content.len(),
-                    "Message delivered to online recipient"
-                );
+
+                if ctx.config.logging.enable_message_metadata {
+                    tracing::debug!(
+                        message_id = %msg.id,
+                        from = %msg.from,
+                        to = %msg.to,
+                        content_len = msg.content.len(),
+                        "Message delivered to online recipient"
+                    );
+                } else {
+                    tracing::debug!(message_id = %msg.id, "Message delivered to online recipient");
+                }
             }
             Err(e) => {
                 // Failed to send to online recipient - queue it instead
-                tracing::warn!(
-                    error = %e,
-                    message_id = %msg.id,
-                    from = %msg.from,
-                    to = %msg.to,
-                    "Failed to deliver to online recipient, queueing message"
-                );
+                if ctx.config.logging.enable_message_metadata {
+                    tracing::warn!(
+                        error = %e,
+                        message_id = %msg.id,
+                        from = %msg.from,
+                        to = %msg.to,
+                        "Failed to deliver to online recipient, queueing message"
+                    );
+                } else {
+                     tracing::warn!(
+                        error = %e,
+                        message_id = %msg.id,
+                        "Failed to deliver to online recipient, queueing message"
+                    );
+                }
 
                 let mut queue_lock = ctx.queue.lock().await;
                 match queue_lock.enqueue_message(&msg.to, &msg).await {
@@ -88,13 +102,18 @@ pub async fn handle_send_message(
                         "Failed to send queued ACK to sender"
                     );
                 }
-                tracing::debug!(
-                    message_id = %msg.id,
-                    from = %msg.from,
-                    to = %msg.to,
-                    content_len = msg.content.len(),
-                    "Message queued for offline recipient"
-                );
+
+                if ctx.config.logging.enable_message_metadata {
+                    tracing::debug!(
+                        message_id = %msg.id,
+                        from = %msg.from,
+                        to = %msg.to,
+                        content_len = msg.content.len(),
+                        "Message queued for offline recipient"
+                    );
+                } else {
+                    tracing::debug!(message_id = %msg.id, "Message queued for offline recipient");
+                }
             }
             Err(e) => {
                 tracing::error!(error = %e, message_id = %msg.id, "Error queuing message");
