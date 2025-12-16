@@ -51,7 +51,10 @@ impl ConnectionHandler {
             code: code.to_string(),
             message: message.to_string(),
         };
-        let _ = self.send_msgpack(&error).await;
+        if self.send_msgpack(&error).await.is_err() {
+            tracing::debug!("Failed to send error to disconnected client {}", self.addr);
+            return;
+        }
     }
 
     #[allow(dead_code)]

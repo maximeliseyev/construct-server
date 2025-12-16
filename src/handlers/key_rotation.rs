@@ -128,7 +128,9 @@ pub async fn handle_rotate_prekey(
     drop(queue);
 
     // 10. Успешный ответ
-    let _ = handler.send_msgpack(&ServerMessage::KeyRotationSuccess).await;
+    if handler.send_msgpack(&ServerMessage::KeyRotationSuccess).await.is_err() {
+        return;
+    }
     
     tracing::info!(
         user_id = %user_id,

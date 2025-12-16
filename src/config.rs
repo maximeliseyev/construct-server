@@ -17,7 +17,7 @@ pub struct SecurityConfig {
     pub max_key_rotations_per_day: u32,
     pub max_connections_per_user: u32,
     pub key_bundle_cache_hours: i64,
-    pub rate_limit_block_duration_seconds: u64,
+    pub rate_limit_block_duration_seconds: i64,
 }
 
 #[derive(Clone, Debug)]

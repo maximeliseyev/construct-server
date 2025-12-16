@@ -11,7 +11,9 @@ pub async fn handle_search_users(handler: &mut ConnectionHandler, ctx: &AppConte
         Ok(users) => {
             let count = users.len();
             let response = ServerMessage::SearchResults { users };
-            let _ = handler.send_msgpack(&response).await;
+            if handler.send_msgpack(&response).await.is_err() {
+                return;
+            }
             if ctx.config.logging.enable_user_identifiers {
                 tracing::debug!(query = %query, count = count, "Search completed");
             } else {
@@ -57,7 +59,9 @@ pub async fn handle_get_public_key(
             signature: cached_bundle.signature,
             verifying_key: cached_bundle.verifying_key,
         };
-        let _ = handler.send_msgpack(&response).await;
+        if handler.send_msgpack(&response).await.is_err() {
+            return;
+        }
         tracing::debug!(user_id = %user_id, "Key bundle served from cache");
         return;
     }
@@ -85,7 +89,9 @@ pub async fn handle_get_public_key(
                 signature: bundle.signature,
                 verifying_key: bundle.verifying_key,
             };
-            let _ = handler.send_msgpack(&response).await;
+            if handler.send_msgpack(&response).await.is_err() {
+                return;
+            }
             tracing::debug!(user_id = %user_id, "Key bundle served from database");
         }
         Ok(None) => {

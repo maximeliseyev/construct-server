@@ -42,6 +42,7 @@ pub async fn establish_session(
                 match tx.send(ServerMessage::Message(msg.clone())) {
                     Ok(_) => {
                         delivered += 1;
+                        #[cfg(debug_assertions)]
                         if ctx.config.logging.enable_message_metadata {
                             tracing::debug!(
                                 message_id = %msg.id,

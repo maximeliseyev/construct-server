@@ -133,8 +133,9 @@ pub async fn handle_register(
                         session_token: token,
                         expires,
                     };
-                    let _ = handler.send_msgpack(&response).await;
-                }
+                                                if handler.send_msgpack(&response).await.is_err() {
+                                                    return;
+                                                }                }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create token");
                     handler
@@ -205,8 +206,9 @@ pub async fn handle_login(
                             session_token: token,
                             expires,
                         };
-                        let _ = handler.send_msgpack(&response).await;
-                    }
+                                                    if handler.send_msgpack(&response).await.is_err() {
+                                                        return;
+                                                    }                    }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to create token");
                         handler
@@ -253,53 +255,62 @@ pub async fn handle_connect(
 ) {
     match ctx.auth_manager.verify_token(&session_token) {
         Ok(claims) => {
-            let session_valid = ctx
-                .queue
-                .lock()
-                .await
-                .validate_session(&claims.jti)
-                .await
-                .ok()
-                .flatten()
-                .map(|uid| uid == claims.sub)
-                .unwrap_or(false);
+            let session_check_result = ctx.queue.lock().await.validate_session(&claims.jti).await;
 
-            if !session_valid {
-                let _ = handler.send_msgpack(&ServerMessage::SessionExpired).await;
-                return;
-            }
+            match session_check_result {
+                Ok(Some(uid)) if uid == claims.sub => {
+                    // Session is valid and belongs to this user, proceed.
+                    let uuid = match Uuid::parse_str(&claims.sub) {
+                        Ok(u) => u,
+                        Err(_) => {
+                            handler
+                                .send_error("INVALID_USER_ID", "Invalid user ID in token")
+                                .await;
+                            return;
+                        }
+                    };
 
-            let uuid = match Uuid::parse_str(&claims.sub) {
-                Ok(u) => u,
-                Err(_) => {
-                    handler
-                        .send_error("INVALID_USER_ID", "Invalid user ID in token")
-                        .await;
-                    return;
+                    match db::get_user_by_id(&ctx.db_pool, &uuid).await {
+                        Ok(Some(user)) => {
+                            if let Err(e_msg) =
+                                establish_session_and_set_user(handler, ctx, &user, &claims.jti).await
+                            {
+                                tracing::error!(error = %e_msg, "Failed to establish session");
+                                handler
+                                    .send_error("SESSION_CREATION_FAILED", "Could not create session")
+                                    .await;
+                                return;
+                            }
+
+                            let response = ServerMessage::ConnectSuccess {
+                                user_id: user.id.to_string(),
+                                username: user.username.clone(),
+                                display_name: user.display_name.clone(),
+                            };
+                            if handler.send_msgpack(&response).await.is_err() {
+                                // Client disconnected, just return.
+                                return;
+                            }
+                        }
+                        _ => {
+                            // User not found in DB, treat as expired session
+                            if handler.send_msgpack(&ServerMessage::SessionExpired).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
                 }
-            };
-
-            match db::get_user_by_id(&ctx.db_pool, &uuid).await {
-                Ok(Some(user)) => {
-                    if let Err(e_msg) =
-                        establish_session_and_set_user(handler, ctx, &user, &claims.jti).await
-                    {
-                        tracing::error!(error = %e_msg, "Failed to establish session");
-                        handler
-                            .send_error("SESSION_CREATION_FAILED", "Could not create session")
-                            .await;
+                Ok(_) => {
+                    // Session not found or doesn't match the token's user (e.g., uid != claims.sub)
+                    if handler.send_msgpack(&ServerMessage::SessionExpired).await.is_err() {
                         return;
                     }
-
-                    let response = ServerMessage::ConnectSuccess {
-                        user_id: user.id.to_string(),
-                        username: user.username.clone(),
-                        display_name: user.display_name.clone(),
-                    };
-                    let _ = handler.send_msgpack(&response).await;
                 }
-                _ => {
-                    let _ = handler.send_msgpack(&ServerMessage::SessionExpired).await;
+                Err(e) => {
+                    // An actual error occurred during validation
+                    tracing::error!(error = %e, "Failed to validate session");
+                    handler.send_error("SERVER_ERROR", "Failed to validate session").await;
+                    return; // Return on server error
                 }
             }
         }
@@ -320,10 +331,14 @@ pub async fn handle_logout(
 ) {
     if let Ok(claims) = ctx.auth_manager.verify_token(&session_token) {
         let mut queue_lock = ctx.queue.lock().await;
-        let _ = queue_lock.revoke_session(&claims.jti, &claims.sub).await;
+        if let Err(e) = queue_lock.revoke_session(&claims.jti, &claims.sub).await {
+            tracing::warn!(error = %e, "Failed to revoke session on logout");
+        }
         drop(queue_lock);
 
         handler.disconnect(&ctx.clients).await;
     }
-    let _ = handler.send_msgpack(&ServerMessage::LogoutSuccess).await;
+    if handler.send_msgpack(&ServerMessage::LogoutSuccess).await.is_err() {
+        return;
+    }
 }

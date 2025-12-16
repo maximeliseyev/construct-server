@@ -34,6 +34,7 @@ pub async fn handle_websocket(
             Some(msg) = ws_receiver.next() => {
                 match msg {
                     Ok(WsMessage::Binary(data)) => {
+                        #[cfg(debug_assertions)]
                         tracing::debug!("Received {} bytes from {}", data.len(), addr);
                         match rmp_serde::from_slice::<ClientMessage>(&data) {
                             Ok(ClientMessage::Register {
@@ -116,7 +117,9 @@ pub async fn handle_websocket(
                         break;
                     }
                     Ok(WsMessage::Ping(data)) => {
-                        let _ = handler.ws_sender_mut().send(WsMessage::Pong(data)).await;
+                        if handler.ws_sender_mut().send(WsMessage::Pong(data)).await.is_err() {
+                            break;
+                        }
                     }
                     Err(e) => {
                         tracing::error!("WebSocket error from {}: {}", addr, e);

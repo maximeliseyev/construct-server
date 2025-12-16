@@ -40,8 +40,17 @@ pub async fn handle_send_message(
             let block_threshold = max_messages + (max_messages / 2);
             
             if count > block_threshold {
-                let _ = queue.block_user_temporarily(&msg.from, 3600, "Rate limit exceeded").await;
-                handler.send_error("RATE_LIMIT_BLOCKED", "Too many messages. Blocked for 1 hour.").await;
+                let block_duration = ctx.config.security.rate_limit_block_duration_seconds;
+                if let Err(e) = queue.block_user_temporarily(&msg.from, block_duration, "Rate limit exceeded").await {
+                    tracing::error!(error = %e, "Failed to block user for rate limiting");
+                    handler.send_error("SERVER_ERROR", "Failed to apply rate limit").await;
+                } else {
+                    let message = format!(
+                        "Too many messages. Blocked for {} seconds.",
+                        block_duration
+                    );
+                    handler.send_error("RATE_LIMIT_BLOCKED", &message).await;
+                }
                 return;
             } else if count > max_messages {
                 tracing::warn!(user_id = %msg.from, count = count, "Rate limit warning");
@@ -84,7 +93,9 @@ pub async fn handle_send_message(
                     message_id: msg.id.clone(),
                     status: "delivered".to_string(),
                 };
-                let _ = handler.send_msgpack(&ack).await;
+                if handler.send_msgpack(&ack).await.is_err() {
+                    return;
+                }
                 
                 if ctx.config.logging.enable_message_metadata {
                     tracing::debug!(
@@ -116,17 +127,18 @@ pub async fn handle_send_message(
                 }
 
                 let mut queue = ctx.queue.lock().await;
-                if let Err(qe) = queue.enqueue_message(&msg.to, &msg).await {
-                    tracing::error!(error = %qe, "Failed to queue message after delivery failure");
-                    handler.send_error("DELIVERY_FAILED", "Failed to deliver message").await;
-                } else {
-                    let ack = ServerMessage::Ack {
-                        message_id: msg.id.clone(),
-                        status: "queued".to_string(),
-                    };
-                    let _ = handler.send_msgpack(&ack).await;
-                }
-            }
+                                    if let Err(qe) = queue.enqueue_message(&msg.to, &msg).await {
+                                        tracing::error!(error = %qe, "Failed to queue message after delivery failure");
+                                        handler.send_error("DELIVERY_FAILED", "Failed to deliver message").await;
+                                    } else {
+                                        let ack = ServerMessage::Ack {
+                                            message_id: msg.id.clone(),
+                                            status: "queued".to_string(),
+                                        };
+                                        if handler.send_msgpack(&ack).await.is_err() {
+                                            return;
+                                        }
+                                    }            }
         }
     } else {
         let mut queue = ctx.queue.lock().await;
@@ -136,7 +148,9 @@ pub async fn handle_send_message(
                     message_id: msg.id.clone(),
                     status: "queued".to_string(),
                 };
-                let _ = handler.send_msgpack(&ack).await;
+                if handler.send_msgpack(&ack).await.is_err() {
+                    return;
+                }
                 
                 if ctx.config.logging.enable_message_metadata {
                     tracing::debug!(
