@@ -47,10 +47,10 @@ impl ConnectionHandler {
     }
 
     pub async fn send_error(&mut self, code: &str, message: &str) {
-        let error = ServerMessage::Error {
+        let error = ServerMessage::Error(crate::message::ErrorData {
             code: code.to_string(),
             message: message.to_string(),
-        };
+        });
         if self.send_msgpack(&error).await.is_err() {
             tracing::debug!("Failed to send error to disconnected client {}", self.addr);
             return;

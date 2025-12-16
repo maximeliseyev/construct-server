@@ -1,14 +1,41 @@
-use crate::message::Message;
+// ============================================================================
+// Message Queue - Redis-only Storage (No Database Persistence)
+// ============================================================================
+//
+// IMPORTANT SECURITY POLICY:
+//
+// Messages are NEVER persisted to the database to prevent:
+// 1. Social graph reconstruction (metadata leakage: who talks to whom)
+// 2. Long-term storage of encrypted data (reduces attack surface)
+// 3. Server-side message history (true end-to-end encryption)
+//
+// Message Lifecycle:
+// 1. Online recipient  → Direct delivery via WebSocket (no storage)
+// 2. Offline recipient → Temporary storage in Redis with TTL
+// 3. User connects     → Messages delivered from Redis queue
+// 4. After delivery    → Messages DELETED from Redis immediately
+// 5. After TTL expires → Undelivered messages AUTO-DELETED by Redis
+//
+// This design ensures:
+// - Forward secrecy: Old messages cannot be recovered
+// - Metadata privacy: No conversation patterns stored
+// - Ephemeral nature: Messages exist only during delivery window
+//
+// ============================================================================
+
 use crate::crypto::StoredKeyBundle;
+use crate::message::ChatMessage;
 use anyhow::Result;
-use redis::{cmd, AsyncCommands, Client};
-use sha2::{Sha256, Digest};
+use redis::{AsyncCommands, Client, cmd};
+use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 
 const SECONDS_PER_DAY: i64 = 86400;
 pub struct MessageQueue {
     client: redis::aio::ConnectionManager,
+    /// TTL for queued messages in seconds (configured via message_ttl_days)
+    /// After this period, undelivered messages are automatically deleted by Redis
     message_ttl_seconds: i64,
 }
 impl MessageQueue {
@@ -26,7 +53,7 @@ impl MessageQueue {
             message_ttl_seconds,
         })
     }
-    pub async fn enqueue_message(&mut self, user_id: &str, message: &Message) -> Result<()> {
+    pub async fn enqueue_message(&mut self, user_id: &str, message: &ChatMessage) -> Result<()> {
         let key = format!("queue:{}", user_id);
         let message_bytes = rmp_serde::to_vec(message)?;
         let _: () = self.client.lpush(&key, message_bytes).await?;
@@ -34,7 +61,7 @@ impl MessageQueue {
         tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message");
         Ok(())
     }
-    pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<Message>> {
+    pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
         let key = format!("queue:{}", user_id);
         let messages: Vec<Vec<u8>> = self.client.lrange(&key, 0, -1).await?;
         let total_messages = messages.len();
@@ -44,7 +71,7 @@ impl MessageQueue {
         let _: () = self.client.del(&key).await?;
         let mut result = Vec::new();
         for msg_bytes in messages {
-            match rmp_serde::from_slice::<Message>(&msg_bytes) {
+            match rmp_serde::from_slice::<ChatMessage>(&msg_bytes) {
                 Ok(msg) => result.push(msg),
                 Err(e) => tracing::error!(
                     "Failed to parse message from queue for user {}: {}",
@@ -130,10 +157,10 @@ impl MessageQueue {
         let hash = format!("{:x}", hasher.finalize());
 
         let key = format!("msg_hash:{}", hash);
-        
+
         // Проверяем существование
         let exists: bool = self.client.exists(&key).await?;
-        
+
         if exists {
             tracing::warn!(
                 message_id = %message_id,
@@ -144,55 +171,45 @@ impl MessageQueue {
         }
 
         let _: () = self.client.set_ex(&key, "1", 86400).await?;
-        
+
         Ok(true) // Сообщение уникальное
     }
 
-    pub async fn increment_message_count(
-        &mut self,
-        user_id: &str,
-    ) -> Result<u32> {
+    pub async fn increment_message_count(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:msg:{}", user_id);
-        
+
         // Инкрементируем счетчик
         let count: u32 = self.client.incr(&key, 1).await?;
-        
+
         // Устанавливаем TTL только при первом инкременте
         if count == 1 {
             let _: () = self.client.expire(&key, 3600).await?; // 1 час
         }
-        
+
         Ok(count)
     }
 
-    pub async fn increment_key_update_count(
-        &mut self,
-        user_id: &str,
-    ) -> Result<u32> {
+    pub async fn increment_key_update_count(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:key:{}", user_id);
-        
+
         let count: u32 = self.client.incr(&key, 1).await?;
-        
+
         if count == 1 {
             let _: () = self.client.expire(&key, 86400).await?; // 24 часа
         }
-        
+
         Ok(count)
     }
 
-    pub async fn get_message_count_last_hour(
-        &mut self,
-        user_id: &str,
-    ) -> Result<u32> {
+    #[allow(dead_code)]
+    pub async fn get_message_count_last_hour(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:msg:{}", user_id);
         let count: Option<u32> = self.client.get(&key).await?;
         Ok(count.unwrap_or(0))
     }
 
-    pub async fn get_key_update_count_last_day(
-        &mut self,
-        user_id: &str,
-    ) -> Result<u32> {
+    #[allow(dead_code)]
+    pub async fn get_key_update_count_last_day(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:key:{}", user_id);
         let count: Option<u32> = self.client.get(&key).await?;
         Ok(count.unwrap_or(0))
@@ -205,15 +222,18 @@ impl MessageQueue {
         reason: &str,
     ) -> Result<()> {
         let key = format!("blocked:{}", user_id);
-        let _: () = self.client.set_ex(&key, reason, duration_seconds as u64).await?;
-        
+        let _: () = self
+            .client
+            .set_ex(&key, reason, duration_seconds as u64)
+            .await?;
+
         tracing::warn!(
             user_id = %user_id,
             duration_seconds = duration_seconds,
             reason = %reason,
             "User temporarily blocked"
         );
-        
+
         Ok(())
     }
 
@@ -231,17 +251,23 @@ impl MessageQueue {
     ) -> Result<()> {
         let key = format!("key_bundle:{}", user_id);
         let bundle_json = serde_json::to_string(bundle)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize bundle: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to serialize bundle: {}", e))?;
         let ttl_seconds = ttl_hours * 3600;
-        let _: () = self.client.set_ex(&key, bundle_json, ttl_seconds as u64).await?;
+        let _: () = self
+            .client
+            .set_ex(&key, bundle_json, ttl_seconds as u64)
+            .await?;
         tracing::debug!(user_id = %user_id, ttl_hours = ttl_hours, "Cached key bundle");
         Ok(())
     }
 
-    pub async fn get_cached_key_bundle(&mut self, user_id: &str) -> Result<Option<StoredKeyBundle>> {
+    pub async fn get_cached_key_bundle(
+        &mut self,
+        user_id: &str,
+    ) -> Result<Option<StoredKeyBundle>> {
         let key = format!("key_bundle:{}", user_id);
         let bundle_json: Option<String> = self.client.get(&key).await?;
-        
+
         match bundle_json {
             Some(json) => {
                 let bundle: StoredKeyBundle = serde_json::from_str(&json)
@@ -259,29 +285,24 @@ impl MessageQueue {
         Ok(())
     }
 
-    pub async fn track_connection(
-        &mut self,
-        user_id: &str,
-        connection_id: &str,
-    ) -> Result<u32> {
+    #[allow(dead_code)]
+    pub async fn track_connection(&mut self, user_id: &str, connection_id: &str) -> Result<u32> {
         let key = format!("connections:{}", user_id);
         let _: () = self.client.sadd(&key, connection_id).await?;
         let _: () = self.client.expire(&key, 3600).await?; // Обновляем TTL
-        
+
         let count: u32 = self.client.scard(&key).await?;
         Ok(count)
     }
 
-    pub async fn untrack_connection(
-        &mut self,
-        user_id: &str,
-        connection_id: &str,
-    ) -> Result<()> {
+    #[allow(dead_code)]
+    pub async fn untrack_connection(&mut self, user_id: &str, connection_id: &str) -> Result<()> {
         let key = format!("connections:{}", user_id);
         let _: () = self.client.srem(&key, connection_id).await?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn get_active_connections(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("connections:{}", user_id);
         let count: u32 = self.client.scard(&key).await?;

@@ -1,6 +1,8 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
-use prometheus::{opts, register_int_counter, register_histogram, IntCounter, Histogram, Encoder, TextEncoder};
+use prometheus::{
+    Encoder, Histogram, IntCounter, TextEncoder, opts, register_histogram, register_int_counter,
+};
 
 pub static CONNECTIONS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(opts!(
@@ -18,6 +20,7 @@ pub static MESSAGES_SENT_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     .unwrap()
 });
 
+#[allow(dead_code)]
 pub static MESSAGE_DELIVERY_TIME: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "construct_message_delivery_time_seconds",

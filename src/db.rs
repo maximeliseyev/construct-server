@@ -1,12 +1,12 @@
+use crate::crypto::StoredKeyBundle;
 use anyhow::{Context, Result};
-use bcrypt::{hash, DEFAULT_COST};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use bcrypt::{DEFAULT_COST, hash};
+use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use chrono::{TimeZone, Utc};
-use crate::crypto::StoredKeyBundle;
 
 pub type DbPool = Pool<Postgres>;
 
@@ -16,6 +16,7 @@ pub struct User {
     pub username: String,
     pub display_name: String,
     pub password_hash: String,
+    #[allow(dead_code)]
     pub identity_key: Vec<u8>,
     #[allow(dead_code)]
     pub avatar_url: Option<String>,
@@ -63,14 +64,15 @@ pub async fn create_user(
     identity_key_base64: &str,
 ) -> Result<User> {
     let password_hash = hash(password, DEFAULT_COST)?;
-    let identity_key = BASE64.decode(identity_key_base64)
+    let identity_key = BASE64
+        .decode(identity_key_base64)
         .context("Failed to decode identity_key from base64")?;
 
     let user = sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (username, display_name, password_hash, identity_key)
         VALUES ($1, $2, $3, $4)
-        RETURNING id, username, display_name, password_hash, identity_key, 
+        RETURNING id, username, display_name, password_hash, identity_key,
                   avatar_url, bio, created_at, last_seen
            "#,
     )
@@ -147,21 +149,25 @@ pub async fn store_key_bundle(
     bundle: &StoredKeyBundle,
 ) -> Result<()> {
     // Декодируем base64 строки в Vec<u8> для хранения в БД
-    let identity_public = BASE64.decode(&bundle.identity_public)
+    let identity_public = BASE64
+        .decode(&bundle.identity_public)
         .context("Failed to decode identity_public from base64")?;
-    
-    let signed_prekey_public = BASE64.decode(&bundle.signed_prekey_public)
+
+    let signed_prekey_public = BASE64
+        .decode(&bundle.signed_prekey_public)
         .context("Failed to decode signed_prekey_public from base64")?;
-    
-    let signature = BASE64.decode(&bundle.signature)
+
+    let signature = BASE64
+        .decode(&bundle.signature)
         .context("Failed to decode signature from base64")?;
-    
-    let verifying_key = BASE64.decode(&bundle.verifying_key)
+
+    let verifying_key = BASE64
+        .decode(&bundle.verifying_key)
         .context("Failed to decode verifying_key from base64")?;
 
     sqlx::query(
         r#"
-        INSERT INTO user_key_bundles 
+        INSERT INTO user_key_bundles
          (user_id, identity_public, signed_prekey_public, signature, verifying_key, registered_at, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (user_id) DO UPDATE SET
@@ -183,15 +189,12 @@ pub async fn store_key_bundle(
     Ok(())
 }
 
-pub async fn get_user_key_bundle(
-    pool: &DbPool,
-    user_id: &Uuid,
-) -> Result<Option<StoredKeyBundle>> {
+pub async fn get_user_key_bundle(pool: &DbPool, user_id: &Uuid) -> Result<Option<StoredKeyBundle>> {
     let record = sqlx::query_as::<_, KeyBundleRecord>(
         r#"
-        SELECT user_id, identity_public, signed_prekey_public, signature, 
-                verifying_key, registered_at, expires_at 
-         FROM user_key_bundles 
+        SELECT user_id, identity_public, signed_prekey_public, signature,
+                verifying_key, registered_at, expires_at
+         FROM user_key_bundles
          WHERE user_id = $1
         "#,
     )

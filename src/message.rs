@@ -1,30 +1,51 @@
+use chrono;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono;
+
+// ============================================================================
+// ChatMessage (formerly Message) - Updated for Double Ratchet Protocol
+// ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
     pub id: String,
     pub from: String,
     pub to: String,
-    /// Encrypted message content (base64 encoded)
-    /// For E2E encryption, this contains the ciphertext that only the recipient can decrypt
+
+    /// Ephemeral public key for DH ratchet (32 bytes raw bytes)
+    /// Serialized as MessagePack bin format
+    pub ephemeral_public_key: Vec<u8>,
+
+    /// Message number in symmetric-key ratchet chain
+    /// Used for out-of-order message handling and forward secrecy
+    pub message_number: u32,
+
+    /// Base64-encoded ChaChaPoly sealed box
+    /// Contains: nonce (12 bytes) + ciphertext (variable) + tag (16 bytes)
+    /// The nonce field is now REMOVED (included in sealed box)
     pub content: String,
-    /// Nonce used for encryption (base64 encoded, 12 bytes)
-    /// This is public and must be unique for each message
-    /// The same nonce should never be reused with the same key
-    pub nonce: Option<String>,
+
+    /// Unix timestamp in seconds (client-side timestamp)
     pub timestamp: u64,
 }
 
-impl Message {
-    pub fn new(from: String, to: String, content: String, nonce: Option<String>) -> Self {
+#[allow(dead_code)]
+impl ChatMessage {
+    pub fn new(
+        from: String,
+        to: String,
+        ephemeral_public_key: Vec<u8>,
+        message_number: u32,
+        content: String,
+    ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             from,
             to,
+            ephemeral_public_key,
+            message_number,
             content,
-            nonce,
             timestamp: chrono::Utc::now().timestamp() as u64,
         }
     }
@@ -33,89 +54,168 @@ impl Message {
         !self.from.is_empty()
             && !self.to.is_empty()
             && !self.content.is_empty()
+            && self.ephemeral_public_key.len() == 32
             && Uuid::parse_str(&self.id).is_ok()
+            && Uuid::parse_str(&self.from).is_ok()
+            && Uuid::parse_str(&self.to).is_ok()
     }
 }
 
+// ============================================================================
+// Client Message Data Structures
+// ============================================================================
+
 #[derive(Debug, Serialize, Deserialize)]
-pub enum ClientMessage {
-    Register {
-        username: String,
-        display_name: Option<String>,
-        password: String,
-        public_key: String,
-    },
-    Login {
-        username: String,
-        password: String,
-    },
-    Connect {
-        session_token: String,
-    },
-    SearchUsers {
-        query: String,
-    },
-    GetPublicKey {
-        user_id: String,
-    },
-    SendMessage(Message),
-    RotatePrekey {
-        user_id: String,
-        update: String,
-    },
-    Logout {
-        session_token: String,
-    },
+#[serde(rename_all = "camelCase")]
+pub struct RegisterData {
+    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub password: String,
+    /// Base64-encoded MessagePack of RegistrationBundle
+    pub public_key: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginData {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectData {
+    pub session_token: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchUsersData {
+    pub query: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPublicKeyData {
+    pub user_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotatePrekeyData {
+    pub user_id: String,
+    /// Base64-encoded MessagePack of SignedPrekeyUpdate
+    pub update: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoutData {
+    pub session_token: String,
+}
+
+// ============================================================================
+// ClientMessage Enum - Internally Tagged Format
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+#[serde(rename_all = "camelCase")]
+pub enum ClientMessage {
+    Register(RegisterData),
+    Login(LoginData),
+    Connect(ConnectData),
+    SearchUsers(SearchUsersData),
+    GetPublicKey(GetPublicKeyData),
+    SendMessage(ChatMessage),
+    RotatePrekey(RotatePrekeyData),
+    Logout(LogoutData),
+}
+
+// ============================================================================
+// Server Message Data Structures
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterSuccessData {
+    pub user_id: String,
+    pub username: String,
+    pub display_name: String,
+    pub session_token: String,
+    pub expires: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginSuccessData {
+    pub user_id: String,
+    pub username: String,
+    pub display_name: String,
+    pub session_token: String,
+    pub expires: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectSuccessData {
+    pub user_id: String,
+    pub username: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResultsData {
+    pub users: Vec<crate::db::PublicUserInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicKeyBundleData {
+    pub user_id: String,
+    /// Base64-encoded X25519 identity public key (32 bytes)
+    pub identity_public: String,
+    /// Base64-encoded X25519 signed prekey public key (32 bytes)
+    pub signed_prekey_public: String,
+    /// Base64-encoded Ed25519 signature (64 bytes)
+    pub signature: String,
+    /// Base64-encoded Ed25519 verifying key (32 bytes)
+    pub verifying_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AckData {
+    pub message_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorData {
+    pub code: String,
+    pub message: String,
+}
+
+// ============================================================================
+// ServerMessage Enum - Internally Tagged Format
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+#[serde(rename_all = "camelCase")]
 pub enum ServerMessage {
-    RegisterSuccess {
-        user_id: String,
-        username: String,
-        display_name: String,
-        session_token: String,
-        expires: i64,
-    },
-    LoginSuccess {
-        user_id: String,
-        username: String,
-        display_name: String,
-        session_token: String,
-        expires: i64,
-    },
-    ConnectSuccess {
-        user_id: String,
-        username: String,
-        display_name: String,
-    },
+    RegisterSuccess(RegisterSuccessData),
+    LoginSuccess(LoginSuccessData),
+    ConnectSuccess(ConnectSuccessData),
     SessionExpired,
-    SearchResults {
-        users: Vec<crate::db::PublicUserInfo>,
-    },
-    #[deprecated(note = "Use PublicKeyBundle for proper E2EE")]
-    PublicKey {
-        user_id: String,
-        username: String,
-        display_name: String,
-        public_key: String,
-    },
-    PublicKeyBundle {
-        user_id: String, // Base64-encoded X25519 identity public key (32 bytes)
-        identity_public: String, // Base64-encoded X25519 signed prekey public key (32 bytes)
-        signed_prekey_public: String, // Base64-encoded Ed25519 signature (64 bytes)
-        signature: String, // Base64-encoded Ed25519 verifying key (32 bytes)
-        verifying_key: String,
-    },
-    Message(Message),
-    Ack {
-        message_id: String,
-        status: String,
-    },
+    SearchResults(SearchResultsData),
+    PublicKeyBundle(PublicKeyBundleData),
+    Message(ChatMessage),
+    Ack(AckData),
     KeyRotationSuccess,
-    Error {
-        code: String,
-        message: String,
-    },
+    Error(ErrorData),
     LogoutSuccess,
 }

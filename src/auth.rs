@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,6 +19,7 @@ pub struct AuthManager {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
     session_ttl_days: i64,
+    #[allow(dead_code)]
     refresh_token_ttl_days: i64,
     issuer: String,
 }
@@ -52,6 +53,7 @@ impl AuthManager {
         Ok((token, jti, exp.timestamp()))
     }
 
+    #[allow(dead_code)]
     pub fn create_refresh_token(&self, user_id: &Uuid) -> Result<(String, String, i64)> {
         let now = Utc::now();
         let exp = now + Duration::days(self.refresh_token_ttl_days);

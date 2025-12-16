@@ -10,7 +10,9 @@ pub async fn handle_search_users(handler: &mut ConnectionHandler, ctx: &AppConte
     match crate::db::search_users_by_display_name(&ctx.db_pool, &query).await {
         Ok(users) => {
             let count = users.len();
-            let response = ServerMessage::SearchResults { users };
+            let response = ServerMessage::SearchResults(
+                crate::message::SearchResultsData { users },
+            );
             if handler.send_msgpack(&response).await.is_err() {
                 return;
             }
@@ -52,13 +54,15 @@ pub async fn handle_get_public_key(
     if let Ok(Some(cached_bundle)) = queue.get_cached_key_bundle(&user_id).await {
         drop(queue);
         
-        let response = ServerMessage::PublicKeyBundle {
-            user_id: cached_bundle.user_id.clone(),
-            identity_public: cached_bundle.identity_public,
-            signed_prekey_public: cached_bundle.signed_prekey_public,
-            signature: cached_bundle.signature,
-            verifying_key: cached_bundle.verifying_key,
-        };
+        let response = ServerMessage::PublicKeyBundle(
+            crate::message::PublicKeyBundleData {
+                user_id: cached_bundle.user_id.clone(),
+                identity_public: cached_bundle.identity_public,
+                signed_prekey_public: cached_bundle.signed_prekey_public,
+                signature: cached_bundle.signature,
+                verifying_key: cached_bundle.verifying_key,
+            },
+        );
         if handler.send_msgpack(&response).await.is_err() {
             return;
         }
@@ -82,13 +86,15 @@ pub async fn handle_get_public_key(
             }
             drop(queue);
 
-            let response = ServerMessage::PublicKeyBundle {
-                user_id: bundle.user_id.clone(),
-                identity_public: bundle.identity_public,
-                signed_prekey_public: bundle.signed_prekey_public,
-                signature: bundle.signature,
-                verifying_key: bundle.verifying_key,
-            };
+            let response = ServerMessage::PublicKeyBundle(
+                crate::message::PublicKeyBundleData {
+                    user_id: bundle.user_id.clone(),
+                    identity_public: bundle.identity_public,
+                    signed_prekey_public: bundle.signed_prekey_public,
+                    signature: bundle.signature,
+                    verifying_key: bundle.verifying_key,
+                },
+            );
             if handler.send_msgpack(&response).await.is_err() {
                 return;
             }

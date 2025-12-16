@@ -24,16 +24,9 @@ pub async fn handle_rotate_prekey(
         }
     };
 
-    // 2. Декодируем update из base64 JSON
-    let update_json = match crate::crypto::decode_base64(&update_base64) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(json) => json,
-            Err(e) => {
-                tracing::warn!(error = %e, "Invalid UTF-8 in prekey update");
-                handler.send_error("INVALID_UPDATE", "Invalid encoding").await;
-                return;
-            }
-        },
+    // 2. Decode base64 to get MessagePack bytes
+    let msgpack_bytes = match crate::crypto::decode_base64(&update_base64) {
+        Ok(bytes) => bytes,
         Err(e) => {
             tracing::warn!(error = %e, "Invalid base64 in prekey update");
             handler.send_error("INVALID_UPDATE", "Invalid base64").await;
@@ -41,10 +34,11 @@ pub async fn handle_rotate_prekey(
         }
     };
 
-    let update: SignedPrekeyUpdate = match serde_json::from_str(&update_json) {
+    // 3. Deserialize MessagePack to SignedPrekeyUpdate
+    let update: SignedPrekeyUpdate = match rmp_serde::from_slice(&msgpack_bytes) {
         Ok(u) => u,
         Err(e) => {
-            tracing::warn!(error = %e, "Invalid prekey update JSON");
+            tracing::warn!(error = %e, "Invalid prekey update (MessagePack)");
             handler.send_error("INVALID_UPDATE", "Invalid update format").await;
             return;
         }

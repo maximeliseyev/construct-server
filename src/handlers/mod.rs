@@ -37,57 +37,52 @@ pub async fn handle_websocket(
                         #[cfg(debug_assertions)]
                         tracing::debug!("Received {} bytes from {}", data.len(), addr);
                         match rmp_serde::from_slice::<ClientMessage>(&data) {
-                            Ok(ClientMessage::Register {
-                                username,
-                                display_name,
-                                password,
-                                public_key,
-                            }) => {
+                            Ok(ClientMessage::Register(data)) => {
                                 auth::handle_register(
                                     &mut handler,
                                     &ctx,
-                                    username,
-                                    display_name,
-                                    password,
-                                    public_key,
+                                    data.username,
+                                    data.display_name,
+                                    data.password,
+                                    data.public_key,
                                 )
                                 .await;
                             }
 
-                            Ok(ClientMessage::Login { username, password }) => {
+                            Ok(ClientMessage::Login(data)) => {
                                 auth::handle_login(
                                     &mut handler,
                                     &ctx,
-                                    username,
-                                    password,
+                                    data.username,
+                                    data.password,
                                 )
                                 .await;
                             }
 
-                            Ok(ClientMessage::Connect { session_token }) => {
+                            Ok(ClientMessage::Connect(data)) => {
                                 auth::handle_connect(
                                     &mut handler,
                                     &ctx,
-                                    session_token,
+                                    data.session_token,
                                 )
                                 .await;
                             }
 
-                            Ok(ClientMessage::Logout { session_token }) => {
+                            Ok(ClientMessage::Logout(data)) => {
                                 auth::handle_logout(
                                     &mut handler,
                                     &ctx,
-                                    session_token,
+                                    data.session_token,
                                 )
                                 .await;
                             }
 
-                            Ok(ClientMessage::SearchUsers { query }) => {
-                                users::handle_search_users(&mut handler, &ctx, query).await;
+                            Ok(ClientMessage::SearchUsers(data)) => {
+                                users::handle_search_users(&mut handler, &ctx, data.query).await;
                             }
 
-                            Ok(ClientMessage::GetPublicKey { user_id }) => {
-                                users::handle_get_public_key(&mut handler, &ctx, user_id).await;
+                            Ok(ClientMessage::GetPublicKey(data)) => {
+                                users::handle_get_public_key(&mut handler, &ctx, data.user_id).await;
                             }
 
                             Ok(ClientMessage::SendMessage(mut msg)) => {
@@ -96,12 +91,12 @@ pub async fn handle_websocket(
                                 messages::handle_send_message(&mut handler, &ctx, msg).await;
                             }
 
-                            Ok(ClientMessage::RotatePrekey { user_id, update }) => {
+                            Ok(ClientMessage::RotatePrekey(data)) => {
                                 key_rotation::handle_rotate_prekey(
                                     &mut handler,
                                     &ctx,
-                                    user_id,
-                                    update,
+                                    data.user_id,
+                                    data.update,
                                 )
                                 .await;
                             }

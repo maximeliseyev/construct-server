@@ -11,10 +11,13 @@ pub struct LoggingConfig {
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
     pub prekey_ttl_days: i64,
+    #[allow(dead_code)]
     pub prekey_min_ttl_days: i64,
+    #[allow(dead_code)]
     pub prekey_max_ttl_days: i64,
     pub max_messages_per_hour: u32,
     pub max_key_rotations_per_day: u32,
+    #[allow(dead_code)]
     pub max_connections_per_user: u32,
     pub key_bundle_cache_hours: i64,
     pub rate_limit_block_duration_seconds: i64,

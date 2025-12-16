@@ -8,6 +8,10 @@ venv/
 # Rust
 target/
 
+# sqlx query cache
+.sqlx/*
+!.sqlx/query-cache.json
+
 # Environment
 .env
 .env.local

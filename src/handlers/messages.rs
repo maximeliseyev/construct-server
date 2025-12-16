@@ -1,31 +1,67 @@
+// ============================================================================
+// Message Handler - Ephemeral Delivery (No Database Persistence)
+// ============================================================================
+//
+// SECURITY DESIGN:
+// Messages are NEVER stored in the database. This handler implements
+// ephemeral message delivery to protect user privacy:
+//
+// Delivery Flow:
+// 1. Validate message (structure, rate limits, user not blocked)
+// 2. Check if recipient is online
+//    a) Online  → Send directly via WebSocket (no storage)
+//    b) Offline → Queue in Redis with TTL (temporary only)
+// 3. Send ACK to sender (delivered/queued status)
+//
+// Privacy Benefits:
+// - No conversation metadata in database
+// - No social graph reconstruction possible
+// - Forward secrecy maintained
+// - Messages disappear after delivery or TTL expiry
+//
+// ============================================================================
+
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
-use crate::message::{Message, ServerMessage};
-use crate::crypto::{StoredEncryptedMessage, MessageType, ServerCryptoValidator};
+use crate::message::{ChatMessage, ServerMessage};
+use base64::Engine;
 
 /// Handles message sending
 /// Delivers immediately if recipient is online, otherwise queues for later delivery
+/// IMPORTANT: Messages are NEVER persisted to database (Redis queue only)
 pub async fn handle_send_message(
     handler: &mut ConnectionHandler,
     ctx: &AppContext,
-    msg: Message,
+    msg: ChatMessage,
 ) {
     let mut queue = ctx.queue.lock().await;
 
     // 1. Проверка блокировки пользователя
     if let Ok(Some(reason)) = queue.is_user_blocked(&msg.from).await {
         tracing::warn!(user_id = %msg.from, reason = %reason, "Blocked user attempted to send message");
-        handler.send_error("USER_BLOCKED", &format!("Your account is temporarily blocked: {}", reason)).await;
+        handler
+            .send_error(
+                "USER_BLOCKED",
+                &format!("Your account is temporarily blocked: {}", reason),
+            )
+            .await;
         return;
     }
 
     // 2. Replay protection - проверка уникальности сообщения
-    let nonce = msg.nonce.clone().unwrap_or_default();
-    match queue.check_message_replay(&msg.id, &msg.content, &nonce).await {
-        Ok(true) => {}, // Сообщение уникальное, продолжаем
+    // For Double Ratchet, we use ephemeral_public_key and message_number for replay detection
+    let ephemeral_key_b64 =
+        base64::engine::general_purpose::STANDARD.encode(&msg.ephemeral_public_key);
+    match queue
+        .check_message_replay(&msg.id, &msg.content, &ephemeral_key_b64)
+        .await
+    {
+        Ok(true) => {} // Сообщение уникальное, продолжаем
         Ok(false) => {
             tracing::warn!(message_id = %msg.id, "Duplicate message detected");
-            handler.send_error("DUPLICATE_MESSAGE", "This message was already sent").await;
+            handler
+                .send_error("DUPLICATE_MESSAGE", "This message was already sent")
+                .await;
             return;
         }
         Err(e) => {
@@ -38,23 +74,31 @@ pub async fn handle_send_message(
         Ok(count) => {
             let max_messages = ctx.config.security.max_messages_per_hour;
             let block_threshold = max_messages + (max_messages / 2);
-            
+
             if count > block_threshold {
                 let block_duration = ctx.config.security.rate_limit_block_duration_seconds;
-                if let Err(e) = queue.block_user_temporarily(&msg.from, block_duration, "Rate limit exceeded").await {
+                if let Err(e) = queue
+                    .block_user_temporarily(&msg.from, block_duration, "Rate limit exceeded")
+                    .await
+                {
                     tracing::error!(error = %e, "Failed to block user for rate limiting");
-                    handler.send_error("SERVER_ERROR", "Failed to apply rate limit").await;
+                    handler
+                        .send_error("SERVER_ERROR", "Failed to apply rate limit")
+                        .await;
                 } else {
-                    let message = format!(
-                        "Too many messages. Blocked for {} seconds.",
-                        block_duration
-                    );
+                    let message =
+                        format!("Too many messages. Blocked for {} seconds.", block_duration);
                     handler.send_error("RATE_LIMIT_BLOCKED", &message).await;
                 }
                 return;
             } else if count > max_messages {
                 tracing::warn!(user_id = %msg.from, count = count, "Rate limit warning");
-                handler.send_error("RATE_LIMIT_WARNING", &format!("Slow down! ({}/{})", count, max_messages)).await;
+                handler
+                    .send_error(
+                        "RATE_LIMIT_WARNING",
+                        &format!("Slow down! ({}/{})", count, max_messages),
+                    )
+                    .await;
                 return;
             }
         }
@@ -63,19 +107,24 @@ pub async fn handle_send_message(
         }
     }
 
-    let stored_msg = StoredEncryptedMessage {
-        content: msg.content.clone(),
-        nonce: nonce.clone(),
-        sender_identity: msg.from.clone(),
-        recipient_id: msg.to.clone(),
-        sender_id: msg.from.clone(),
-        timestamp: chrono::Utc::now(),
-        message_type: MessageType::TextMessage,
-    };
+    // Validate ChatMessage structure
+    if !msg.is_valid() {
+        tracing::warn!(user_id = %msg.from, "Invalid chat message format");
+        handler
+            .send_error("INVALID_MESSAGE_FORMAT", "Message validation failed")
+            .await;
+        return;
+    }
 
-    if let Err(e) = ServerCryptoValidator::validate_encrypted_message(&stored_msg) {
-        tracing::warn!(user_id = %msg.from, error = %e, "Invalid message format");
-        handler.send_error("INVALID_MESSAGE_FORMAT", &e.to_string()).await;
+    // Additional validation: check ephemeral_public_key length
+    if msg.ephemeral_public_key.len() != 32 {
+        tracing::warn!(user_id = %msg.from, "Invalid ephemeral public key size");
+        handler
+            .send_error(
+                "INVALID_MESSAGE_FORMAT",
+                "Ephemeral public key must be 32 bytes",
+            )
+            .await;
         return;
     }
 
@@ -89,14 +138,14 @@ pub async fn handle_send_message(
     if let Some(tx) = recipient_tx {
         match tx.send(ServerMessage::Message(msg.clone())) {
             Ok(_) => {
-                let ack = ServerMessage::Ack {
+                let ack = ServerMessage::Ack(crate::message::AckData {
                     message_id: msg.id.clone(),
                     status: "delivered".to_string(),
-                };
+                });
                 if handler.send_msgpack(&ack).await.is_err() {
                     return;
                 }
-                
+
                 if ctx.config.logging.enable_message_metadata {
                     tracing::debug!(
                         message_id = %msg.id,
@@ -127,31 +176,34 @@ pub async fn handle_send_message(
                 }
 
                 let mut queue = ctx.queue.lock().await;
-                                    if let Err(qe) = queue.enqueue_message(&msg.to, &msg).await {
-                                        tracing::error!(error = %qe, "Failed to queue message after delivery failure");
-                                        handler.send_error("DELIVERY_FAILED", "Failed to deliver message").await;
-                                    } else {
-                                        let ack = ServerMessage::Ack {
-                                            message_id: msg.id.clone(),
-                                            status: "queued".to_string(),
-                                        };
-                                        if handler.send_msgpack(&ack).await.is_err() {
-                                            return;
-                                        }
-                                    }            }
+                if let Err(qe) = queue.enqueue_message(&msg.to, &msg).await {
+                    tracing::error!(error = %qe, "Failed to queue message after delivery failure");
+                    handler
+                        .send_error("DELIVERY_FAILED", "Failed to deliver message")
+                        .await;
+                } else {
+                    let ack = ServerMessage::Ack(crate::message::AckData {
+                        message_id: msg.id.clone(),
+                        status: "queued".to_string(),
+                    });
+                    if handler.send_msgpack(&ack).await.is_err() {
+                        return;
+                    }
+                }
+            }
         }
     } else {
         let mut queue = ctx.queue.lock().await;
         match queue.enqueue_message(&msg.to, &msg).await {
             Ok(_) => {
-                let ack = ServerMessage::Ack {
+                let ack = ServerMessage::Ack(crate::message::AckData {
                     message_id: msg.id.clone(),
                     status: "queued".to_string(),
-                };
+                });
                 if handler.send_msgpack(&ack).await.is_err() {
                     return;
                 }
-                
+
                 if ctx.config.logging.enable_message_metadata {
                     tracing::debug!(
                         message_id = %msg.id,
@@ -166,7 +218,9 @@ pub async fn handle_send_message(
             }
             Err(e) => {
                 tracing::error!(error = %e, message_id = %msg.id, "Error queuing message");
-                handler.send_error("QUEUE_FAILED", "Failed to queue message").await;
+                handler
+                    .send_error("QUEUE_FAILED", "Failed to queue message")
+                    .await;
             }
         }
     }

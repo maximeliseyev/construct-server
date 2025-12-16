@@ -33,33 +33,26 @@ pub async fn handle_register(
     password: String,
     public_key: String,
 ) {
-    let bundle_json = match crate::crypto::decode_base64(&public_key) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(json) => json,
-            Err(_e) => {
-                handler
-                    .send_error("INVALID_KEY", "Invalid key encoding")
-                    .await;
-                return;
-            }
-        },
+    // Decode base64 to get MessagePack bytes
+    let msgpack_bytes = match crate::crypto::decode_base64(&public_key) {
+        Ok(bytes) => bytes,
         Err(_e) => {
             handler.send_error("INVALID_KEY", "Invalid base64").await;
             return;
         }
     };
 
-    let registration_bundle: RegistrationBundle =
-        match serde_json::from_str(&bundle_json) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!("Invalid registration bundle: {}", e);
-                handler
-                    .send_error("INVALID_KEY_BUNDLE", "Invalid key format")
-                    .await;
-                return;
-            }
-        };
+    // Deserialize MessagePack to RegistrationBundle
+    let registration_bundle: RegistrationBundle = match rmp_serde::from_slice(&msgpack_bytes) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("Invalid registration bundle (MessagePack): {}", e);
+            handler
+                .send_error("INVALID_KEY_BUNDLE", "Invalid key format")
+                .await;
+            return;
+        }
+    };
 
     let stored_bundle = StoredKeyBundle {
         user_id: String::new(),
@@ -126,16 +119,18 @@ pub async fn handle_register(
                         return;
                     }
 
-                    let response = ServerMessage::RegisterSuccess {
-                        user_id: user.id.to_string(),
-                        username: user.username.clone(),
-                        display_name: user.display_name.clone(),
-                        session_token: token,
-                        expires,
-                    };
-                                                if handler.send_msgpack(&response).await.is_err() {
-                                                    return;
-                                                }                }
+                    let response = ServerMessage::RegisterSuccess(
+                        crate::message::RegisterSuccessData {
+                            user_id: user.id.to_string(),
+                            username: user.username.clone(),
+                            display_name: user.display_name.clone(),
+                            session_token: token,
+                            expires,
+                        },
+                    );
+                    if handler.send_msgpack(&response).await.is_err() {
+                        return;
+                    }                }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create token");
                     handler
@@ -199,16 +194,18 @@ pub async fn handle_login(
                             return;
                         }
 
-                        let response = ServerMessage::LoginSuccess {
-                            user_id: user.id.to_string(),
-                            username: user.username.clone(),
-                            display_name: user.display_name.clone(),
-                            session_token: token,
-                            expires,
-                        };
-                                                    if handler.send_msgpack(&response).await.is_err() {
-                                                        return;
-                                                    }                    }
+                        let response = ServerMessage::LoginSuccess(
+                            crate::message::LoginSuccessData {
+                                user_id: user.id.to_string(),
+                                username: user.username.clone(),
+                                display_name: user.display_name.clone(),
+                                session_token: token,
+                                expires,
+                            },
+                        );
+                        if handler.send_msgpack(&response).await.is_err() {
+                            return;
+                        }                    }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to create token");
                         handler
@@ -282,11 +279,13 @@ pub async fn handle_connect(
                                 return;
                             }
 
-                            let response = ServerMessage::ConnectSuccess {
-                                user_id: user.id.to_string(),
-                                username: user.username.clone(),
-                                display_name: user.display_name.clone(),
-                            };
+                            let response = ServerMessage::ConnectSuccess(
+                                crate::message::ConnectSuccessData {
+                                    user_id: user.id.to_string(),
+                                    username: user.username.clone(),
+                                    display_name: user.display_name.clone(),
+                                },
+                            );
                             if handler.send_msgpack(&response).await.is_err() {
                                 // Client disconnected, just return.
                                 return;
