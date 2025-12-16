@@ -59,6 +59,10 @@ pub enum ClientMessage {
         user_id: String,
     },
     SendMessage(Message),
+    RotatePrekey {
+        user_id: String,
+        update: String,
+    },
     Logout {
         session_token: String,
     },
@@ -89,17 +93,26 @@ pub enum ServerMessage {
     SearchResults {
         users: Vec<crate::db::PublicUserInfo>,
     },
+    #[deprecated(note = "Use PublicKeyBundle for proper E2EE")]
     PublicKey {
         user_id: String,
         username: String,
         display_name: String,
         public_key: String,
     },
+    PublicKeyBundle {
+        user_id: String, // Base64-encoded X25519 identity public key (32 bytes)
+        identity_public: String, // Base64-encoded X25519 signed prekey public key (32 bytes)
+        signed_prekey_public: String, // Base64-encoded Ed25519 signature (64 bytes)
+        signature: String, // Base64-encoded Ed25519 verifying key (32 bytes)
+        verifying_key: String,
+    },
     Message(Message),
     Ack {
         message_id: String,
         status: String,
     },
+    KeyRotationSuccess,
     Error {
         code: String,
         message: String,

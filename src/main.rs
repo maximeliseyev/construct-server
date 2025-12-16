@@ -14,9 +14,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, body::Incoming as IncomingBody, StatusCode};
+use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-
 
 mod auth;
 mod config;
@@ -57,10 +56,8 @@ async fn http_handler(
         "/metrics" => match metrics::gather_metrics() {
             Ok(metrics_data) => {
                 let mut res = Response::new(Full::new(Bytes::from(metrics_data)));
-                res.headers_mut().insert(
-                    "Content-Type",
-                    "text/plain; version=0.0.4".parse().unwrap(),
-                );
+                res.headers_mut()
+                    .insert("Content-Type", "text/plain; version=0.0.4".parse().unwrap());
                 res
             }
             Err(e) => {
@@ -100,10 +97,7 @@ async fn run_http_server(
                 http_handler(req, db_pool_clone.clone(), queue_clone.clone())
             });
 
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service)
-                .await
-            {
+            if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
                 tracing::error!("Error serving HTTP connection: {:?}", err);
             }
         });
@@ -129,7 +123,6 @@ async fn run_websocket_server(app_context: AppContext, listener: TcpListener) {
         });
     }
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -167,8 +160,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 
     // Create application context
-    let app_context = AppContext::new(db_pool.clone(), queue.clone(), auth_manager, clients, app_config.clone());
-    
+    let app_context = AppContext::new(
+        db_pool.clone(),
+        queue.clone(),
+        auth_manager,
+        clients,
+        app_config.clone(),
+    );
+
     let http_server_config = app_config.as_ref().clone();
     let websocket_server = run_websocket_server(app_context, listener);
     let http_server = run_http_server(http_server_config, db_pool.clone(), queue.clone());

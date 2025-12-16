@@ -1,5 +1,5 @@
 use crate::context::AppContext;
-use crate::crypto::decode_base64;
+use crate::crypto::{ServerCryptoValidator, StoredKeyBundle, RegistrationBundle};
 use crate::db::{self, User};
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
@@ -33,15 +33,52 @@ pub async fn handle_register(
     password: String,
     public_key: String,
 ) {
-    let identity_key = match decode_base64(&public_key) {
-        Ok(key) => key,
-        Err(_) => {
-            handler
-                .send_error("INVALID_PUBLIC_KEY", "Public key is not valid base64")
-                .await;
+    let bundle_json = match crate::crypto::decode_base64(&public_key) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(json) => json,
+            Err(_e) => {
+                handler
+                    .send_error("INVALID_KEY", "Invalid key encoding")
+                    .await;
+                return;
+            }
+        },
+        Err(_e) => {
+            handler.send_error("INVALID_KEY", "Invalid base64").await;
             return;
         }
     };
+
+    let registration_bundle: RegistrationBundle =
+        match serde_json::from_str(&bundle_json) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Invalid registration bundle: {}", e);
+                handler
+                    .send_error("INVALID_KEY_BUNDLE", "Invalid key format")
+                    .await;
+                return;
+            }
+        };
+
+    let stored_bundle = StoredKeyBundle {
+        user_id: String::new(),
+        identity_public: crate::crypto::encode_base64(&registration_bundle.identity_public),
+        signed_prekey_public: crate::crypto::encode_base64(&registration_bundle.signed_prekey_public),
+        signature: crate::crypto::encode_base64(&registration_bundle.signature),
+        verifying_key: crate::crypto::encode_base64(&registration_bundle.verifying_key),
+        registered_at: chrono::Utc::now(),
+        prekey_expires_at: chrono::Utc::now() 
+            + chrono::Duration::days(ctx.config.security.prekey_ttl_days),
+    };
+
+    if let Err(e) = ServerCryptoValidator::validate_key_bundle(&stored_bundle) {
+        tracing::warn!("Key bundle validation failed: {}", e);
+        handler
+            .send_error("INVALID_KEY_BUNDLE", &e.to_string())
+            .await;
+        return;
+    }
 
     let display_name_final = display_name.as_deref().unwrap_or(&username);
 
@@ -50,11 +87,20 @@ pub async fn handle_register(
         &username,
         display_name_final,
         &password,
-        &identity_key,
+        &stored_bundle.identity_public,
     )
     .await
     {
         Ok(user) => {
+            let mut final_bundle = stored_bundle.clone();
+            final_bundle.user_id = user.id.to_string();
+        
+            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &final_bundle).await {
+                tracing::error!(error = %e, "Failed to store key bundle during registration");
+                handler.send_error("SERVER_ERROR", "Failed to store encryption keys").await;
+                return;
+            }
+
             if ctx.config.logging.enable_user_identifiers {
                 tracing::info!(
                     username = %user.username,

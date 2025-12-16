@@ -1,5 +1,6 @@
 mod auth;
 mod connection;
+mod key_rotation;
 mod messages;
 pub mod session;
 mod users;
@@ -14,7 +15,6 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-// Re-export handle_websocket
 pub async fn handle_websocket(
     ws_stream: WebSocketStreamType,
     addr: SocketAddr,
@@ -23,12 +23,10 @@ pub async fn handle_websocket(
     metrics::CONNECTIONS_TOTAL.inc();
     let span = tracing::info_span!("websocket_connection", addr = %addr);
     let _enter = span.enter();
-
     tracing::info!("New connection from: {}", addr);
 
     let (ws_sender, mut ws_receiver) = ws_stream.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
-
     let mut handler = ConnectionHandler::new(ws_sender, tx, addr);
 
     loop {
@@ -37,7 +35,6 @@ pub async fn handle_websocket(
                 match msg {
                     Ok(WsMessage::Binary(data)) => {
                         tracing::debug!("Received {} bytes from {}", data.len(), addr);
-
                         match rmp_serde::from_slice::<ClientMessage>(&data) {
                             Ok(ClientMessage::Register {
                                 username,
@@ -94,9 +91,18 @@ pub async fn handle_websocket(
 
                             Ok(ClientMessage::SendMessage(mut msg)) => {
                                 metrics::MESSAGES_SENT_TOTAL.inc();
-                                // Assign a new UUID to the message ID
                                 msg.id = Uuid::new_v4().to_string();
                                 messages::handle_send_message(&mut handler, &ctx, msg).await;
+                            }
+
+                            Ok(ClientMessage::RotatePrekey { user_id, update }) => {
+                                key_rotation::handle_rotate_prekey(
+                                    &mut handler,
+                                    &ctx,
+                                    user_id,
+                                    update,
+                                )
+                                .await;
                             }
 
                             Err(e) => {
@@ -119,7 +125,6 @@ pub async fn handle_websocket(
                     _ => {}
                 }
             }
-
             Some(server_msg) = rx.recv() => {
                 if let Ok(bytes) = rmp_serde::to_vec(&server_msg) {
                     if handler.ws_sender_mut().send(WsMessage::Binary(bytes)).await.is_err() {

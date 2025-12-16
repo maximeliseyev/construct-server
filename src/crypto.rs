@@ -1,199 +1,198 @@
-//! End-to-End Encryption Implementation
-//!
-//! This module provides E2E encryption using:
-//! - X25519 for key exchange (Elliptic Curve Diffie-Hellman)
-//! - ChaCha20-Poly1305 for authenticated encryption
-//!
-//! # Security Model
-//!
-//! 1. **Client-side encryption**: All encryption/decryption happens on client devices
-//! 2. **Server-side storage**: Server stores encrypted messages without ability to decrypt
-//! 3. **Key management**: Private keys NEVER leave the client device
-//!
-//! # How it works
-//!
-//! ## Registration (Client)
-//! ```rust,ignore
-//! let (private_key, public_key) = generate_x25519_keypair();
-//! // Store private_key securely on device (e.g., keychain)
-//! // Send public_key to server during registration
-//! ```
-//!
-//! ## Sending a message (Client A → B)
-//! ```rust,ignore
-//! // 1. Fetch recipient's public key from server
-//! let recipient_public_key = fetch_public_key("user_b").await?;
-//!
-//! // 2. Encrypt message on client
-//! let plaintext = "Secret message";
-//! let (encrypted, nonce) = encrypt_message(
-//!     plaintext.as_bytes(),
-//!     &recipient_public_key
-//! )?;
-//!
-//! // 3. Send to server (server cannot decrypt!)
-//! send_message(Message {
-//!     content: base64_encode(&encrypted),
-//!     nonce: Some(base64_encode(&nonce)),
-//!     ...
-//! });
-//! ```
-//!
-//! ## Receiving a message (Client B)
-//! ```rust,ignore
-//! // 1. Receive encrypted message from server
-//! let message = receive_message().await?;
-//!
-//! // 2. Decrypt on client using private key
-//! let encrypted = base64_decode(&message.content)?;
-//! let nonce = base64_decode(&message.nonce.unwrap())?;
-//! let my_private_key = load_from_secure_storage();
-//!
-//! let plaintext = decrypt_message(
-//!     &encrypted,
-//!     &my_private_key,
-//!     &nonce.try_into()?
-//! )?;
-//! ```
-//!
-//! # Important Security Notes
-//!
-//! - **Nonce uniqueness**: Each message MUST use a unique random nonce
-//! - **Nonce is public**: The nonce can be transmitted openly with the ciphertext
-//! - **Never reuse nonce**: Reusing a nonce with the same key breaks security
-//! - **Private key storage**: Private keys must be stored securely (e.g., OS keychain)
-//! - **Server cannot decrypt**: The server only sees encrypted blobs
-
-use anyhow::Result;
-use chacha20poly1305::{
-    aead::{Aead, KeyInit},
-    ChaCha20Poly1305, Nonce,
-};
-use rand::{rngs::OsRng, RngCore};
-use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
 use base64::{engine::general_purpose, Engine as _};
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
-/// Generates a new X25519 keypair for E2E encryption
-/// Returns (private_key, public_key)
-///
-/// SECURITY: The private key must NEVER leave the client device!
-#[allow(dead_code)]
-pub fn generate_x25519_keypair() -> ([u8; 32], [u8; 32]) {
-    let secret = StaticSecret::random_from_rng(OsRng);
-    let public = X25519PublicKey::from(&secret);
-
-    let secret_bytes = secret.to_bytes();
-    let public_bytes = public.to_bytes();
-
-    (secret_bytes, public_bytes)
+/// Encrypted message as stored on the server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredEncryptedMessage {
+    /// Base64 encoded [ephemeral_public (32 bytes) || ciphertext]
+    pub content: String,
+    
+    /// Base64 encoded nonce (12 bytes)
+    pub nonce: String,
+    
+    /// Base64 encoded sender's identity public key (32 bytes)
+    pub sender_identity: String,
+    
+    /// Recipient user ID
+    pub recipient_id: String,
+    
+    /// Sender user ID  
+    pub sender_id: String,
+    
+    /// Message timestamp (server time)
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    
+    /// Message type for routing
+    pub message_type: MessageType,
 }
 
-/// Encrypts a message for the recipient using their public key
-///
-/// This implements E2E encryption where:
-/// 1. An ephemeral keypair is generated for this message
-/// 2. A shared secret is derived using X25519 Diffie-Hellman
-/// 3. The message is encrypted with ChaCha20-Poly1305
-/// 4. A unique random nonce is generated for each encryption
-///
-/// Returns: (encrypted_data, nonce)
-/// - encrypted_data: [ephemeral_public_key || ciphertext]
-/// - nonce: 12 random bytes that must be sent with the message
-///
-/// SECURITY:
-/// - The nonce MUST be unique for every message
-/// - The nonce is NOT secret and can be transmitted openly
-/// - Never reuse a nonce with the same key!
-#[allow(dead_code)]
-pub fn encrypt_message(message: &[u8], recipient_public_key: &[u8]) -> Result<(Vec<u8>, [u8; 12])> {
-    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
-    let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
-
-    let recipient_public = X25519PublicKey::from(<[u8; 32]>::try_from(recipient_public_key)?);
-    let shared_secret = ephemeral_secret.diffie_hellman(&recipient_public);
-
-    let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-
-    // CRITICAL: Generate a unique random nonce for THIS message
-    // Using the same nonce with the same key breaks encryption security!
-    let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
-    let ciphertext = cipher
-        .encrypt(nonce, message)
-        .map_err(|e| anyhow::anyhow!("Encryption failed: {:?}", e))?;
-
-    // Result format: [32 bytes ephemeral public key || ciphertext]
-    let mut result = ephemeral_public.to_bytes().to_vec();
-    result.extend_from_slice(&ciphertext);
-
-    Ok((result, nonce_bytes))
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MessageType {
+    TextMessage,
+    PrekeyBundle,      // Для обновления ключей
+    MediaMessage,      // Для зашифрованных медиафайлов
+    SystemMessage,     // Системные уведомления
 }
 
-/// Decrypts a message using the recipient's private key
-///
-/// This is the counterpart to encrypt_message and:
-/// 1. Extracts the ephemeral public key from the encrypted data
-/// 2. Derives the shared secret using the recipient's private key
-/// 3. Decrypts the ciphertext using the provided nonce
-///
-/// Parameters:
-/// - encrypted: The encrypted data [ephemeral_public_key || ciphertext]
-/// - private_key_bytes: The recipient's private key (32 bytes)
-/// - nonce_bytes: The nonce that was used for encryption (12 bytes)
-///
-/// Returns: The decrypted plaintext
-///
-/// SECURITY:
-/// - The private key must NEVER be sent to the server
-/// - This function should only run on the client device
-/// - The nonce must be the same one used during encryption
-#[allow(dead_code)]
-pub fn decrypt_message(
-    encrypted: &[u8],
-    private_key_bytes: &[u8],
-    nonce_bytes: &[u8; 12],
-) -> Result<Vec<u8>> {
-    if encrypted.len() < 32 {
-        return Err(anyhow::anyhow!("Invalid encrypted message: too short"));
+/// Public key bundle as stored on the server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredKeyBundle {
+    /// User ID
+    pub user_id: String,
+    
+    /// Base64 encoded identity public key (32 bytes)
+    pub identity_public: String,
+    
+    /// Base64 encoded signed prekey public key (32 bytes)
+    pub signed_prekey_public: String,
+    
+    /// Base64 encoded signature (64 bytes)
+    pub signature: String,
+    
+    /// Base64 encoded verifying key (32 bytes)
+    pub verifying_key: String,
+    
+    /// When this bundle was registered
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+    
+    /// When the signed prekey expires (should be rotated)
+    pub prekey_expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Server-side validation utilities
+pub struct ServerCryptoValidator;
+
+impl ServerCryptoValidator {
+    /// Validates the format of an encrypted message
+    /// 
+    /// Note: Server CANNOT validate cryptographic correctness,
+    /// only basic format and length constraints.
+    pub fn validate_encrypted_message(msg: &StoredEncryptedMessage) -> Result<()> {
+        // 1. Декодируем base64
+        let content_bytes = general_purpose::STANDARD.decode(&msg.content)
+            .context("Invalid base64 in content")?;
+        
+        let nonce_bytes = general_purpose::STANDARD.decode(&msg.nonce)
+            .context("Invalid base64 in nonce")?;
+        
+        let sender_bytes = general_purpose::STANDARD.decode(&msg.sender_identity)
+            .context("Invalid base64 in sender_identity")?;
+        
+        // 2. Проверяем длины
+        if content_bytes.len() < 32 + 16 {  // min: ephemeral_public + minimal ciphertext
+            return Err(anyhow::anyhow!("Content too short"));
+        }
+        
+        if nonce_bytes.len() != 12 {
+            return Err(anyhow::anyhow!("Nonce must be 12 bytes"));
+        }
+        
+        if sender_bytes.len() != 32 {
+            return Err(anyhow::anyhow!("Sender identity must be 32 bytes"));
+        }
+        
+        // 3. Проверяем, что ephemeral_public имеет корректную длину
+        // (первые 32 байта content должны быть публичным ключом)
+        // Сервер не может проверить, что это валидная точка на кривой!
+        
+        // 4. Проверяем идентификаторы пользователей
+        if msg.recipient_id.is_empty() || msg.sender_id.is_empty() {
+            return Err(anyhow::anyhow!("User IDs cannot be empty"));
+        }
+        
+        // 5. Проверяем, что отправитель не отправляет сообщение сам себе
+        // (это могло бы быть признаком атаки)
+        if msg.recipient_id == msg.sender_id {
+            return Err(anyhow::anyhow!("Cannot send message to self"));
+        }
+        
+        Ok(())
     }
-
-    // Extract ephemeral public key (first 32 bytes)
-    let ephemeral_public = X25519PublicKey::from(<[u8; 32]>::try_from(&encrypted[..32])?);
-    let ciphertext = &encrypted[32..];
-
-    // Load recipient's private key
-    let private_key_array = <[u8; 32]>::try_from(private_key_bytes)?;
-    let our_secret = StaticSecret::from(private_key_array);
-
-    // Derive shared secret
-    let shared_secret = our_secret.diffie_hellman(&ephemeral_public);
-
-    let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-    let nonce = Nonce::from_slice(nonce_bytes);
-
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
-
-    Ok(plaintext)
-}
-
-/// Validates that a public key is a valid X25519 public key.
-/// It must be 32 bytes and a valid point on the curve.
-#[allow(dead_code)]
-pub fn validate_public_key(key: &[u8]) -> Result<()> {
-    if key.len() != 32 {
-        return Err(anyhow::anyhow!("Public key must be 32 bytes"));
+    
+    /// Validates the format of a public key bundle
+    /// 
+    /// Note: Server CANNOT verify cryptographic signatures,
+    /// only basic format validation.
+    pub fn validate_key_bundle(bundle: &StoredKeyBundle) -> Result<()> {
+        // 1. Проверяем base64 encoding
+        let identity_bytes = general_purpose::STANDARD.decode(&bundle.identity_public)
+            .context("Invalid base64 in identity_public")?;
+        
+        let prekey_bytes = general_purpose::STANDARD.decode(&bundle.signed_prekey_public)
+            .context("Invalid base64 in signed_prekey_public")?;
+        
+        let signature_bytes = general_purpose::STANDARD.decode(&bundle.signature)
+            .context("Invalid base64 in signature")?;
+        
+        let verifying_bytes = general_purpose::STANDARD.decode(&bundle.verifying_key)
+            .context("Invalid base64 in verifying_key")?;
+        
+        // 2. Проверяем длины
+        if identity_bytes.len() != 32 {
+            return Err(anyhow::anyhow!("Identity public key must be 32 bytes"));
+        }
+        
+        if prekey_bytes.len() != 32 {
+            return Err(anyhow::anyhow!("Signed prekey must be 32 bytes"));
+        }
+        
+        if signature_bytes.len() != 64 {
+            return Err(anyhow::anyhow!("Signature must be 64 bytes"));
+        }
+        
+        if verifying_bytes.len() != 32 {
+            return Err(anyhow::anyhow!("Verifying key must be 32 bytes"));
+        }
+        
+        // 3. Проверяем срок действия prekey
+        let now = chrono::Utc::now();
+        if now > bundle.prekey_expires_at {
+            return Err(anyhow::anyhow!("Prekey has expired"));
+        }
+        
+        // 4. Проверяем, что prekey не истекает слишком рано или слишком поздно
+        let expiry_duration = bundle.prekey_expires_at - bundle.registered_at;
+        if expiry_duration.num_days() < 7 {
+            return Err(anyhow::anyhow!("Prekey expiry too short (min 7 days)"));
+        }
+        if expiry_duration.num_days() > 90 {
+            return Err(anyhow::anyhow!("Prekey expiry too long (max 90 days)"));
+        }
+        
+        Ok(())
     }
-    // This will fail if the key is not a valid point on the curve
-    let _ = X25519PublicKey::from(<[u8; 32]>::try_from(key)?);
-    Ok(())
 }
+
+/// Update for signed prekey rotation (server-side representation)
+/// This is what the server receives and validates (format only, not crypto correctness)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedPrekeyUpdate {
+    /// New signed prekey public key (32 bytes)
+    pub new_prekey_public: Vec<u8>,
+    /// Ed25519 signature of new_prekey_public (64 bytes)
+    pub signature:  Vec<u8>,
+}
+
+/// Registration bundle sent by client during signup
+/// Contains all necessary public keys for E2E encryption
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegistrationBundle {
+    /// Identity public key (X25519, 32 bytes)
+    pub identity_public: Vec<u8>,
+    /// Signed prekey public key (X25519, 32 bytes)
+    pub signed_prekey_public: Vec<u8>,
+    /// Ed25519 signature of signed_prekey_public (64 bytes)
+    pub signature: Vec<u8>,
+    /// Ed25519 verifying key for signature validation (32 bytes)
+    pub verifying_key: Vec<u8>,
+}
+
 
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
-    general_purpose::STANDARD.decode(input).map_err(|e| format!("Base64 decode error: {}", e))
+    general_purpose::STANDARD
+        .decode(input)
+        .map_err(|e| format!("Base64 decode error: {}", e))
 }
 
 pub fn encode_base64(input: &[u8]) -> String {

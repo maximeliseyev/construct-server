@@ -1,9 +1,11 @@
 use crate::message::Message;
+use crate::crypto::StoredKeyBundle;
 use anyhow::Result;
-use redis::{AsyncCommands, Client, cmd};
-use tracing;
+use redis::{cmd, AsyncCommands, Client};
+use sha2::{Sha256, Digest};
 
 use crate::config::Config;
+
 const SECONDS_PER_DAY: i64 = 86400;
 pub struct MessageQueue {
     client: redis::aio::ConnectionManager,
@@ -15,7 +17,7 @@ impl MessageQueue {
         let conn = client.get_connection_manager().await?;
         let message_ttl_seconds = config.message_ttl_days * SECONDS_PER_DAY;
         tracing::info!(
-            "📦 Message queue TTL: {} days ({} seconds)",
+            "Message queue TTL: {} days ({} seconds)",
             config.message_ttl_days,
             message_ttl_seconds
         );
@@ -63,7 +65,6 @@ impl MessageQueue {
         );
         Ok(result)
     }
-    // Проверить есть ли сообщения
     #[allow(dead_code)]
     pub async fn has_messages(&mut self, user_id: &str) -> Result<bool> {
         let key = format!("queue:{}", user_id);
@@ -113,6 +114,178 @@ impl MessageQueue {
         }
         tracing::info!(user_id = %user_id, count = jtis.len(), "Revoked all sessions");
         Ok(())
+    }
+
+    pub async fn check_message_replay(
+        &mut self,
+        message_id: &str,
+        content: &str,
+        nonce: &str,
+    ) -> Result<bool> {
+        // Создаем уникальный хэш сообщения
+        let mut hasher = Sha256::new();
+        hasher.update(message_id.as_bytes());
+        hasher.update(content.as_bytes());
+        hasher.update(nonce.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+
+        let key = format!("msg_hash:{}", hash);
+        
+        // Проверяем существование
+        let exists: bool = self.client.exists(&key).await?;
+        
+        if exists {
+            tracing::warn!(
+                message_id = %message_id,
+                hash = %hash,
+                "Potential replay attack detected"
+            );
+            return Ok(false); // Сообщение уже было
+        }
+
+        let _: () = self.client.set_ex(&key, "1", 86400).await?;
+        
+        Ok(true) // Сообщение уникальное
+    }
+
+    pub async fn increment_message_count(
+        &mut self,
+        user_id: &str,
+    ) -> Result<u32> {
+        let key = format!("rate:msg:{}", user_id);
+        
+        // Инкрементируем счетчик
+        let count: u32 = self.client.incr(&key, 1).await?;
+        
+        // Устанавливаем TTL только при первом инкременте
+        if count == 1 {
+            let _: () = self.client.expire(&key, 3600).await?; // 1 час
+        }
+        
+        Ok(count)
+    }
+
+    pub async fn increment_key_update_count(
+        &mut self,
+        user_id: &str,
+    ) -> Result<u32> {
+        let key = format!("rate:key:{}", user_id);
+        
+        let count: u32 = self.client.incr(&key, 1).await?;
+        
+        if count == 1 {
+            let _: () = self.client.expire(&key, 86400).await?; // 24 часа
+        }
+        
+        Ok(count)
+    }
+
+    pub async fn get_message_count_last_hour(
+        &mut self,
+        user_id: &str,
+    ) -> Result<u32> {
+        let key = format!("rate:msg:{}", user_id);
+        let count: Option<u32> = self.client.get(&key).await?;
+        Ok(count.unwrap_or(0))
+    }
+
+    pub async fn get_key_update_count_last_day(
+        &mut self,
+        user_id: &str,
+    ) -> Result<u32> {
+        let key = format!("rate:key:{}", user_id);
+        let count: Option<u32> = self.client.get(&key).await?;
+        Ok(count.unwrap_or(0))
+    }
+
+    pub async fn block_user_temporarily(
+        &mut self,
+        user_id: &str,
+        duration_seconds: i64,
+        reason: &str,
+    ) -> Result<()> {
+        let key = format!("blocked:{}", user_id);
+        let _: () = self.client.set_ex(&key, reason, duration_seconds as u64).await?;
+        
+        tracing::warn!(
+            user_id = %user_id,
+            duration_seconds = duration_seconds,
+            reason = %reason,
+            "User temporarily blocked"
+        );
+        
+        Ok(())
+    }
+
+    pub async fn is_user_blocked(&mut self, user_id: &str) -> Result<Option<String>> {
+        let key = format!("blocked:{}", user_id);
+        let reason: Option<String> = self.client.get(&key).await?;
+        Ok(reason)
+    }
+
+    pub async fn cache_key_bundle(
+        &mut self,
+        user_id: &str,
+        bundle: &StoredKeyBundle,
+        ttl_hours: i64,
+    ) -> Result<()> {
+        let key = format!("key_bundle:{}", user_id);
+        let bundle_json = serde_json::to_string(bundle)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize bundle: {}", e))?;
+        let ttl_seconds = ttl_hours * 3600;
+        let _: () = self.client.set_ex(&key, bundle_json, ttl_seconds as u64).await?;
+        tracing::debug!(user_id = %user_id, ttl_hours = ttl_hours, "Cached key bundle");
+        Ok(())
+    }
+
+    pub async fn get_cached_key_bundle(&mut self, user_id: &str) -> Result<Option<StoredKeyBundle>> {
+        let key = format!("key_bundle:{}", user_id);
+        let bundle_json: Option<String> = self.client.get(&key).await?;
+        
+        match bundle_json {
+            Some(json) => {
+                let bundle: StoredKeyBundle = serde_json::from_str(&json)
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize bundle: {}", e))?;
+                Ok(Some(bundle))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn invalidate_key_bundle_cache(&mut self, user_id: &str) -> Result<()> {
+        let key = format!("key_bundle:{}", user_id);
+        let _: () = self.client.del(&key).await?;
+        tracing::debug!(user_id = %user_id, "Invalidated key bundle cache");
+        Ok(())
+    }
+
+    pub async fn track_connection(
+        &mut self,
+        user_id: &str,
+        connection_id: &str,
+    ) -> Result<u32> {
+        let key = format!("connections:{}", user_id);
+        let _: () = self.client.sadd(&key, connection_id).await?;
+        let _: () = self.client.expire(&key, 3600).await?; // Обновляем TTL
+        
+        let count: u32 = self.client.scard(&key).await?;
+        Ok(count)
+    }
+
+    pub async fn untrack_connection(
+        &mut self,
+        user_id: &str,
+        connection_id: &str,
+    ) -> Result<()> {
+        let key = format!("connections:{}", user_id);
+        let _: () = self.client.srem(&key, connection_id).await?;
+        Ok(())
+    }
+
+    pub async fn get_active_connections(&mut self, user_id: &str) -> Result<u32> {
+        let key = format!("connections:{}", user_id);
+        let count: u32 = self.client.scard(&key).await?;
+        Ok(count)
     }
 
     pub async fn ping(&mut self) -> Result<()> {
