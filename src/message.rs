@@ -220,3 +220,97 @@ pub enum ServerMessage {
     Error(ErrorData),
     LogoutSuccess,
 }
+
+// ============================================================================
+// Tests - Verify MessagePack Format
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_server_message_internally_tagged_format() {
+        let msg = ServerMessage::RegisterSuccess(RegisterSuccessData {
+            user_id: "test-id".to_string(),
+            username: "test".to_string(),
+            display_name: "Test".to_string(),
+            session_token: "token".to_string(),
+            expires: 1234567890,
+        });
+
+        let bytes = rmp_serde::encode::to_vec_named(&msg).unwrap();
+
+        // Должно начинаться с 0x82 (map{2}) а не 0x92 (array[2])
+        assert_eq!(
+            bytes[0], 0x82,
+            "First byte должен быть 0x82 (map), got 0x{:02x}",
+            bytes[0]
+        );
+
+        // Декодируем обратно чтобы убедиться что структура правильная
+        let decoded: ServerMessage = rmp_serde::from_slice(&bytes).unwrap();
+        match decoded {
+            ServerMessage::RegisterSuccess(data) => {
+                assert_eq!(data.user_id, "test-id");
+                assert_eq!(data.username, "test");
+            }
+            _ => panic!("Wrong variant decoded"),
+        }
+
+        // Проверяем что в байтах есть "type" и "payload" ключи
+        let hex = bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+
+        // "type" = 74 79 70 65 в hex
+        assert!(hex.contains("74797065"), "Should contain 'type' key");
+        // "payload" = 70 61 79 6c 6f 61 64 в hex
+        assert!(hex.contains("7061796c6f6164"), "Should contain 'payload' key");
+    }
+
+    #[test]
+    fn test_server_message_unit_variant_format() {
+        let msg = ServerMessage::SessionExpired;
+        let bytes = rmp_serde::encode::to_vec_named(&msg).unwrap();
+
+        // Unit variant должен быть map{1} с только "type"
+        assert_eq!(
+            bytes[0], 0x81,
+            "Unit variant should be 0x81 (map{{1}}), got 0x{:02x}",
+            bytes[0]
+        );
+
+        // Декодируем обратно
+        let decoded: ServerMessage = rmp_serde::from_slice(&bytes).unwrap();
+        assert!(matches!(decoded, ServerMessage::SessionExpired));
+    }
+
+    #[test]
+    fn test_client_message_internally_tagged_format() {
+        let msg = ClientMessage::Login(LoginData {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+
+        let bytes = rmp_serde::encode::to_vec_named(&msg).unwrap();
+
+        // Должно начинаться с 0x82 (map{2})
+        assert_eq!(
+            bytes[0], 0x82,
+            "ClientMessage should be 0x82 (map), got 0x{:02x}",
+            bytes[0]
+        );
+
+        // Декодируем обратно
+        let decoded: ClientMessage = rmp_serde::from_slice(&bytes).unwrap();
+        match decoded {
+            ClientMessage::Login(data) => {
+                assert_eq!(data.username, "testuser");
+                assert_eq!(data.password, "testpass");
+            }
+            _ => panic!("Wrong variant decoded"),
+        }
+    }
+}

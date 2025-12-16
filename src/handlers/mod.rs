@@ -124,7 +124,7 @@ pub async fn handle_websocket(
                 }
             }
             Some(server_msg) = rx.recv() => {
-                if let Ok(bytes) = rmp_serde::to_vec(&server_msg) {
+                if let Ok(bytes) = rmp_serde::encode::to_vec_named(&server_msg) {
                     if handler.ws_sender_mut().send(WsMessage::Binary(bytes)).await.is_err() {
                         break;
                     }

@@ -35,7 +35,7 @@ impl ConnectionHandler {
     pub async fn send_msgpack(&mut self, msg: &ServerMessage) -> Result<(), String> {
         use futures_util::SinkExt;
 
-        let bytes = rmp_serde::to_vec(msg)
+        let bytes = rmp_serde::encode::to_vec_named(msg)
             .map_err(|e| format!("Failed to serialize message: {}", e))?;
 
         self.ws_sender

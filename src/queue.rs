@@ -70,7 +70,7 @@ impl MessageQueue {
     }
     pub async fn enqueue_message(&mut self, user_id: &str, message: &ChatMessage) -> Result<()> {
         let key = format!("queue:{}", user_id);
-        let message_bytes = rmp_serde::to_vec(message)?;
+        let message_bytes = rmp_serde::encode::to_vec_named(message)?;
         let _: () = self.client.lpush(&key, message_bytes).await?;
         let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
         tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message");
