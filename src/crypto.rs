@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 
 /// Encrypted message as stored on the server
@@ -176,34 +176,34 @@ impl ServerCryptoValidator {
 
 /// Update for signed prekey rotation (server-side representation)
 /// This is what the server receives and validates (format only, not crypto correctness)
+/// Fields are Base64-encoded strings as per CLIENT_API_v2.md
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SignedPrekeyUpdate {
-    /// New signed prekey public key (32 bytes)
-    pub new_prekey_public: Vec<u8>,
-    /// Ed25519 signature of new_prekey_public (64 bytes)
-    pub signature: Vec<u8>,
+    /// Base64-encoded new X25519 signed prekey public key (32 bytes -> 44 chars)
+    pub new_prekey_public: String,
+    /// Base64-encoded Ed25519 signature of new_prekey_public (64 bytes -> 88 chars)
+    pub signature: String,
 }
 
 /// Registration bundle sent by client during signup
 /// Contains all necessary public keys for E2E encryption
+/// Fields are Base64-encoded strings as per CLIENT_API_v2.md
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegistrationBundle {
-    /// Identity public key (X25519, 32 bytes)
-    pub identity_public: Vec<u8>,
-    /// Signed prekey public key (X25519, 32 bytes)
-    pub signed_prekey_public: Vec<u8>,
-    /// Ed25519 signature of signed_prekey_public (64 bytes)
-    pub signature: Vec<u8>,
-    /// Ed25519 verifying key for signature validation (32 bytes)
-    pub verifying_key: Vec<u8>,
+    /// Base64-encoded X25519 identity public key (32 bytes -> 44 chars)
+    pub identity_public: String,
+    /// Base64-encoded X25519 signed prekey public key (32 bytes -> 44 chars)
+    pub signed_prekey_public: String,
+    /// Base64-encoded Ed25519 signature of signed_prekey_public (64 bytes -> 88 chars)
+    pub signature: String,
+    /// Base64-encoded Ed25519 verifying key (32 bytes -> 44 chars)
+    pub verifying_key: String,
 }
 
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     general_purpose::STANDARD
         .decode(input)
         .map_err(|e| format!("Base64 decode error: {}", e))
-}
-
-pub fn encode_base64(input: &[u8]) -> String {
-    general_purpose::STANDARD.encode(input)
 }

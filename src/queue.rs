@@ -40,8 +40,23 @@ pub struct MessageQueue {
 }
 impl MessageQueue {
     pub async fn new(config: &Config) -> Result<Self> {
-        let client = Client::open(config.redis_url.clone())?;
-        let conn = client.get_connection_manager().await?;
+        tracing::debug!("Opening Redis client...");
+
+        // Parse Redis URL to check if TLS is required
+        let is_tls = config.redis_url.starts_with("rediss://");
+        if is_tls {
+            tracing::info!("Redis TLS enabled (rediss://)");
+        } else {
+            tracing::info!("Redis TLS not enabled (redis://)");
+        }
+
+        let client = Client::open(config.redis_url.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to parse Redis URL: {}", e))?;
+
+        tracing::debug!("Getting Redis connection manager...");
+        let conn = client.get_connection_manager().await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {}", e))?;
+
         let message_ttl_seconds = config.message_ttl_days * SECONDS_PER_DAY;
         tracing::info!(
             "Message queue TTL: {} days ({} seconds)",

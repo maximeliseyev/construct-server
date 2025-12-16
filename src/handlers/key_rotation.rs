@@ -87,10 +87,11 @@ pub async fn handle_rotate_prekey(
     };
 
     // 6. Обновляем prekey с использованием конфига
-    bundle.signed_prekey_public = crate::crypto::encode_base64(&update.new_prekey_public);
-    bundle.signature = crate::crypto::encode_base64(&update.signature);
+    // SignedPrekeyUpdate now contains base64 strings, use them directly
+    bundle.signed_prekey_public = update.new_prekey_public.clone();
+    bundle.signature = update.signature.clone();
     bundle.registered_at = chrono::Utc::now();
-    bundle.prekey_expires_at = chrono::Utc::now() 
+    bundle.prekey_expires_at = chrono::Utc::now()
         + chrono::Duration::days(ctx.config.security.prekey_ttl_days);
 
     // 7. Валидация обновленного bundle

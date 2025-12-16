@@ -145,7 +145,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Connected to database");
 
     // Connect to Redis
-    let message_queue = MessageQueue::new(&app_config).await?;
+    let redis_url_safe = if let Some(at_pos) = app_config.redis_url.find('@') {
+        let protocol_end = app_config.redis_url.find("://").map(|p| p + 3).unwrap_or(0);
+        format!("{}***{}", &app_config.redis_url[..protocol_end], &app_config.redis_url[at_pos..])
+    } else {
+        app_config.redis_url.clone()
+    };
+    tracing::info!("Connecting to Redis at: {}", redis_url_safe);
+
+    let message_queue = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        MessageQueue::new(&app_config)
+    ).await.map_err(|_| anyhow::anyhow!("Redis connection timed out after 10 seconds"))??;
+
     tracing::info!("Connected to Redis");
 
     let queue = Arc::new(Mutex::new(message_queue));

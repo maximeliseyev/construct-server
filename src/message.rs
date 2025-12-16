@@ -15,6 +15,7 @@ pub struct ChatMessage {
 
     /// Ephemeral public key for DH ratchet (32 bytes raw bytes)
     /// Serialized as MessagePack bin format
+    #[serde(with = "serde_bytes")]
     pub ephemeral_public_key: Vec<u8>,
 
     /// Message number in symmetric-key ratchet chain

@@ -54,14 +54,15 @@ pub async fn handle_register(
         }
     };
 
+    // RegistrationBundle now contains base64 strings, use them directly
     let stored_bundle = StoredKeyBundle {
         user_id: String::new(),
-        identity_public: crate::crypto::encode_base64(&registration_bundle.identity_public),
-        signed_prekey_public: crate::crypto::encode_base64(&registration_bundle.signed_prekey_public),
-        signature: crate::crypto::encode_base64(&registration_bundle.signature),
-        verifying_key: crate::crypto::encode_base64(&registration_bundle.verifying_key),
+        identity_public: registration_bundle.identity_public.clone(),
+        signed_prekey_public: registration_bundle.signed_prekey_public.clone(),
+        signature: registration_bundle.signature.clone(),
+        verifying_key: registration_bundle.verifying_key.clone(),
         registered_at: chrono::Utc::now(),
-        prekey_expires_at: chrono::Utc::now() 
+        prekey_expires_at: chrono::Utc::now()
             + chrono::Duration::days(ctx.config.security.prekey_ttl_days),
     };
 
