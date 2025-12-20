@@ -10,3 +10,4 @@ CREATE TABLE IF NOT EXISTS user_key_bundles (
 );
 
 CREATE INDEX idx_key_bundles_expires ON user_key_bundles(expires_at);
+CREATE INDEX idx_key_bundles_updated_at ON user_key_bundles(updated_at);

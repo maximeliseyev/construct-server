@@ -21,6 +21,29 @@
 //
 // ============================================================================
 
+// ============================================================================
+// Message Handler - Ephemeral Delivery (No Database Persistence)
+// ============================================================================
+//
+// SECURITY DESIGN:
+// Messages are NEVER stored in the database. This handler implements
+// ephemeral message delivery to protect user privacy:
+//
+// Delivery Flow:
+// 1. Validate message (structure, rate limits, user not blocked)
+// 2. Check if recipient is online
+//    a) Online  → Send directly via WebSocket (no storage)
+//    b) Offline → Queue in Redis with TTL (temporary only)
+// 3. Send ACK to sender (delivered/queued status)
+//
+// Privacy Benefits:
+// - No conversation metadata in database
+// - No social graph reconstruction possible
+// - Forward secrecy maintained
+// - Messages disappear after delivery or TTL expiry
+//
+// ============================================================================
+
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::{ChatMessage, ServerMessage};

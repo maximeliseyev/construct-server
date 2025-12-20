@@ -29,12 +29,35 @@ pub struct User {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct PublicUserInfo {
+    #[serde(with = "uuid_as_string")]
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
+}
+
+// Helper module для сериализации UUID как строки
+mod uuid_as_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use uuid::Uuid;
+
+    pub fn serialize<S>(uuid: &Uuid, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&uuid.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Uuid::parse_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -213,4 +236,118 @@ pub async fn get_user_key_bundle(pool: &DbPool, user_id: &Uuid) -> Result<Option
         registered_at: Utc.from_utc_datetime(&r.registered_at),
         prekey_expires_at: Utc.from_utc_datetime(&r.expires_at),
     }))
+}
+
+// ============================================================================
+// Pending Messages
+// ============================================================================
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PendingMessage {
+    pub id: Uuid,
+    pub recipient_id: Uuid,
+    pub message_payload: Vec<u8>, // Stored as raw MessagePack bytes
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+pub async fn store_pending_message(
+    pool: &DbPool,
+    recipient_id: &Uuid,
+    message_payload: Vec<u8>,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO pending_messages (recipient_id, message_payload)
+        VALUES ($1, $2)
+        "#,
+    )
+    .bind(recipient_id)
+    .bind(message_payload)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_pending_messages(
+    pool: &DbPool,
+    recipient_id: &Uuid,
+) -> Result<Vec<PendingMessage>> {
+    let messages = sqlx::query_as::<_, PendingMessage>(
+        r#"
+        SELECT id, recipient_id, message_payload, created_at
+        FROM pending_messages
+        WHERE recipient_id = $1
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(recipient_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(messages)
+}
+
+pub async fn delete_pending_message(pool: &DbPool, message_id: &Uuid) -> Result<()> {
+    sqlx::query(
+        r#"
+        DELETE FROM pending_messages
+        WHERE id = $1
+        "#,
+    )
+    .bind(message_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn has_pending_messages(pool: &DbPool, recipient_id: &Uuid) -> Result<bool> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM pending_messages
+        WHERE recipient_id = $1
+        "#,
+    )
+    .bind(recipient_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count > 0)
+}
+
+
+
+// ============================================================================
+// Tests - Verify MessagePack Format for PublicUserInfo
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_public_user_info_format() {
+        let user = PublicUserInfo {
+            id: Uuid::parse_str("32980b95-e467-4f28-8e50-d73033e07a2a").unwrap(),
+            username: "eva".to_string(),
+            display_name: "eva".to_string(),
+            avatar_url: None,
+            bio: None,
+        };
+
+        let bytes = rmp_serde::to_vec(&user).unwrap();
+        let json = serde_json::to_string(&user).unwrap();
+
+        // Проверяем camelCase
+        assert!(json.contains("\"displayName\""));
+        assert!(json.contains("\"avatarUrl\""));
+        assert!(!json.contains("\"display_name\""));
+        assert!(!json.contains("\"avatar_url\""));
+
+        // UUID должен быть string в JSON
+        assert!(json.contains("\"32980b95-e467-4f28-8e50-d73033e07a2a\""));
+
+        // Декодируем из MessagePack и проверяем
+        let decoded: PublicUserInfo = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.id.to_string(), "32980b95-e467-4f28-8e50-d73033e07a2a");
+        assert_eq!(decoded.username, "eva");
+        assert_eq!(decoded.display_name, "eva");
+    }
 }
