@@ -7,7 +7,7 @@ pub struct LoggingConfig {
     pub hash_salt: String,
 }
 
-/// Security configuration for cryptographic operations
+/// Security and rate limiting policies
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
     pub prekey_ttl_days: i64,
@@ -46,7 +46,13 @@ impl Config {
             database_url: std::env::var("DATABASE_URL")?,
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            jwt_secret: std::env::var("JWT_SECRET")?,
+            jwt_secret: {
+                let secret = std::env::var("JWT_SECRET")?;
+                if secret.len() < 32 {
+                    anyhow::bail!("JWT_SECRET must be at least 32 characters long");
+                }
+                secret
+            },
             port: std::env::var("PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
@@ -78,8 +84,14 @@ impl Config {
                     .unwrap_or_else(|_| "false".to_string())
                     .parse()
                     .unwrap_or(false),
-                hash_salt: std::env::var("LOG_HASH_SALT")
-                    .unwrap_or_else(|_| "default-salt-please-change".to_string()),
+                hash_salt: {
+                    let salt = std::env::var("LOG_HASH_SALT")
+                        .unwrap_or_else(|_| "default-salt-please-change".to_string());
+                    if salt.is_empty() || salt == "default-salt-please-change" {
+                        anyhow::bail!("LOG_HASH_SALT must be set to a unique, secret value");
+                    }
+                    salt
+                },
             },
             security: SecurityConfig {
                 prekey_ttl_days: std::env::var("PREKEY_TTL_DAYS")

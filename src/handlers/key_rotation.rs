@@ -1,7 +1,7 @@
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::ServerMessage;
-use crate::crypto::{ServerCryptoValidator, SignedPrekeyUpdate};
+use crate::e2e::{ServerCryptoValidator, SignedPrekeyUpdate};
 use uuid::Uuid;
 
 /// Handles signed prekey rotation request
@@ -25,7 +25,7 @@ pub async fn handle_rotate_prekey(
     };
 
     // 2. Decode base64 to get MessagePack bytes
-    let msgpack_bytes = match crate::crypto::decode_base64(&update_base64) {
+    let msgpack_bytes = match crate::e2e::decode_base64(&update_base64) {
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::warn!(error = %e, "Invalid base64 in prekey update");
