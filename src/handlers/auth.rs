@@ -1,5 +1,5 @@
 use crate::context::AppContext;
-use crate::crypto::{RegistrationBundle, ServerCryptoValidator, StoredKeyBundle};
+use crate::crypto::{RegistrationBundle, StoredKeyBundle, ServerCryptoValidator};
 use crate::db::{self, User};
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
@@ -29,7 +29,6 @@ pub async fn handle_register(
     handler: &mut ConnectionHandler,
     ctx: &AppContext,
     username: String,
-    display_name: Option<String>,
     password: String,
     public_key: String,
 ) {
@@ -135,15 +134,7 @@ pub async fn handle_register(
             } else {
                 tracing::error!(error = %e, "Registration failed");
             }
-            let (code, message) = if e.to_string().contains("users_username_key") {
-                (
-                    "USERNAME_TAKEN",
-                    format!("Username '{}' is already taken", username),
-                )
-            } else {
-                ("REGISTRATION_FAILED", "Registration failed".to_string())
-            };
-            handler.send_error(code, &message).await;
+            handler.send_error("REGISTRATION_FAILED", "An error occurred during registration. The username might be taken or the input is invalid.").await;
         }
     }
 }

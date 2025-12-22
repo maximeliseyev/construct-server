@@ -69,8 +69,6 @@ impl ChatMessage {
 #[serde(rename_all = "camelCase")]
 pub struct RegisterData {
     pub username: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
     pub password: String,
     /// Base64-encoded MessagePack of RegistrationBundle
     pub public_key: String,
@@ -165,7 +163,7 @@ pub struct ConnectSuccessData {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResultsData {
-    pub users: Vec<crate::db::PublicUserInfo>,
+    pub users: Vec<crate::db::PublicUser>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
