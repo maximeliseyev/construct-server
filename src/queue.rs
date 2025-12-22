@@ -23,7 +23,7 @@
 //
 // ============================================================================
 
-use crate::crypto::StoredKeyBundle;
+use crate::e2e::StoredKeyBundle;
 use crate::message::ChatMessage;
 use anyhow::Result;
 use redis::{AsyncCommands, Client, cmd};

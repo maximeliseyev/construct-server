@@ -1,4 +1,4 @@
-use crate::crypto::StoredKeyBundle;
+use crate::e2e::StoredKeyBundle;
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bcrypt::{DEFAULT_COST, hash};

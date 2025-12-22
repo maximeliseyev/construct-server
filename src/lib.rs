@@ -20,7 +20,7 @@ use hyper_util::rt::TokioIo;
 pub mod auth;
 pub mod config;
 pub mod context;
-pub mod crypto;
+pub mod e2e;
 pub mod db;
 pub mod handlers;
 pub mod health;

@@ -1,5 +1,5 @@
 use crate::context::AppContext;
-use crate::crypto::{RegistrationBundle, StoredKeyBundle, ServerCryptoValidator};
+use crate::e2e::{RegistrationBundle, StoredKeyBundle, ServerCryptoValidator};
 use crate::db::{self, User};
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
@@ -33,7 +33,7 @@ pub async fn handle_register(
     public_key: String,
 ) {
     // Decode base64 to get MessagePack bytes
-    let msgpack_bytes = match crate::crypto::decode_base64(&public_key) {
+    let msgpack_bytes = match crate::e2e::decode_base64(&public_key) {
         Ok(bytes) => bytes,
         Err(_e) => {
             handler.send_error("INVALID_KEY", "Invalid base64").await;
