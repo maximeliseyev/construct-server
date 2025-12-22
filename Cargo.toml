@@ -3,6 +3,14 @@ name = "construct-server"
 version = "0.2.1"
 edition = "2024"
 
+[lib]
+name = "construct_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "construct-server"
+path = "src/main.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -69,6 +77,11 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 
 # Date & Time
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+anyhow = "1.0"
+url = "2.5"
+serial_test = "3.1.1"
 
 [profile.release]
 opt-level = 3

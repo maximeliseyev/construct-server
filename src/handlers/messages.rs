@@ -57,6 +57,39 @@ pub async fn handle_send_message(
     ctx: &AppContext,
     msg: ChatMessage,
 ) {
+    // ========================================================================
+    // CRITICAL: Prevent Message Spoofing (IDOR)
+    // ========================================================================
+    // Ensure the `from` field in the message matches the authenticated user's
+    // ID associated with this WebSocket connection.
+    let sender_id = match handler.user_id() {
+        Some(id) => id.clone(),
+        None => {
+            // This should ideally not be reached if the connection logic is sound
+            tracing::error!("Unauthenticated user attempted to send a message");
+            handler
+                .send_error("AUTH_REQUIRED", "Authentication is required to send messages")
+                .await;
+            return;
+        }
+    };
+
+    if sender_id != msg.from {
+        tracing::warn!(
+            authenticated_user = %sender_id,
+            message_sender = %msg.from,
+            "Message spoofing attempt detected (IDOR)"
+        );
+        handler
+            .send_error(
+                "FORBIDDEN",
+                "You are not allowed to send messages from another user's account.",
+            )
+            .await;
+        return;
+    }
+    // ========================================================================
+
     let mut queue = ctx.queue.lock().await;
 
     // 1. Проверка блокировки пользователя

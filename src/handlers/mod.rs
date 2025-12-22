@@ -42,7 +42,6 @@ pub async fn handle_websocket(
                                     &mut handler,
                                     &ctx,
                                     data.username,
-                                    data.display_name,
                                     data.password,
                                     data.public_key,
                                 )

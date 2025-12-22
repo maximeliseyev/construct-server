@@ -17,45 +17,6 @@ pub struct User {
     pub password_hash: String,
 }
 
-#[warn(dead_code)]
-pub struct UserProfile {
-    pub user_id: Uuid,
-    pub display_name: Option<String>,
-    pub bio: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct PublicUserInfo {
-    #[serde(with = "uuid_as_string")]
-    pub id: Uuid,
-    pub username: String,
-    pub display_name: String,
-    pub avatar_url: Option<String>,
-    pub bio: Option<String>,
-}
-
-// Helper module для сериализации UUID как строки
-mod uuid_as_string {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use uuid::Uuid;
-
-    pub fn serialize<S>(uuid: &Uuid, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&uuid.to_string())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Uuid::parse_str(&s).map_err(serde::de::Error::custom)
-    }
-}
-
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct KeyBundleRecord {
     pub user_id: Uuid,
@@ -80,7 +41,7 @@ pub async fn create_user(pool: &DbPool, username: &str, password: &str) -> Resul
     let user = sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (username, password_hash)
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2)
         RETURNING id, username, password_hash           "#,
     )
     .bind(username)
@@ -95,7 +56,7 @@ pub async fn get_user_by_username(pool: &DbPool, username: &str) -> Result<Optio
     let user = sqlx::query_as::<_, User>(
         r#"
         -- CREATE INDEX idx_users_username ON users(username);
-        SELECT id, username, assword_hash        
+        SELECT id, username, password_hash
         FROM users
         WHERE username = $1
         "#,
@@ -106,7 +67,6 @@ pub async fn get_user_by_username(pool: &DbPool, username: &str) -> Result<Optio
 
     Ok(user)
 }
-
 pub async fn get_user_by_id(pool: &DbPool, user_id: &Uuid) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
         r#"
@@ -122,16 +82,44 @@ pub async fn get_user_by_id(pool: &DbPool, user_id: &Uuid) -> Result<Option<User
     Ok(user)
 }
 
-pub async fn search_users_by_display_name(
+// Helper module для сериализации UUID как строки
+mod uuid_as_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use uuid::Uuid;
+
+    pub fn serialize<S>(uuid: &Uuid, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&uuid.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Uuid::parse_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicUser {
+    #[serde(with = "uuid_as_string")]
+    pub id: Uuid,
+    pub username: String,
+}
+
+pub async fn search_users_by_username(
     pool: &DbPool,
     query: &str,
-) -> Result<Vec<PublicUserInfo>> {
-    let users = sqlx::query_as::<_, PublicUserInfo>(
+) -> Result<Vec<PublicUser>> {
+    let users = sqlx::query_as::<_, PublicUser>(
         r#"
-        SELECT id, username, up.display_name
+        SELECT id, username
         FROM users
-        LEFT JOIN user_profile up ON users.id = up.user_id
-        WHERE up.display_name ILIKE $1
+        WHERE username ILIKE $1
         LIMIT 10
         "#,
     )
@@ -216,45 +204,4 @@ pub async fn get_user_key_bundle(pool: &DbPool, user_id: &Uuid) -> Result<Option
         registered_at: Utc.from_utc_datetime(&r.registered_at),
         prekey_expires_at: Utc.from_utc_datetime(&r.expires_at),
     }))
-}
-
-// ============================================================================
-// Tests - Verify MessagePack Format for PublicUserInfo
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_public_user_info_format() {
-        let user = PublicUserInfo {
-            id: Uuid::parse_str("32980b95-e467-4f28-8e50-d73033e07a2a").unwrap(),
-            username: "eva".to_string(),
-            display_name: "eva".to_string(),
-            avatar_url: None,
-            bio: None,
-        };
-
-        let bytes = rmp_serde::to_vec(&user).unwrap();
-        let json = serde_json::to_string(&user).unwrap();
-
-        // Проверяем camelCase
-        assert!(json.contains("\"displayName\""));
-        assert!(json.contains("\"avatarUrl\""));
-        assert!(!json.contains("\"display_name\""));
-        assert!(!json.contains("\"avatar_url\""));
-
-        // UUID должен быть string в JSON
-        assert!(json.contains("\"32980b95-e467-4f28-8e50-d73033e07a2a\""));
-
-        // Декодируем из MessagePack и проверяем
-        let decoded: PublicUserInfo = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(
-            decoded.id.to_string(),
-            "32980b95-e467-4f28-8e50-d73033e07a2a"
-        );
-        assert_eq!(decoded.username, "eva");
-        assert_eq!(decoded.display_name, "eva");
-    }
 }
