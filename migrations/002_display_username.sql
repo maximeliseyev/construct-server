@@ -1,12 +1,11 @@
-BEGIN;
+CREATE TABLE user_profiles (
+	user_id UUID PRIMARY KEY,
+	display_name TEXT,
+	bio TEXT,
+	
+	CONSTRAINT fk_user_profile 
+        FOREIGN KEY (user_id) 
+        REFERENCES users(id)
+        ON DELETE CASCADE
 
-ALTER TABLE users ADD COLUMN display_name TEXT;
-
-UPDATE users SET display_name = username WHERE display_name IS NULL;
-
-CREATE INDEX idx_users_display_name ON users(display_name);
-
-ALTER TABLE users ADD COLUMN avatar_url TEXT;
-ALTER TABLE users ADD COLUMN bio TEXT;
-
-COMMIT;
+);

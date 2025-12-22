@@ -3,10 +3,7 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    identity_key BYTEA NOT NULL,  -- Ed25519 public key для шифрования
-    created_at TIMESTAMP DEFAULT NOW(),
-    last_seen TIMESTAMP
-);
+   );
 
 -- Индекс для быстрого поиска по username
 CREATE INDEX idx_users_username ON users(username);

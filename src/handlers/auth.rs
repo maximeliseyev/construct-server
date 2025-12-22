@@ -1,5 +1,5 @@
 use crate::context::AppContext;
-use crate::crypto::{ServerCryptoValidator, StoredKeyBundle, RegistrationBundle};
+use crate::crypto::{RegistrationBundle, ServerCryptoValidator, StoredKeyBundle};
 use crate::db::{self, User};
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
@@ -74,31 +74,23 @@ pub async fn handle_register(
         return;
     }
 
-    let display_name_final = display_name.as_deref().unwrap_or(&username);
-
-    match db::create_user(
-        &ctx.db_pool,
-        &username,
-        display_name_final,
-        &password,
-        &stored_bundle.identity_public,
-    )
-    .await
-    {
+    match db::create_user(&ctx.db_pool, &username, &password).await {
         Ok(user) => {
             let mut final_bundle = stored_bundle.clone();
             final_bundle.user_id = user.id.to_string();
-        
-            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &final_bundle).await {
+
+            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &final_bundle).await
+            {
                 tracing::error!(error = %e, "Failed to store key bundle during registration");
-                handler.send_error("SERVER_ERROR", "Failed to store encryption keys").await;
+                handler
+                    .send_error("SERVER_ERROR", "Failed to store encryption keys")
+                    .await;
                 return;
             }
 
             if ctx.config.logging.enable_user_identifiers {
                 tracing::info!(
                     username = %user.username,
-                    display_name = %user.display_name,
                     "User registered"
                 );
             } else {
@@ -120,18 +112,15 @@ pub async fn handle_register(
                         return;
                     }
 
-                    let response = ServerMessage::RegisterSuccess(
-                        crate::message::RegisterSuccessData {
+                    let response =
+                        ServerMessage::RegisterSuccess(crate::message::RegisterSuccessData {
                             user_id: user.id.to_string(),
                             username: user.username.clone(),
-                            display_name: user.display_name.clone(),
                             session_token: token,
                             expires,
-                        },
-                    );
-                    if handler.send_msgpack(&response).await.is_err() {
-                        return;
-                    }                }
+                        });
+                    if handler.send_msgpack(&response).await.is_err() {}
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create token");
                     handler
@@ -173,7 +162,6 @@ pub async fn handle_login(
                 if ctx.config.logging.enable_user_identifiers {
                     tracing::info!(
                         username = %user.username,
-                        display_name = %user.display_name,
                         "User logged in"
                     );
                 } else {
@@ -195,18 +183,15 @@ pub async fn handle_login(
                             return;
                         }
 
-                        let response = ServerMessage::LoginSuccess(
-                            crate::message::LoginSuccessData {
+                        let response =
+                            ServerMessage::LoginSuccess(crate::message::LoginSuccessData {
                                 user_id: user.id.to_string(),
                                 username: user.username.clone(),
-                                display_name: user.display_name.clone(),
                                 session_token: token,
                                 expires,
-                            },
-                        );
-                        if handler.send_msgpack(&response).await.is_err() {
-                            return;
-                        }                    }
+                            });
+                        if handler.send_msgpack(&response).await.is_err() {}
+                    }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to create token");
                         handler
@@ -271,46 +256,47 @@ pub async fn handle_connect(
                     match db::get_user_by_id(&ctx.db_pool, &uuid).await {
                         Ok(Some(user)) => {
                             if let Err(e_msg) =
-                                establish_session_and_set_user(handler, ctx, &user, &claims.jti).await
+                                establish_session_and_set_user(handler, ctx, &user, &claims.jti)
+                                    .await
                             {
                                 tracing::error!(error = %e_msg, "Failed to establish session");
                                 handler
-                                    .send_error("SESSION_CREATION_FAILED", "Could not create session")
+                                    .send_error(
+                                        "SESSION_CREATION_FAILED",
+                                        "Could not create session",
+                                    )
                                     .await;
                                 return;
                             }
 
-                            let response = ServerMessage::ConnectSuccess(
-                                crate::message::ConnectSuccessData {
+                            let response =
+                                ServerMessage::ConnectSuccess(crate::message::ConnectSuccessData {
                                     user_id: user.id.to_string(),
                                     username: user.username.clone(),
-                                    display_name: user.display_name.clone(),
-                                },
-                            );
-                            if handler.send_msgpack(&response).await.is_err() {
-                                // Client disconnected, just return.
-                                return;
-                            }
+                                });
+                            if handler.send_msgpack(&response).await.is_err() {}
                         }
                         _ => {
-                            // User not found in DB, treat as expired session
-                            if handler.send_msgpack(&ServerMessage::SessionExpired).await.is_err() {
-                                return;
-                            }
+                            if handler
+                                .send_msgpack(&ServerMessage::SessionExpired)
+                                .await
+                                .is_err()
+                            {}
                         }
                     }
                 }
                 Ok(_) => {
-                    // Session not found or doesn't match the token's user (e.g., uid != claims.sub)
-                    if handler.send_msgpack(&ServerMessage::SessionExpired).await.is_err() {
-                        return;
-                    }
+                    if handler
+                        .send_msgpack(&ServerMessage::SessionExpired)
+                        .await
+                        .is_err()
+                    {}
                 }
                 Err(e) => {
-                    // An actual error occurred during validation
                     tracing::error!(error = %e, "Failed to validate session");
-                    handler.send_error("SERVER_ERROR", "Failed to validate session").await;
-                    return; // Return on server error
+                    handler
+                        .send_error("SERVER_ERROR", "Failed to validate session")
+                        .await;
                 }
             }
         }
@@ -338,7 +324,9 @@ pub async fn handle_logout(
 
         handler.disconnect(&ctx.clients).await;
     }
-    if handler.send_msgpack(&ServerMessage::LogoutSuccess).await.is_err() {
-        return;
-    }
+    if handler
+        .send_msgpack(&ServerMessage::LogoutSuccess)
+        .await
+        .is_err()
+    {}
 }

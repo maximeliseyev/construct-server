@@ -142,7 +142,6 @@ pub enum ClientMessage {
 pub struct RegisterSuccessData {
     pub user_id: String,
     pub username: String,
-    pub display_name: String,
     pub session_token: String,
     pub expires: i64,
 }
@@ -152,7 +151,6 @@ pub struct RegisterSuccessData {
 pub struct LoginSuccessData {
     pub user_id: String,
     pub username: String,
-    pub display_name: String,
     pub session_token: String,
     pub expires: i64,
 }
@@ -162,7 +160,6 @@ pub struct LoginSuccessData {
 pub struct ConnectSuccessData {
     pub user_id: String,
     pub username: String,
-    pub display_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -233,7 +230,6 @@ mod tests {
         let msg = ServerMessage::RegisterSuccess(RegisterSuccessData {
             user_id: "test-id".to_string(),
             username: "test".to_string(),
-            display_name: "Test".to_string(),
             session_token: "token".to_string(),
             expires: 1234567890,
         });
@@ -266,7 +262,10 @@ mod tests {
         // "type" = 74 79 70 65 в hex
         assert!(hex.contains("74797065"), "Should contain 'type' key");
         // "payload" = 70 61 79 6c 6f 61 64 в hex
-        assert!(hex.contains("7061796c6f6164"), "Should contain 'payload' key");
+        assert!(
+            hex.contains("7061796c6f6164"),
+            "Should contain 'payload' key"
+        );
     }
 
     #[test]

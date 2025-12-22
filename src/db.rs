@@ -14,18 +14,14 @@ pub type DbPool = Pool<Postgres>;
 pub struct User {
     pub id: Uuid,
     pub username: String,
-    pub display_name: String,
     pub password_hash: String,
-    #[allow(dead_code)]
-    pub identity_key: Vec<u8>,
-    #[allow(dead_code)]
-    pub avatar_url: Option<String>,
-    #[allow(dead_code)]
+}
+
+#[warn(dead_code)]
+pub struct UserProfile {
+    pub user_id: Uuid,
+    pub display_name: Option<String>,
     pub bio: Option<String>,
-    #[allow(dead_code)]
-    pub created_at: Option<chrono::NaiveDateTime>,
-    #[allow(dead_code)]
-    pub last_seen: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -79,30 +75,16 @@ pub async fn create_pool(database_url: &str) -> Result<DbPool> {
     Ok(pool)
 }
 
-pub async fn create_user(
-    pool: &DbPool,
-    username: &str,
-    display_name: &str,
-    password: &str,
-    identity_key_base64: &str,
-) -> Result<User> {
+pub async fn create_user(pool: &DbPool, username: &str, password: &str) -> Result<User> {
     let password_hash = hash(password, DEFAULT_COST)?;
-    let identity_key = BASE64
-        .decode(identity_key_base64)
-        .context("Failed to decode identity_key from base64")?;
-
     let user = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (username, display_name, password_hash, identity_key)
+        INSERT INTO users (username, password_hash)
         VALUES ($1, $2, $3, $4)
-        RETURNING id, username, display_name, password_hash, identity_key,
-                  avatar_url, bio, created_at, last_seen
-           "#,
+        RETURNING id, username, password_hash           "#,
     )
     .bind(username)
-    .bind(display_name)
     .bind(password_hash)
-    .bind(identity_key)
     .fetch_one(pool)
     .await?;
 
@@ -113,9 +95,7 @@ pub async fn get_user_by_username(pool: &DbPool, username: &str) -> Result<Optio
     let user = sqlx::query_as::<_, User>(
         r#"
         -- CREATE INDEX idx_users_username ON users(username);
-        -- CREATE INDEX idx_users_display_name ON users(display_name);
-        SELECT id, username, display_name, password_hash, identity_key,
-               avatar_url, bio, created_at, last_seen
+        SELECT id, username, assword_hash        
         FROM users
         WHERE username = $1
         "#,
@@ -130,8 +110,7 @@ pub async fn get_user_by_username(pool: &DbPool, username: &str) -> Result<Optio
 pub async fn get_user_by_id(pool: &DbPool, user_id: &Uuid) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, display_name, password_hash, identity_key,
-               avatar_url, bio, created_at, last_seen
+        SELECT id, username, password_hash
         FROM users
         WHERE id = $1
         "#,
@@ -149,10 +128,11 @@ pub async fn search_users_by_display_name(
 ) -> Result<Vec<PublicUserInfo>> {
     let users = sqlx::query_as::<_, PublicUserInfo>(
         r#"
-        SELECT id, username, display_name, avatar_url, bio
+        SELECT id, username, up.display_name
         FROM users
-        WHERE display_name ILIKE $1
-        LIMIT 20
+        LEFT JOIN user_profile up ON users.id = up.user_id
+        WHERE up.display_name ILIKE $1
+        LIMIT 10
         "#,
     )
     .bind(format!("%{}%", query))
@@ -239,82 +219,6 @@ pub async fn get_user_key_bundle(pool: &DbPool, user_id: &Uuid) -> Result<Option
 }
 
 // ============================================================================
-// Pending Messages
-// ============================================================================
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct PendingMessage {
-    pub id: Uuid,
-    pub recipient_id: Uuid,
-    pub message_payload: Vec<u8>, // Stored as raw MessagePack bytes
-    pub created_at: chrono::DateTime<Utc>,
-}
-
-pub async fn store_pending_message(
-    pool: &DbPool,
-    recipient_id: &Uuid,
-    message_payload: Vec<u8>,
-) -> Result<()> {
-    sqlx::query(
-        r#"
-        INSERT INTO pending_messages (recipient_id, message_payload)
-        VALUES ($1, $2)
-        "#,
-    )
-    .bind(recipient_id)
-    .bind(message_payload)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn get_pending_messages(
-    pool: &DbPool,
-    recipient_id: &Uuid,
-) -> Result<Vec<PendingMessage>> {
-    let messages = sqlx::query_as::<_, PendingMessage>(
-        r#"
-        SELECT id, recipient_id, message_payload, created_at
-        FROM pending_messages
-        WHERE recipient_id = $1
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(recipient_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(messages)
-}
-
-pub async fn delete_pending_message(pool: &DbPool, message_id: &Uuid) -> Result<()> {
-    sqlx::query(
-        r#"
-        DELETE FROM pending_messages
-        WHERE id = $1
-        "#,
-    )
-    .bind(message_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn has_pending_messages(pool: &DbPool, recipient_id: &Uuid) -> Result<bool> {
-    let count: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(*) FROM pending_messages
-        WHERE recipient_id = $1
-        "#,
-    )
-    .bind(recipient_id)
-    .fetch_one(pool)
-    .await?;
-    Ok(count > 0)
-}
-
-
-
-// ============================================================================
 // Tests - Verify MessagePack Format for PublicUserInfo
 // ============================================================================
 
@@ -346,7 +250,10 @@ mod tests {
 
         // Декодируем из MessagePack и проверяем
         let decoded: PublicUserInfo = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(decoded.id.to_string(), "32980b95-e467-4f28-8e50-d73033e07a2a");
+        assert_eq!(
+            decoded.id.to_string(),
+            "32980b95-e467-4f28-8e50-d73033e07a2a"
+        );
         assert_eq!(decoded.username, "eva");
         assert_eq!(decoded.display_name, "eva");
     }
