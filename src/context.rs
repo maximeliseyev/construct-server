@@ -15,6 +15,8 @@ pub struct AppContext {
     pub auth_manager: Arc<AuthManager>,
     pub clients: Clients,
     pub config: Arc<Config>,
+    /// Unique identifier for this server instance (for delivery worker coordination)
+    pub server_instance_id: String,
 }
 
 impl AppContext {
@@ -25,6 +27,7 @@ impl AppContext {
         auth_manager: Arc<AuthManager>,
         clients: Clients,
         config: Arc<Config>,
+        server_instance_id: String,
     ) -> Self {
         Self {
             db_pool,
@@ -32,6 +35,7 @@ impl AppContext {
             auth_manager,
             clients,
             config,
+            server_instance_id,
         }
     }
 }

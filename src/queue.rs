@@ -339,4 +339,61 @@ impl MessageQueue {
         let _: () = cmd("PING").query_async(&mut self.client).await?;
         Ok(())
     }
+
+    // ============================================================================
+    // Delivery Worker Integration
+    // ============================================================================
+
+    /// Publishes a notification that a user has come online
+    /// This triggers the Delivery Worker to process offline messages
+    pub async fn publish_user_online(
+        &mut self,
+        user_id: &str,
+        server_instance_id: &str,
+    ) -> Result<()> {
+        let notification = serde_json::json!({
+            "user_id": user_id,
+            "server_instance_id": server_instance_id,
+        });
+
+        let notification_str = notification.to_string();
+
+        let _: () = self
+            .client
+            .publish("user_online_notifications", notification_str)
+            .await?;
+
+        tracing::debug!(
+            user_id = %user_id,
+            server_instance_id = %server_instance_id,
+            "Published user online notification"
+        );
+
+        Ok(())
+    }
+
+    /// Polls the delivery queue for this server instance
+    /// Returns a list of message payloads (as bytes) that should be delivered
+    pub async fn poll_delivery_queue(
+        &mut self,
+        server_instance_id: &str,
+    ) -> Result<Vec<Vec<u8>>> {
+        let key = format!("delivery_queue:{}", server_instance_id);
+
+        // Get all messages from the delivery queue
+        let messages: Vec<Vec<u8>> = self.client.lrange(&key, 0, -1).await?;
+
+        if !messages.is_empty() {
+            // Delete the queue after retrieving messages
+            let _: () = self.client.del(&key).await?;
+
+            tracing::debug!(
+                server_instance_id = %server_instance_id,
+                count = messages.len(),
+                "Polled delivery queue"
+            );
+        }
+
+        Ok(messages)
+    }
 }
