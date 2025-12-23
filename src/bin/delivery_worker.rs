@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    info!("🚀 Delivery Worker starting...");
+    info!("Delivery Worker starting...");
 
     // Load configuration
     let config = Config::from_env()?;
@@ -34,15 +34,19 @@ async fn main() -> Result<()> {
     // Mask credentials in Redis URL for logging
     let redis_url_safe = if let Some(at_pos) = config.redis_url.find('@') {
         let protocol_end = config.redis_url.find("://").map(|p| p + 3).unwrap_or(0);
-        format!("{}***{}", &config.redis_url[..protocol_end], &config.redis_url[at_pos..])
+        format!(
+            "{}***{}",
+            &config.redis_url[..protocol_end],
+            &config.redis_url[at_pos..]
+        )
     } else {
         config.redis_url.clone()
     };
     info!("Connecting to Redis at: {}", redis_url_safe);
 
     // Connect to Redis
-    let client = redis::Client::open(config.redis_url.as_str())
-        .context("Failed to create Redis client")?;
+    let client =
+        redis::Client::open(config.redis_url.as_str()).context("Failed to create Redis client")?;
 
     let mut pubsub_conn = client
         .get_async_pubsub()
@@ -54,7 +58,7 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to create Redis data connection")?;
 
-    info!("✅ Connected to Redis");
+    info!("Connected to Redis");
 
     // Subscribe to user online notifications
     const ONLINE_CHANNEL: &str = "user_online_notifications";
@@ -63,8 +67,8 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to subscribe to user_online_notifications channel")?;
 
-    info!("📡 Subscribed to channel: {}", ONLINE_CHANNEL);
-    info!("✨ Delivery Worker ready to process offline messages");
+    info!("Subscribed to channel: {}", ONLINE_CHANNEL);
+    info!("Delivery Worker ready to process offline messages");
 
     // Main event loop
     loop {
@@ -91,7 +95,10 @@ async fn main() -> Result<()> {
         let notification: UserOnlineNotification = match serde_json::from_str(&payload) {
             Ok(n) => n,
             Err(e) => {
-                error!("Failed to parse notification JSON: {}. Payload: {}", e, payload);
+                error!(
+                    "Failed to parse notification JSON: {}. Payload: {}",
+                    e, payload
+                );
                 continue;
             }
         };
@@ -179,7 +186,7 @@ async fn process_offline_messages(
         user_id = %user_id,
         count = message_count,
         server_instance_id = %server_instance_id,
-        "✅ All offline messages queued for delivery"
+        "All offline messages queued for delivery"
     );
 
     Ok(())

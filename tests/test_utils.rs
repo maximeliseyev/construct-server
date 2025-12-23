@@ -62,12 +62,14 @@ pub async fn spawn_app() -> TestApp {
     let queue = Arc::new(Mutex::new(message_queue));
     let auth_manager = Arc::new(AuthManager::new(&app_config));
     let clients = Arc::new(RwLock::new(HashMap::new()));
+    let server_instance_id = Uuid::new_v4().to_string();
     let app_context = AppContext::new(
         db_pool_arc.clone(),
         queue.clone(),
         auth_manager,
         clients,
         app_config.clone(),
+        server_instance_id,
     );
 
     tokio::spawn(construct_server::run_websocket_server(
@@ -113,7 +115,7 @@ impl TestClient {
 
     pub async fn register(&mut self, username: &str, password: &str) -> Result<()> {
         // Create a dummy RegistrationBundle
-        let dummy_bundle = construct_server::crypto::RegistrationBundle {
+        let dummy_bundle = construct_server::e2e::RegistrationBundle {
             identity_public: BASE64.encode("a".repeat(32).as_bytes()),
             signed_prekey_public: BASE64.encode("b".repeat(32).as_bytes()),
             signature: BASE64.encode("c".repeat(64).as_bytes()),
