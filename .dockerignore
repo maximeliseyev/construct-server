@@ -1,7 +1,38 @@
+# Build artifacts
 target/
+
+# Git
 .git/
+.gitignore
+
+# Environment files
 .env
-*.md
+.env.*
 .construct_keys.json
-test_*.py
+
+# Documentation (we only need migrations in the image)
+*.md
+docs/
+
+# Configuration files
+fly.toml
+fly.worker.toml
 docker-compose.yml
+Makefile
+
+# Testing
+test_*.py
+tests/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# CI/CD
+.github/

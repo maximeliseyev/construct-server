@@ -13,18 +13,45 @@ A privacy-focused, end-to-end encrypted messaging server built with Rust, design
 
 ## Architecture
 
+### Two-Process Architecture
+
+Construct Server consists of two separate processes:
+
+1. **Main Server** (`construct-server`)
+   - Handles WebSocket connections
+   - Processes HTTP API requests (v2 and v3)
+   - Manages database interactions
+   - Delivers messages to online users
+   - Publishes user online notifications to Redis Pub/Sub
+
+2. **Delivery Worker** (`delivery-worker`)
+   - Background process for offline message delivery
+   - Listens to Redis Pub/Sub for user online events
+   - Asynchronously processes offline message queues
+   - Coordinates with main server instances via Redis
+
 ```
-Client A                  Server                    Client B
-   |                         |                          |
-   | 1. Encrypt with B's     |                          |
-   |    public key           |                          |
-   |                         |                          |
-   | 2. Send encrypted blob  |                          |
-   |------------------------>|  3. Route by user_id     |
-   |   [encrypted content]   |------------------------->|
-   |                         |                          |
-   |                         |                   4. Decrypt with
-   |                         |                      private key
+┌──────────┐                ┌─────────────────┐         ┌──────────────┐
+│ Client A │                │ Main Server     │         │  PostgreSQL  │
+│          │   WebSocket    │ (construct-     │◄────────┤  (accounts,  │
+│          │◄──────────────►│  server)        │         │   keys)      │
+└──────────┘                └────────┬────────┘         └──────────────┘
+                                     │
+                                     │ Redis
+                                     │ Pub/Sub
+                                     ▼
+                            ┌────────────────┐
+                            │     Redis      │
+                            │  (queues +     │◄─────────┐
+                            │   pub/sub)     │          │
+                            └────────┬───────┘          │
+                                     │                  │
+                                     │ Subscribe        │ Process
+                                     ▼                  │ queues
+                            ┌────────────────┐          │
+                            │ Delivery       │──────────┘
+                            │ Worker         │
+                            └────────────────┘
 ```
 
 **Server sees only:**
@@ -66,32 +93,47 @@ Client A                  Server                    Client B
 
 ### Setup
 
-1. **Clone the repository**
+#### Option 1: Docker Compose (Recommended)
+
 ```bash
+# Clone the repository
 git clone https://github.com/yourusername/construct-server.git
 cd construct-server
+
+# Configure environment
+cp .env.example .env.local
+# Edit .env.local with your configuration
+
+# Start all services (server, worker, postgres, redis)
+docker-compose up --build
+
+# Server will be available at:
+# - WebSocket/HTTP API: http://localhost:8080
+# - Health check: http://localhost:3000/health
 ```
 
-2. **Start databases**
-```bash
-docker-compose up -d
-```
+#### Option 2: Local Development
 
-3. **Configure environment**
 ```bash
+# 1. Clone the repository
+git clone https://github.com/yourusername/construct-server.git
+cd construct-server
+
+# 2. Start databases
+docker-compose up postgres redis -d
+
+# 3. Configure environment
 cp .env.example .env
 # Edit .env with your database credentials
-```
 
-4. **Run migrations**
-```bash
-psql -h localhost -U construct -d construct < schema.sql
-```
-
-5. **Build and run**
-```bash
+# 4. Build both binaries
 cargo build --release
-cargo run
+
+# 5. Run main server (in one terminal)
+cargo run --bin construct-server
+
+# 6. Run delivery worker (in another terminal)
+cargo run --bin delivery-worker
 ```
 
 Server will start on `127.0.0.1:8080`
@@ -140,18 +182,52 @@ cargo build --release
 
 ## 🚢 Deployment
 
-### Docker
+### Docker Compose (Production)
+
 ```bash
-docker build -t construct-server .
-docker run -p 8080:8080 construct-server
+# Build and start all services
+docker-compose up -d --build
+
+# View logs
+docker-compose logs -f
+
+# Stop all services
+docker-compose down
 ```
 
-### Fly.io
+### Fly.io (Recommended for Production)
+
+Deploy two separate apps:
+
 ```bash
+# 1. Deploy main server
 fly deploy
+
+# 2. Deploy delivery worker
+fly deploy --config fly.worker.toml
 ```
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
+**Important**: Both apps must share the same Redis instance for proper coordination.
+
+### Manual Docker
+
+```bash
+# Build image (includes both binaries)
+docker build -t construct-server .
+
+# Run main server
+docker run -p 8080:8080 -e DATABASE_URL=... -e REDIS_URL=... construct-server
+
+# Run delivery worker
+docker run -e REDIS_URL=... construct-server delivery-worker
+```
+
+📖 **See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment guide including:**
+- Fly.io step-by-step setup
+- Environment variables reference
+- Scaling and monitoring
+- Troubleshooting guide
+- Production checklist
 
 ## Contributing
 

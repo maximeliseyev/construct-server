@@ -34,6 +34,8 @@ pub struct Config {
     pub session_ttl_days: i64,
     pub refresh_token_ttl_days: i64,
     pub jwt_issuer: String,
+    pub online_channel: String,
+    pub rust_log: String,
     pub logging: LoggingConfig,
     pub security: SecurityConfig,
 }
@@ -44,8 +46,7 @@ impl Config {
 
         Ok(Self {
             database_url: std::env::var("DATABASE_URL")?,
-            redis_url: std::env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            redis_url: std::env::var("REDIS_URL")?,
             jwt_secret: {
                 let secret = std::env::var("JWT_SECRET")?;
                 if secret.len() < 32 {
@@ -75,6 +76,8 @@ impl Config {
                 .unwrap_or(90),
             jwt_issuer: std::env::var("JWT_ISSUER")
                 .unwrap_or_else(|_| "construct-server".to_string()),
+            online_channel: std::env::var("ONLINE_CHANNEL")?,
+            rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
             logging: LoggingConfig {
                 enable_message_metadata: std::env::var("LOG_MESSAGE_METADATA")
                     .unwrap_or_else(|_| "false".to_string())
