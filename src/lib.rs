@@ -42,9 +42,15 @@ async fn http_handler(
     req: Request<IncomingBody>,
     db_pool: Arc<DbPool>,
     queue: Arc<Mutex<MessageQueue>>,
+    auth_manager: Arc<AuthManager>,
+    clients: Clients,
+    config: Arc<Config>,
 ) -> HttpResult {
-    let response = match req.uri().path() {
-        "/health" => match health::health_check(&db_pool, queue).await {
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
+
+    let response = match (method.as_str(), path.as_str()) {
+        ("GET", "/health") => match health::health_check(&db_pool, queue).await {
             Ok(_) => Response::new(Full::new(Bytes::from("OK"))),
             Err(e) => {
                 tracing::error!("Health check failed: {}", e);
@@ -53,7 +59,7 @@ async fn http_handler(
                 res
             }
         },
-        "/metrics" => match metrics::gather_metrics() {
+        ("GET", "/metrics") => match metrics::gather_metrics() {
             Ok(metrics_data) => {
                 let mut res = Response::new(Full::new(Bytes::from(metrics_data)));
                 res.headers_mut()
@@ -67,6 +73,25 @@ async fn http_handler(
                 res
             }
         },
+
+        // API v3 routes
+        ("POST", "/v3/keys/upload") => {
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config);
+            let (parts, body) = req.into_parts();
+            handlers::v3::keys::handle_upload_keys(&ctx, &parts.headers, body).await
+        },
+        ("GET", p) if p.starts_with("/v3/keys/") => {
+            let user_id = p.trim_start_matches("/v3/keys/");
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config);
+            let (parts, _) = req.into_parts();
+            handlers::v3::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
+        },
+        ("POST", "/v3/messages/send") => {
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config);
+            let (parts, body) = req.into_parts();
+            handlers::v3::messages::handle_send_message(&ctx, &parts.headers, body).await
+        },
+
         _ => {
             let mut not_found = Response::new(Full::new(Bytes::from("Not Found")));
             *not_found.status_mut() = StatusCode::NOT_FOUND;
@@ -80,10 +105,14 @@ pub async fn run_http_server(
     config: Config,
     db_pool: Arc<DbPool>,
     queue: Arc<Mutex<MessageQueue>>,
+    auth_manager: Arc<AuthManager>,
+    clients: Clients,
 ) -> Result<()> {
     let http_addr = format!("0.0.0.0:{}", config.health_port);
     let listener = TcpListener::bind(&http_addr).await?;
     tracing::info!("HTTP server listening on http://{}", http_addr);
+
+    let config = Arc::new(config);
 
     loop {
         let (stream, _) = listener.accept().await?;
@@ -91,10 +120,20 @@ pub async fn run_http_server(
 
         let db_pool_clone = db_pool.clone();
         let queue_clone = queue.clone();
+        let auth_manager_clone = auth_manager.clone();
+        let clients_clone = clients.clone();
+        let config_clone = config.clone();
 
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
-                http_handler(req, db_pool_clone.clone(), queue_clone.clone())
+                http_handler(
+                    req,
+                    db_pool_clone.clone(),
+                    queue_clone.clone(),
+                    auth_manager_clone.clone(),
+                    clients_clone.clone(),
+                    config_clone.clone(),
+                )
             });
 
             if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
@@ -179,14 +218,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_context = AppContext::new(
         db_pool.clone(),
         queue.clone(),
-        auth_manager,
-        clients,
+        auth_manager.clone(),
+        clients.clone(),
         app_config.clone(),
     );
 
     let http_server_config = app_config.as_ref().clone();
     let websocket_server = run_websocket_server(app_context, listener);
-    let http_server = run_http_server(http_server_config, db_pool.clone(), queue.clone());
+    let http_server = run_http_server(
+        http_server_config,
+        db_pool.clone(),
+        queue.clone(),
+        auth_manager,
+        clients,
+    );
 
     tokio::select! {
         _ = websocket_server => {
