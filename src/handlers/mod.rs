@@ -4,6 +4,7 @@ mod key_rotation;
 mod messages;
 pub mod session;
 mod users;
+pub mod v3;
 
 use crate::context::AppContext;
 use crate::message::ClientMessage;

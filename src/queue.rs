@@ -76,6 +76,17 @@ impl MessageQueue {
         tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message");
         Ok(())
     }
+
+    /// Enqueues a raw JSON message (for API v3)
+    /// This stores the message as JSON bytes in Redis
+    pub async fn enqueue_message_raw(&mut self, user_id: &str, message_json: &str) -> Result<()> {
+        let key = format!("queue:{}", user_id);
+        let message_bytes = message_json.as_bytes();
+        let _: () = self.client.lpush(&key, message_bytes).await?;
+        let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
+        tracing::info!(user_id = %user_id, "Queued message (v3)");
+        Ok(())
+    }
     pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
         let key = format!("queue:{}", user_id);
         let messages: Vec<Vec<u8>> = self.client.lrange(&key, 0, -1).await?;
