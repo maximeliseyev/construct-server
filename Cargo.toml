@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "construct-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "delivery-worker"
+path = "src/bin/delivery_worker.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }

@@ -76,18 +76,18 @@ async fn http_handler(
 
         // API v3 routes
         ("POST", "/v3/keys/upload") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
             let (parts, body) = req.into_parts();
             handlers::v3::keys::handle_upload_keys(&ctx, &parts.headers, body).await
         },
         ("GET", p) if p.starts_with("/v3/keys/") => {
             let user_id = p.trim_start_matches("/v3/keys/");
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
             let (parts, _) = req.into_parts();
             handlers::v3::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
         },
         ("POST", "/v3/messages/send") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
             let (parts, body) = req.into_parts();
             handlers::v3::messages::handle_send_message(&ctx, &parts.headers, body).await
         },
@@ -163,6 +163,92 @@ pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener
     }
 }
 
+/// Spawns a background task that listens for messages from the delivery worker
+/// and forwards them to connected clients
+fn spawn_delivery_listener(
+    queue: Arc<Mutex<MessageQueue>>,
+    clients: Clients,
+    server_instance_id: String,
+) {
+    tokio::spawn(async move {
+        tracing::info!("📬 Delivery listener started for instance: {}", server_instance_id);
+
+        loop {
+            // Poll every 100ms
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            // Poll the delivery queue
+            let messages = {
+                let mut queue_guard = queue.lock().await;
+                match queue_guard.poll_delivery_queue(&server_instance_id).await {
+                    Ok(msgs) => msgs,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to poll delivery queue");
+                        continue;
+                    }
+                }
+            };
+
+            if messages.is_empty() {
+                continue;
+            }
+
+            tracing::debug!(count = messages.len(), "Received messages from delivery queue");
+
+            // Forward messages to clients
+            for message_bytes in messages {
+                // Try to parse as ChatMessage (old format) or as JSON (v3 format)
+
+                // First, try to deserialize as MessagePack (old format)
+                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes) {
+                    // Old format: send to the recipient via WebSocket
+                    let clients_guard = clients.read().await;
+                    if let Some(tx) = clients_guard.get(&chat_msg.to) {
+                        let server_msg = message::ServerMessage::Message(chat_msg.clone());
+                        if tx.send(server_msg).is_err() {
+                            tracing::warn!(
+                                recipient_id = %chat_msg.to,
+                                "Failed to send message to client (channel closed)"
+                            );
+                        } else {
+                            tracing::info!(
+                                recipient_id = %chat_msg.to,
+                                message_id = %chat_msg.id,
+                                "Delivered offline message to online client"
+                            );
+                        }
+                    } else {
+                        tracing::warn!(
+                            recipient_id = %chat_msg.to,
+                            "Client not found for message delivery"
+                        );
+                    }
+                }
+                // Try to parse as JSON (v3 format)
+                else if let Ok(json_str) = std::str::from_utf8(&message_bytes) {
+                    if let Ok(v3_msg) = serde_json::from_str::<e2e::EncryptedMessageV3>(json_str) {
+                        // V3 format: send to the recipient via WebSocket
+                        let clients_guard = clients.read().await;
+                        if let Some(tx) = clients_guard.get(&v3_msg.recipient_id) {
+                            // Wrap in appropriate server message type
+                            // For now, we need to create a ChatMessage-like structure
+                            // TODO: Define proper ServerMessage variant for v3 messages
+                            tracing::warn!(
+                                recipient_id = %v3_msg.recipient_id,
+                                "V3 message delivery not yet implemented (need to define ServerMessage::NewMessageV3)"
+                            );
+                        }
+                    } else {
+                        tracing::error!("Failed to parse message as ChatMessage or EncryptedMessageV3");
+                    }
+                } else {
+                    tracing::error!("Invalid message encoding (not UTF-8)");
+                }
+            }
+        }
+    });
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::registry()
@@ -214,6 +300,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 
+    // Generate unique server instance ID for delivery worker coordination
+    let server_instance_id = uuid::Uuid::new_v4().to_string();
+    tracing::info!("Server instance ID: {}", server_instance_id);
+
     // Create application context
     let app_context = AppContext::new(
         db_pool.clone(),
@@ -221,7 +311,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         auth_manager.clone(),
         clients.clone(),
         app_config.clone(),
+        server_instance_id.clone(),
     );
+
+    // Spawn background task to listen for messages from delivery worker
+    spawn_delivery_listener(queue.clone(), clients.clone(), server_instance_id.clone());
 
     let http_server_config = app_config.as_ref().clone();
     let websocket_server = run_websocket_server(app_context, listener);

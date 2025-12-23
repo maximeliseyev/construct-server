@@ -1,7 +1,6 @@
 use crate::context::AppContext;
 use crate::db::User;
 use crate::message::ServerMessage;
-use crate::utils::log_safe_id;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -33,61 +32,23 @@ pub async fn establish_session(
             return Err(format!("Failed to create session: {}", e));
         }
 
-        if let Ok(messages) = queue_lock.dequeue_messages(&uid_str).await {
-            let total = messages.len();
-            let mut delivered = 0;
-            let mut failed = 0;
-
-            for msg in messages {
-                match tx.send(ServerMessage::Message(msg.clone())) {
-                    Ok(_) => {
-                        delivered += 1;
-                        #[cfg(debug_assertions)]
-                        if ctx.config.logging.enable_message_metadata {
-                            tracing::debug!(
-                                message_id = %msg.id,
-                                from = %msg.from,
-                                to = %msg.to,
-                                "Queued message delivered to reconnected user"
-                            );
-                        } else {
-                            tracing::debug!(message_id = %msg.id, "Queued message delivered to reconnected user");
-                        }
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        if ctx.config.logging.enable_message_metadata {
-                            tracing::error!(
-                                error = %e,
-                                message_id = %msg.id,
-                                from = %msg.from,
-                                to = %msg.to,
-                                "Failed to deliver queued message to reconnected user"
-                            );
-                        } else {
-                            tracing::error!(error = %e, message_id = %msg.id, "Failed to deliver queued message to reconnected user");
-                        }
-                    }
-                }
-            }
-
-            if ctx.config.logging.enable_user_identifiers {
-                tracing::info!(
-                    user_id = %uid_str,
-                    total = total,
-                    delivered = delivered,
-                    failed = failed,
-                    "Queued messages delivery completed"
-                );
-            } else {
-                tracing::info!(
-                    user_hash = %log_safe_id(&uid_str, &ctx.config.logging.hash_salt),
-                    total = total,
-                    delivered = delivered,
-                    failed = failed,
-                    "Queued messages delivery completed"
-                );
-            }
+        // Publish notification that user came online
+        // This triggers the Delivery Worker to process offline messages
+        if let Err(e) = queue_lock
+            .publish_user_online(&uid_str, &ctx.server_instance_id)
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                user_id = %uid_str,
+                "Failed to publish user online notification"
+            );
+        } else {
+            tracing::debug!(
+                user_id = %uid_str,
+                server_instance_id = %ctx.server_instance_id,
+                "Published user online notification"
+            );
         }
     } // queue_lock is automatically dropped here
 

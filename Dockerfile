@@ -14,9 +14,10 @@ COPY Cargo.toml Cargo.lock ./
 
 # Copy source
 COPY src ./src
+COPY migrations ./migrations
 
-# Build release
-RUN cargo build --release
+# Build all binaries in release mode
+RUN cargo build --release --bins
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -29,11 +30,15 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binary
+# Copy both binaries from builder
 COPY --from=builder /app/target/release/construct-server /usr/local/bin/construct-server
+COPY --from=builder /app/target/release/delivery-worker /usr/local/bin/delivery-worker
 
-# Expose port
+# Copy migrations for the main server
+COPY migrations /app/migrations
+
+# Expose port (only needed for main server)
 EXPOSE 8080
 
-# Run
+# Default command (can be overridden in docker-compose or fly.toml)
 CMD ["construct-server"]
