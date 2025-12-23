@@ -1,12 +1,22 @@
-# fly.toml app configuration file generated for construct-messenger on 2025-12-13T11:45:24+03:00
+# fly.toml app configuration file for Construct Messenger (Main Server)
+#
+# This is the main application server that handles WebSocket connections,
+# HTTP API, and database interactions.
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
 
-app = 'construct-messenger'
+app = 'construct-server'
 primary_region = 'ams'
 
 [build]
+  # Uses default Dockerfile which builds both binaries
+  # This service runs construct-server by default (CMD in Dockerfile)
+
+[env]
+  DATABASE_URL = "postgresql://user:password@host:port/database"
+  REDIS_URL = "redis://:password@host:port"
+  JWT_SECRET = "this-will-be-set-from-a-secret"
+  LOG_HASH_SALT = "this-will-be-set-from-a-secret"
 
 [http_service]
   internal_port = 8080

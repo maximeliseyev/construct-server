@@ -18,18 +18,16 @@ struct UserOnlineNotification {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load configuration
+    let config = Config::from_env()?;
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+            config.rust_log.clone(),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
-
-    info!("Delivery Worker starting...");
-
-    // Load configuration
-    let config = Config::from_env()?;
 
     // Mask credentials in Redis URL for logging
     let redis_url_safe = if let Some(at_pos) = config.redis_url.find('@') {
@@ -61,13 +59,12 @@ async fn main() -> Result<()> {
     info!("Connected to Redis");
 
     // Subscribe to user online notifications
-    const ONLINE_CHANNEL: &str = "user_online_notifications";
     pubsub_conn
-        .subscribe(ONLINE_CHANNEL)
+        .subscribe(config.online_channel.as_str())
         .await
         .context("Failed to subscribe to user_online_notifications channel")?;
 
-    info!("Subscribed to channel: {}", ONLINE_CHANNEL);
+    info!("Subscribed to channel: {}", config.online_channel);
     info!("Delivery Worker ready to process offline messages");
 
     // Main event loop
