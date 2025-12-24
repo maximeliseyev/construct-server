@@ -78,6 +78,18 @@ pub async fn handle_websocket(
                                 .await;
                             }
 
+                            Ok(ClientMessage::ChangePassword(data)) => {
+                                auth::handle_change_password(
+                                    &mut handler,
+                                    &ctx,
+                                    data.session_token,
+                                    data.old_password,
+                                    data.new_password,
+                                    data.new_password_confirm,
+                                )
+                                .await;
+                            }
+
                             Ok(ClientMessage::SearchUsers(data)) => {
                                 users::handle_search_users(&mut handler, &ctx, data.query).await;
                             }
