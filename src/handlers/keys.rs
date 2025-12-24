@@ -49,6 +49,39 @@ pub async fn handle_upload_keys(
         return error_response(StatusCode::BAD_REQUEST, &e.to_string());
     }
 
+    // 4.5. SECURITY: Verify that user_id in bundle matches authenticated user
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use crate::e2e::BundleData;
+
+    let bundle_data_bytes = match BASE64.decode(&bundle.bundle_data) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to decode bundle_data");
+            return error_response(StatusCode::BAD_REQUEST, "Invalid bundle_data encoding");
+        }
+    };
+
+    let bundle_data: BundleData = match serde_json::from_slice(&bundle_data_bytes) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to parse bundle_data");
+            return error_response(StatusCode::BAD_REQUEST, "Invalid bundle_data format");
+        }
+    };
+
+    // Verify that user_id in bundle matches the authenticated user
+    if bundle_data.user_id != user_id.to_string() {
+        tracing::warn!(
+            authenticated_user = %user_id,
+            bundle_user_id = %bundle_data.user_id,
+            "user_id mismatch: authenticated user attempting to upload bundle for different user"
+        );
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "user_id in bundle does not match authenticated user"
+        );
+    }
+
     // 5. Store in database
     if let Err(e) = db::store_key_bundle(&ctx.db_pool, &user_id, &bundle).await {
         tracing::error!(

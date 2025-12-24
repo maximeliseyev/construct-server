@@ -312,6 +312,137 @@ pub async fn handle_connect(
     }
 }
 
+/// Handles password change
+/// Validates old password, updates to new password
+pub async fn handle_change_password(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    session_token: String,
+    old_password: String,
+    new_password: String,
+    new_password_confirm: String,
+) {
+    // 1. Verify session token
+    let claims = match ctx.auth_manager.verify_token(&session_token) {
+        Ok(claims) => claims,
+        Err(_) => {
+            handler
+                .send_error("INVALID_TOKEN", "Session token is invalid or expired")
+                .await;
+            return;
+        }
+    };
+
+    // 2. Parse user_id from claims
+    let user_id = match Uuid::parse_str(&claims.sub) {
+        Ok(id) => id,
+        Err(_) => {
+            handler
+                .send_error("INVALID_USER_ID", "Invalid user ID in token")
+                .await;
+            return;
+        }
+    };
+
+    // 3. Get user from database
+    let user = match db::get_user_by_id(&ctx.db_pool, &user_id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            handler.send_error("USER_NOT_FOUND", "User not found").await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Database error while fetching user");
+            handler
+                .send_error("SERVER_ERROR", "A server error occurred")
+                .await;
+            return;
+        }
+    };
+
+    // 4. Verify old password is correct
+    match db::verify_password(&user, &old_password).await {
+        Ok(true) => {}
+        Ok(false) => {
+            if ctx.config.logging.enable_user_identifiers {
+                tracing::warn!(user_id = %user_id, "Invalid old password during password change");
+            } else {
+                tracing::warn!(
+                    user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                    "Invalid old password during password change"
+                );
+            }
+            handler
+                .send_error("INVALID_PASSWORD", "Old password is incorrect")
+                .await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Error verifying old password");
+            handler
+                .send_error("SERVER_ERROR", "Failed to verify password")
+                .await;
+            return;
+        }
+    }
+
+    // 5. Validate new password confirmation matches
+    if new_password != new_password_confirm {
+        handler
+            .send_error("PASSWORD_MISMATCH", "New passwords do not match")
+            .await;
+        return;
+    }
+
+    // 6. Validate new password is different from old password
+    if old_password == new_password {
+        handler
+            .send_error(
+                "SAME_PASSWORD",
+                "New password must be different from old password",
+            )
+            .await;
+        return;
+    }
+
+    // 7. Validate new password strength (minimum 8 characters)
+    if new_password.len() < 8 {
+        handler
+            .send_error(
+                "WEAK_PASSWORD",
+                "New password must be at least 8 characters long",
+            )
+            .await;
+        return;
+    }
+
+    // 8. Update password in database
+    if let Err(e) = db::update_user_password(&ctx.db_pool, &user_id, &new_password).await {
+        tracing::error!(error = %e, user_id = %user_id, "Failed to update password");
+        handler
+            .send_error("SERVER_ERROR", "Failed to update password")
+            .await;
+        return;
+    }
+
+    // 9. Log success
+    if ctx.config.logging.enable_user_identifiers {
+        tracing::info!(user_id = %user_id, username = %user.username, "Password changed successfully");
+    } else {
+        tracing::info!(
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            "Password changed successfully"
+        );
+    }
+
+    // 10. Send success response
+    if handler
+        .send_msgpack(&ServerMessage::ChangePasswordSuccess)
+        .await
+        .is_err()
+    {}
+}
+
 /// Handles user logout
 /// Revokes session token and removes user from online clients
 pub async fn handle_logout(

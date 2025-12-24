@@ -119,6 +119,29 @@ pub async fn verify_password(user: &User, password: &str) -> Result<bool> {
     Ok(bcrypt::verify(password, &user.password_hash)?)
 }
 
+/// Updates user password (requires valid old password)
+pub async fn update_user_password(
+    pool: &DbPool,
+    user_id: &Uuid,
+    new_password: &str,
+) -> Result<()> {
+    let new_password_hash = hash(new_password, DEFAULT_COST)?;
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET password_hash = $1
+        WHERE id = $2
+        "#,
+    )
+    .bind(new_password_hash)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 // ============================================================================
 // Key Bundle Functions for Crypto-Agility
 // ============================================================================

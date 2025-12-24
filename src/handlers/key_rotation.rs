@@ -85,6 +85,42 @@ pub async fn handle_rotate_prekey(
         return;
     }
 
+    // 5.5. SECURITY: Verify that user_id in bundle matches the authenticated user
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use crate::e2e::BundleData;
+
+    let bundle_data_bytes = match BASE64.decode(&bundle.bundle_data) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to decode bundle_data during key rotation");
+            handler.send_error("INVALID_BUNDLE", "Invalid bundle_data encoding").await;
+            return;
+        }
+    };
+
+    let bundle_data: BundleData = match serde_json::from_slice(&bundle_data_bytes) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to parse bundle_data during key rotation");
+            handler.send_error("INVALID_BUNDLE", "Invalid bundle_data format").await;
+            return;
+        }
+    };
+
+    // Verify that user_id in bundle matches the authenticated user
+    if bundle_data.user_id != user_id {
+        tracing::warn!(
+            authenticated_user = %user_id,
+            bundle_user_id = %bundle_data.user_id,
+            "user_id mismatch during key rotation: user attempting to rotate keys for different user"
+        );
+        handler.send_error(
+            "FORBIDDEN",
+            "user_id in bundle does not match authenticated user"
+        ).await;
+        return;
+    }
+
     // 6. Store the new bundle in the database
     if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &uuid, &bundle).await {
         tracing::error!(

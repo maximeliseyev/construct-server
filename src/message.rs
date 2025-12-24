@@ -113,6 +113,15 @@ pub struct LogoutData {
     pub session_token: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangePasswordData {
+    pub session_token: String,
+    pub old_password: String,
+    pub new_password: String,
+    pub new_password_confirm: String,
+}
+
 // ============================================================================
 // ClientMessage Enum - Internally Tagged Format
 // ============================================================================
@@ -128,6 +137,7 @@ pub enum ClientMessage {
     GetPublicKey(GetPublicKeyData),
     SendMessage(ChatMessage),
     RotatePrekey(RotatePrekeyData),
+    ChangePassword(ChangePasswordData),
     Logout(LogoutData),
 }
 
@@ -211,6 +221,7 @@ pub enum ServerMessage {
     Message(ChatMessage),
     Ack(AckData),
     KeyRotationSuccess,
+    ChangePasswordSuccess,
     Error(ErrorData),
     LogoutSuccess,
 }
