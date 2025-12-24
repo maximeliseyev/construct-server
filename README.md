@@ -2,6 +2,16 @@
 
 A privacy-focused, end-to-end encrypted messaging server built with Rust, designed for censorship resistance and minimal metadata exposure.
 
+## ⚠️ **SECURITY WARNING**
+
+> **This project is under active development and has NOT undergone any security audits.**
+>
+> ❌ **DO NOT use this software to transmit sensitive, confidential, or production data.**
+>
+> ❌ **DO NOT rely on this for communications requiring strong security guarantees.**
+>
+> This is an experimental implementation for educational and research purposes. While we implement industry-standard cryptographic primitives, the overall system security cannot be guaranteed without professional security audits. Use at your own risk.
+
 ## Key Features
 
 - **End-to-End Encryption**: X25519 key exchange + ChaCha20-Poly1305 AEAD cipher
