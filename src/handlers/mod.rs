@@ -1,10 +1,11 @@
 mod auth;
 mod connection;
 mod key_rotation;
-mod messages;
+pub mod keys;
+pub mod messages;
 pub mod session;
 mod users;
-pub mod v3;
+mod ws_messages;
 
 use crate::context::AppContext;
 use crate::message::ClientMessage;
@@ -88,7 +89,7 @@ pub async fn handle_websocket(
                             Ok(ClientMessage::SendMessage(mut msg)) => {
                                 metrics::MESSAGES_SENT_TOTAL.inc();
                                 msg.id = Uuid::new_v4().to_string();
-                                messages::handle_send_message(&mut handler, &ctx, msg).await;
+                                ws_messages::handle_send_message(&mut handler, &ctx, msg).await;
                             }
 
                             Ok(ClientMessage::RotatePrekey(data)) => {

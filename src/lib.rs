@@ -74,22 +74,22 @@ async fn http_handler(
             }
         },
 
-        // API v3 routes
-        ("POST", "/v3/keys/upload") => {
+        // API routes
+        ("POST", "/keys/upload") => {
             let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
             let (parts, body) = req.into_parts();
-            handlers::v3::keys::handle_upload_keys(&ctx, &parts.headers, body).await
+            handlers::keys::handle_upload_keys(&ctx, &parts.headers, body).await
         },
-        ("GET", p) if p.starts_with("/v3/keys/") => {
-            let user_id = p.trim_start_matches("/v3/keys/");
+        ("GET", p) if p.starts_with("/keys/") => {
+            let user_id = p.trim_start_matches("/keys/");
             let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
             let (parts, _) = req.into_parts();
-            handlers::v3::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
+            handlers::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
         },
-        ("POST", "/v3/messages/send") => {
+        ("POST", "/messages/send") => {
             let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
             let (parts, body) = req.into_parts();
-            handlers::v3::messages::handle_send_message(&ctx, &parts.headers, body).await
+            handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
         },
 
         _ => {

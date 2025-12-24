@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 
 /// Encrypted message as stored on the server
@@ -34,31 +34,6 @@ pub enum MessageType {
     PrekeyBundle,  // Для обновления ключей
     MediaMessage,  // Для зашифрованных медиафайлов
     SystemMessage, // Системные уведомления
-}
-
-/// Public key bundle as stored on the server
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredKeyBundle {
-    /// User ID
-    pub user_id: String,
-
-    /// Base64 encoded identity public key (32 bytes)
-    pub identity_public: String,
-
-    /// Base64 encoded signed prekey public key (32 bytes)
-    pub signed_prekey_public: String,
-
-    /// Base64 encoded signature (64 bytes)
-    pub signature: String,
-
-    /// Base64 encoded verifying key (32 bytes)
-    pub verifying_key: String,
-
-    /// When this bundle was registered
-    pub registered_at: chrono::DateTime<chrono::Utc>,
-
-    /// When the signed prekey expires (should be rotated)
-    pub prekey_expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Server-side validation utilities
@@ -116,63 +91,6 @@ impl ServerCryptoValidator {
         Ok(())
     }
 
-    /// Validates the format of a public key bundle
-    ///
-    /// Note: Server CANNOT verify cryptographic signatures,
-    /// only basic format validation.
-    pub fn validate_key_bundle(bundle: &StoredKeyBundle) -> Result<()> {
-        // 1. Проверяем base64 encoding
-        let identity_bytes = general_purpose::STANDARD
-            .decode(&bundle.identity_public)
-            .context("Invalid base64 in identity_public")?;
-
-        let prekey_bytes = general_purpose::STANDARD
-            .decode(&bundle.signed_prekey_public)
-            .context("Invalid base64 in signed_prekey_public")?;
-
-        let signature_bytes = general_purpose::STANDARD
-            .decode(&bundle.signature)
-            .context("Invalid base64 in signature")?;
-
-        let verifying_bytes = general_purpose::STANDARD
-            .decode(&bundle.verifying_key)
-            .context("Invalid base64 in verifying_key")?;
-
-        // 2. Проверяем длины
-        if identity_bytes.len() != 32 {
-            return Err(anyhow::anyhow!("Identity public key must be 32 bytes"));
-        }
-
-        if prekey_bytes.len() != 32 {
-            return Err(anyhow::anyhow!("Signed prekey must be 32 bytes"));
-        }
-
-        if signature_bytes.len() != 64 {
-            return Err(anyhow::anyhow!("Signature must be 64 bytes"));
-        }
-
-        if verifying_bytes.len() != 32 {
-            return Err(anyhow::anyhow!("Verifying key must be 32 bytes"));
-        }
-
-        // 3. Проверяем срок действия prekey
-        let now = chrono::Utc::now();
-        if now > bundle.prekey_expires_at {
-            return Err(anyhow::anyhow!("Prekey has expired"));
-        }
-
-        // 4. Проверяем, что prekey не истекает слишком рано или слишком поздно
-        let expiry_duration = bundle.prekey_expires_at - bundle.registered_at;
-        if expiry_duration.num_days() < 7 {
-            return Err(anyhow::anyhow!("Prekey expiry too short (min 7 days)"));
-        }
-        if expiry_duration.num_days() > 90 {
-            return Err(anyhow::anyhow!("Prekey expiry too long (max 90 days)"));
-        }
-
-        Ok(())
-    }
-
     /// Validates BundleData for API v3 (crypto-agility)
     ///
     /// Server validates format and key lengths based on suite_id,
@@ -193,7 +111,9 @@ impl ServerCryptoValidator {
 
         // 3. Validate timestamp format (ISO8601)
         if chrono::DateTime::parse_from_rfc3339(&bundle_data.timestamp).is_err() {
-            return Err(anyhow::anyhow!("Invalid timestamp format (expected ISO8601)"));
+            return Err(anyhow::anyhow!(
+                "Invalid timestamp format (expected ISO8601)"
+            ));
         }
 
         // 4. Validate each suite's key material
@@ -284,8 +204,8 @@ impl ServerCryptoValidator {
             .decode(&bundle.bundle_data)
             .context("Invalid base64 in bundle_data")?;
 
-        let bundle_data: BundleData = serde_json::from_slice(&bundle_data_bytes)
-            .context("Invalid JSON in bundle_data")?;
+        let bundle_data: BundleData =
+            serde_json::from_slice(&bundle_data_bytes).context("Invalid JSON in bundle_data")?;
 
         // 4. Validate the bundle_data content
         Self::validate_bundle_data(&bundle_data)?;
@@ -321,34 +241,6 @@ impl ServerCryptoValidator {
             _ => Err(anyhow::anyhow!("Unsupported suite_id: {}", msg.suite_id)),
         }
     }
-}
-
-/// Update for signed prekey rotation (server-side representation)
-/// This is what the server receives and validates (format only, not crypto correctness)
-/// Fields are Base64-encoded strings as per CLIENT_API_v2.md
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SignedPrekeyUpdate {
-    /// Base64-encoded new X25519 signed prekey public key (32 bytes -> 44 chars)
-    pub new_prekey_public: String,
-    /// Base64-encoded Ed25519 signature of new_prekey_public (64 bytes -> 88 chars)
-    pub signature: String,
-}
-
-/// Registration bundle sent by client during signup
-/// Contains all necessary public keys for E2E encryption
-/// Fields are Base64-encoded strings as per CLIENT_API_v2.md
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RegistrationBundle {
-    /// Base64-encoded X25519 identity public key (32 bytes -> 44 chars)
-    pub identity_public: String,
-    /// Base64-encoded X25519 signed prekey public key (32 bytes -> 44 chars)
-    pub signed_prekey_public: String,
-    /// Base64-encoded Ed25519 signature of signed_prekey_public (64 bytes -> 88 chars)
-    pub signature: String,
-    /// Base64-encoded Ed25519 verifying key (32 bytes -> 44 chars)
-    pub verifying_key: String,
 }
 
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
