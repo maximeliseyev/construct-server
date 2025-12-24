@@ -74,7 +74,8 @@ pub async fn handle_rotate_prekey(
     };
 
     // 5. Validate the new bundle
-    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle) {
+    // Don't allow empty user_id for key rotation (user must already exist)
+    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false) {
         tracing::warn!(
             error = %e,
             user_id = %user_id,

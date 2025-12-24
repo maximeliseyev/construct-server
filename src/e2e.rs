@@ -96,7 +96,11 @@ impl ServerCryptoValidator {
     /// Server validates format and key lengths based on suite_id,
     /// but DOES NOT verify the cryptographic signature.
     /// Signature verification is the responsibility of clients.
-    pub fn validate_bundle_data(bundle_data: &BundleData) -> Result<()> {
+    ///
+    /// # Arguments
+    /// * `bundle_data` - The bundle data to validate
+    /// * `allow_empty_user_id` - If true, allows empty user_id (used during registration)
+    pub fn validate_bundle_data(bundle_data: &BundleData, allow_empty_user_id: bool) -> Result<()> {
         // 1. Check that we have at least one suite
         if bundle_data.supported_suites.is_empty() {
             return Err(anyhow::anyhow!(
@@ -104,8 +108,8 @@ impl ServerCryptoValidator {
             ));
         }
 
-        // 2. Check user_id is not empty
-        if bundle_data.user_id.is_empty() {
+        // 2. Check user_id is not empty (unless explicitly allowed during registration)
+        if !allow_empty_user_id && bundle_data.user_id.is_empty() {
             return Err(anyhow::anyhow!("User ID cannot be empty"));
         }
 
@@ -178,7 +182,11 @@ impl ServerCryptoValidator {
     ///
     /// Note: This does NOT verify the cryptographic signature.
     /// Signature verification is the responsibility of clients.
-    pub fn validate_uploadable_key_bundle(bundle: &UploadableKeyBundle) -> Result<()> {
+    ///
+    /// # Arguments
+    /// * `bundle` - The uploadable key bundle to validate
+    /// * `allow_empty_user_id` - If true, allows empty user_id (used during registration)
+    pub fn validate_uploadable_key_bundle(bundle: &UploadableKeyBundle, allow_empty_user_id: bool) -> Result<()> {
         // 1. Validate master_identity_key format
         let master_key_bytes = general_purpose::STANDARD
             .decode(&bundle.master_identity_key)
@@ -208,7 +216,7 @@ impl ServerCryptoValidator {
             serde_json::from_slice(&bundle_data_bytes).context("Invalid JSON in bundle_data")?;
 
         // 4. Validate the bundle_data content
-        Self::validate_bundle_data(&bundle_data)?;
+        Self::validate_bundle_data(&bundle_data, allow_empty_user_id)?;
 
         Ok(())
     }

@@ -39,7 +39,8 @@ pub async fn handle_upload_keys(
     };
 
     // 4. Validate the bundle
-    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle) {
+    // Don't allow empty user_id for key updates (user must already exist)
+    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false) {
         tracing::warn!(
             error = %e,
             user_id = %user_id,
