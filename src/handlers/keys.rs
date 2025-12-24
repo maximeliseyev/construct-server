@@ -1,21 +1,21 @@
 use crate::context::AppContext;
-use crate::e2e::{EncryptedMessageV3, ServerCryptoValidator};
-use crate::utils::log_safe_id;
+use crate::db;
+use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming as IncomingBody, HeaderMap, Response, StatusCode};
 use serde_json::json;
 use uuid::Uuid;
 
-/// POST /v3/messages/send
-/// Sends an E2E-encrypted message
-pub async fn handle_send_message(
+/// POST /keys/upload
+/// Uploads or updates a user's key bundle
+pub async fn handle_upload_keys(
     ctx: &AppContext,
     headers: &HeaderMap,
     body: IncomingBody,
 ) -> Response<Full<Bytes>> {
     // 1. Extract and verify JWT token
-    let sender_id = match extract_user_id_from_jwt(ctx, headers) {
+    let user_id = match extract_user_id_from_jwt(ctx, headers) {
         Ok(id) => id,
         Err(response) => return response,
     };
@@ -29,89 +29,83 @@ pub async fn handle_send_message(
         }
     };
 
-    // 3. Parse JSON to EncryptedMessageV3
-    let message: EncryptedMessageV3 = match serde_json::from_slice(&body_bytes) {
-        Ok(m) => m,
+    // 3. Parse JSON to UploadableKeyBundle
+    let bundle: UploadableKeyBundle = match serde_json::from_slice(&body_bytes) {
+        Ok(b) => b,
         Err(e) => {
             tracing::warn!(error = %e, "Invalid JSON in request body");
             return error_response(StatusCode::BAD_REQUEST, "Invalid JSON format");
         }
     };
 
-    // 4. Validate the message
-    if let Err(e) = ServerCryptoValidator::validate_encrypted_message_v3(&message) {
+    // 4. Validate the bundle
+    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle) {
         tracing::warn!(
             error = %e,
-            sender_id = %sender_id,
-            "Message validation failed"
+            user_id = %user_id,
+            "Key bundle validation failed"
         );
         return error_response(StatusCode::BAD_REQUEST, &e.to_string());
     }
 
-    // 5. Parse recipient_id
-    let recipient_id = match Uuid::parse_str(&message.recipient_id) {
-        Ok(id) => id,
-        Err(_) => {
-            return error_response(StatusCode::BAD_REQUEST, "Invalid recipient ID format");
-        }
-    };
-
-    // 6. Security check: prevent sending to self
-    if sender_id == recipient_id {
-        return error_response(StatusCode::BAD_REQUEST, "Cannot send message to self");
-    }
-
-    // 7. Serialize message to JSON for storage in Redis
-    let message_json = match serde_json::to_string(&message) {
-        Ok(json) => json,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to serialize message");
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to process message",
-            );
-        }
-    };
-
-    // 8. Queue message in Redis for recipient
-    let mut queue = ctx.queue.lock().await;
-    if let Err(e) = queue
-        .enqueue_message_raw(&message.recipient_id, &message_json)
-        .await
-    {
+    // 5. Store in database
+    if let Err(e) = db::store_key_bundle(&ctx.db_pool, &user_id, &bundle).await {
         tracing::error!(
             error = %e,
-            sender_id = %sender_id,
-            recipient_id = %recipient_id,
-            "Failed to queue message"
+            user_id = %user_id,
+            "Failed to store key bundle"
         );
-        drop(queue);
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue message");
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to store key bundle");
+    }
+
+    // 6. Invalidate cache
+    let mut queue = ctx.queue.lock().await;
+    if let Err(e) = queue.invalidate_key_bundle_cache(&user_id.to_string()).await {
+        tracing::warn!(error = %e, "Failed to invalidate key bundle cache");
     }
     drop(queue);
 
-    // 9. Log the operation (with privacy in mind)
-    if ctx.config.logging.enable_user_identifiers {
-        tracing::info!(
-            sender_id = %sender_id,
-            recipient_id = %recipient_id,
-            suite_id = message.suite_id,
-            "Message queued (v3)"
-        );
-    } else {
-        tracing::info!(
-            sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
-            recipient_hash = %log_safe_id(&recipient_id.to_string(), &ctx.config.logging.hash_salt),
-            suite_id = message.suite_id,
-            "Message queued (v3)"
-        );
+    tracing::info!(user_id = %user_id, "Key bundle uploaded successfully");
+
+    // 7. Return success
+    json_response(StatusCode::OK, json!({"status": "ok"}))
+}
+
+/// GET /keys/{userId}
+/// Retrieves a user's public key bundle
+pub async fn handle_get_keys(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+    user_id_str: &str,
+) -> Response<Full<Bytes>> {
+    // 1. Verify JWT token (must be authenticated to get keys)
+    if extract_user_id_from_jwt(ctx, headers).is_err() {
+        return error_response(StatusCode::UNAUTHORIZED, "Authentication required");
     }
 
-    // 10. Return success (202 Accepted - message is queued for delivery)
-    json_response(
-        StatusCode::ACCEPTED,
-        json!({"status": "accepted", "message": "Message queued for delivery"}),
-    )
+    // 2. Parse user_id
+    let user_id = match Uuid::parse_str(user_id_str) {
+        Ok(id) => id,
+        Err(_) => {
+            return error_response(StatusCode::BAD_REQUEST, "Invalid user ID format");
+        }
+    };
+
+    // 3. Fetch from database
+    match db::get_key_bundle(&ctx.db_pool, &user_id).await {
+        Ok(Some(bundle)) => {
+            tracing::debug!(target_user = %user_id, "Key bundle retrieved");
+            json_response(StatusCode::OK, json!(bundle))
+        }
+        Ok(None) => {
+            tracing::warn!(target_user = %user_id, "Key bundle not found");
+            error_response(StatusCode::NOT_FOUND, "Key bundle not found")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, target_user = %user_id, "Database error");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+        }
+    }
 }
 
 // ============================================================================

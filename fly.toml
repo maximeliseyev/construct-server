@@ -12,12 +12,6 @@ primary_region = 'ams'
   # Uses default Dockerfile which builds both binaries
   # This service runs construct-server by default (CMD in Dockerfile)
 
-[env]
-  DATABASE_URL = "postgresql://user:password@host:port/database"
-  REDIS_URL = "redis://:password@host:port"
-  JWT_SECRET = "this-will-be-set-from-a-secret"
-  LOG_HASH_SALT = "this-will-be-set-from-a-secret"
-
 [http_service]
   internal_port = 8080
   force_https = true

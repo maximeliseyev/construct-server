@@ -1,20 +1,21 @@
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::ServerMessage;
-use crate::e2e::{ServerCryptoValidator, SignedPrekeyUpdate};
+use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
 use uuid::Uuid;
 
-/// Handles signed prekey rotation request
-/// 
-/// This allows users to periodically rotate their signed prekeys for forward secrecy.
-/// The server validates format and rate limits, but cannot verify cryptographic correctness.
+/// Handles key bundle update request (API v3)
+///
+/// This allows users to rotate their entire key bundle.
+/// The server validates the format and rate-limits the request,
+/// but does not verify the cryptographic signature.
 pub async fn handle_rotate_prekey(
     handler: &mut ConnectionHandler,
     ctx: &AppContext,
     user_id: String,
-    update_base64: String,
+    bundle_base64: String,
 ) {
-    // 1. Валидация user_id
+    // 1. Validate user_id
     let uuid = match Uuid::parse_str(&user_id) {
         Ok(u) => u,
         Err(_) => {
@@ -24,78 +25,56 @@ pub async fn handle_rotate_prekey(
         }
     };
 
-    // 2. Decode base64 to get MessagePack bytes
-    let msgpack_bytes = match crate::e2e::decode_base64(&update_base64) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::warn!(error = %e, "Invalid base64 in prekey update");
-            handler.send_error("INVALID_UPDATE", "Invalid base64").await;
-            return;
-        }
-    };
-
-    // 3. Deserialize MessagePack to SignedPrekeyUpdate
-    let update: SignedPrekeyUpdate = match rmp_serde::from_slice(&msgpack_bytes) {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::warn!(error = %e, "Invalid prekey update (MessagePack)");
-            handler.send_error("INVALID_UPDATE", "Invalid update format").await;
-            return;
-        }
-    };
-
-    // 4. Rate limiting для ротации ключей
+    // 2. Rate limiting for key updates
     let mut queue = ctx.queue.lock().await;
-    let key_rotation_count = match queue.increment_key_update_count(&user_id).await {
+    let key_update_count = match queue.increment_key_update_count(&user_id).await {
         Ok(count) => count,
         Err(e) => {
-            tracing::error!(error = %e, "Failed to check key rotation rate limit");
-            0
+            tracing::error!(error = %e, "Failed to check key update rate limit");
+            // Fail open, but log it.
+            0 
         }
     };
 
-    let max_rotations = ctx.config.security.max_key_rotations_per_day;
-    if key_rotation_count > max_rotations {
+    let max_updates = ctx.config.security.max_key_rotations_per_day;
+    if key_update_count > max_updates {
         tracing::warn!(
             user_id = %user_id,
-            count = key_rotation_count,
-            limit = max_rotations,
-            "Key rotation rate limit exceeded"
+            count = key_update_count,
+            limit = max_updates,
+            "Key update rate limit exceeded"
         );
         drop(queue);
         handler.send_error(
             "RATE_LIMIT_EXCEEDED",
-            &format!("Too many key rotations. Limit: {}/day", max_rotations),
+            &format!("Too many key updates. Limit: {}/day", max_updates),
         ).await;
         return;
     }
     drop(queue);
 
-    // 5. Получаем текущий bundle из базы данных
-    let mut bundle = match crate::db::get_user_key_bundle(&ctx.db_pool, &uuid).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            tracing::warn!(user_id = %user_id, "Key bundle not found for rotation");
-            handler.send_error("USER_NOT_FOUND", "Key bundle not found").await;
-            return;
-        }
+    // 3. Decode base64 to get the JSON bytes for the UploadableKeyBundle
+    let key_bundle_bytes = match crate::e2e::decode_base64(&bundle_base64) {
+        Ok(bytes) => bytes,
         Err(e) => {
-            tracing::error!(error = %e, user_id = %user_id, "Database error during key rotation");
-            handler.send_error("SERVER_ERROR", "Database error").await;
+            tracing::warn!(error = %e, "Invalid base64 in key bundle update");
+            handler.send_error("INVALID_BUNDLE", "Invalid base64").await;
             return;
         }
     };
 
-    // 6. Обновляем prekey с использованием конфига
-    // SignedPrekeyUpdate now contains base64 strings, use them directly
-    bundle.signed_prekey_public = update.new_prekey_public.clone();
-    bundle.signature = update.signature.clone();
-    bundle.registered_at = chrono::Utc::now();
-    bundle.prekey_expires_at = chrono::Utc::now()
-        + chrono::Duration::days(ctx.config.security.prekey_ttl_days);
+    // 4. Deserialize JSON to UploadableKeyBundle
+    let bundle: UploadableKeyBundle = match serde_json::from_slice(&key_bundle_bytes) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "Invalid key bundle update (JSON)");
+            handler.send_error("INVALID_BUNDLE", "Invalid bundle format").await;
+            return;
+        }
+    };
 
-    // 7. Валидация обновленного bundle
-    if let Err(e) = ServerCryptoValidator::validate_key_bundle(&bundle) {
+    // 5. Validate the new bundle
+    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle) {
         tracing::warn!(
             error = %e,
             user_id = %user_id,
@@ -105,7 +84,7 @@ pub async fn handle_rotate_prekey(
         return;
     }
 
-    // 8. Сохранение в БД
+    // 6. Store the new bundle in the database
     if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &uuid, &bundle).await {
         tracing::error!(
             error = %e,
@@ -116,20 +95,17 @@ pub async fn handle_rotate_prekey(
         return;
     }
 
+    // 7. Invalidate the Redis cache for this user's key bundle
     let mut queue = ctx.queue.lock().await;
     if let Err(e) = queue.invalidate_key_bundle_cache(&user_id).await {
         tracing::warn!(error = %e, "Failed to invalidate key bundle cache");
     }
     drop(queue);
 
-    // 10. Успешный ответ
+    // 8. Send success response
     if handler.send_msgpack(&ServerMessage::KeyRotationSuccess).await.is_err() {
         return;
     }
     
-    tracing::info!(
-        user_id = %user_id,
-        expires_at = %bundle.prekey_expires_at,
-        "Prekey rotated successfully"
-    );
+    tracing::info!(user_id = %user_id, "Key bundle updated successfully");
 }

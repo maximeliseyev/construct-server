@@ -1,5 +1,5 @@
 use crate::context::AppContext;
-use crate::e2e::{RegistrationBundle, StoredKeyBundle, ServerCryptoValidator};
+
 use crate::db::{self, User};
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
@@ -25,6 +25,8 @@ async fn establish_session_and_set_user(
 
 /// Handles user registration
 /// Creates new user account, generates session token, and establishes connection
+use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
+
 pub async fn handle_register(
     handler: &mut ConnectionHandler,
     ctx: &AppContext,
@@ -32,66 +34,44 @@ pub async fn handle_register(
     password: String,
     public_key: String,
 ) {
-    // Decode base64 to get MessagePack bytes
-    let msgpack_bytes = match crate::e2e::decode_base64(&public_key) {
+    // Decode base64 to get the JSON bytes for the UploadableKeyBundle
+    let key_bundle_bytes = match crate::e2e::decode_base64(&public_key) {
         Ok(bytes) => bytes,
-        Err(_e) => {
-            handler.send_error("INVALID_KEY", "Invalid base64").await;
-            return;
-        }
-    };
-
-    // Deserialize MessagePack to RegistrationBundle
-    let registration_bundle: RegistrationBundle = match rmp_serde::from_slice(&msgpack_bytes) {
-        Ok(b) => b,
         Err(e) => {
-            tracing::warn!("Invalid registration bundle (MessagePack): {}", e);
-            handler
-                .send_error("INVALID_KEY_BUNDLE", "Invalid key format")
-                .await;
+            tracing::warn!("Invalid base64 for key bundle: {}", e);
+            handler.send_error("INVALID_KEY", "Invalid base64 encoding for key bundle").await;
             return;
         }
     };
 
-    // RegistrationBundle now contains base64 strings, use them directly
-    let stored_bundle = StoredKeyBundle {
-        user_id: String::new(),
-        identity_public: registration_bundle.identity_public.clone(),
-        signed_prekey_public: registration_bundle.signed_prekey_public.clone(),
-        signature: registration_bundle.signature.clone(),
-        verifying_key: registration_bundle.verifying_key.clone(),
-        registered_at: chrono::Utc::now(),
-        prekey_expires_at: chrono::Utc::now()
-            + chrono::Duration::days(ctx.config.security.prekey_ttl_days),
+    // Deserialize JSON to UploadableKeyBundle
+    let key_bundle: UploadableKeyBundle = match serde_json::from_slice(&key_bundle_bytes) {
+        Ok(bundle) => bundle,
+        Err(e) => {
+            tracing::warn!("Invalid registration bundle (JSON): {}", e);
+            handler.send_error("INVALID_KEY_BUNDLE", "Invalid key bundle format").await;
+            return;
+        }
     };
 
-    if let Err(e) = ServerCryptoValidator::validate_key_bundle(&stored_bundle) {
+    // Validate the bundle using the V3 validator
+    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&key_bundle) {
         tracing::warn!("Key bundle validation failed: {}", e);
-        handler
-            .send_error("INVALID_KEY_BUNDLE", &e.to_string())
-            .await;
+        handler.send_error("INVALID_KEY_BUNDLE", &e.to_string()).await;
         return;
     }
 
     match db::create_user(&ctx.db_pool, &username, &password).await {
         Ok(user) => {
-            let mut final_bundle = stored_bundle.clone();
-            final_bundle.user_id = user.id.to_string();
-
-            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &final_bundle).await
-            {
+            // Store the key bundle
+            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &key_bundle).await {
                 tracing::error!(error = %e, "Failed to store key bundle during registration");
-                handler
-                    .send_error("SERVER_ERROR", "Failed to store encryption keys")
-                    .await;
+                handler.send_error("SERVER_ERROR", "Failed to store encryption keys").await;
                 return;
             }
 
             if ctx.config.logging.enable_user_identifiers {
-                tracing::info!(
-                    username = %user.username,
-                    "User registered"
-                );
+                tracing::info!(username = %user.username, "User registered");
             } else {
                 tracing::info!(
                     user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
@@ -101,30 +81,23 @@ pub async fn handle_register(
 
             match ctx.auth_manager.create_token(&user.id) {
                 Ok((token, jti, expires)) => {
-                    if let Err(e_msg) =
-                        establish_session_and_set_user(handler, ctx, &user, &jti).await
-                    {
+                    if let Err(e_msg) = establish_session_and_set_user(handler, ctx, &user, &jti).await {
                         tracing::error!(error = %e_msg, "Failed to establish session");
-                        handler
-                            .send_error("SESSION_CREATION_FAILED", "Could not create session")
-                            .await;
+                        handler.send_error("SESSION_CREATION_FAILED", "Could not create session").await;
                         return;
                     }
 
-                    let response =
-                        ServerMessage::RegisterSuccess(crate::message::RegisterSuccessData {
-                            user_id: user.id.to_string(),
-                            username: user.username.clone(),
-                            session_token: token,
-                            expires,
-                        });
+                    let response = ServerMessage::RegisterSuccess(crate::message::RegisterSuccessData {
+                        user_id: user.id.to_string(),
+                        username: user.username.clone(),
+                        session_token: token,
+                        expires,
+                    });
                     if handler.send_msgpack(&response).await.is_err() {}
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create token");
-                    handler
-                        .send_error("TOKEN_CREATION_FAILED", "Could not create session token")
-                        .await;
+                    handler.send_error("TOKEN_CREATION_FAILED", "Could not create session token").await;
                 }
             }
         }

@@ -23,7 +23,7 @@
 //
 // ============================================================================
 
-use crate::e2e::StoredKeyBundle;
+use crate::e2e::UploadableKeyBundle;
 use crate::message::ChatMessage;
 use anyhow::Result;
 use redis::{AsyncCommands, Client, cmd};
@@ -54,7 +54,9 @@ impl MessageQueue {
             .map_err(|e| anyhow::anyhow!("Failed to parse Redis URL: {}", e))?;
 
         tracing::debug!("Getting Redis connection manager...");
-        let conn = client.get_connection_manager().await
+        let conn = client
+            .get_connection_manager()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {}", e))?;
 
         let message_ttl_seconds = config.message_ttl_days * SECONDS_PER_DAY;
@@ -272,7 +274,7 @@ impl MessageQueue {
     pub async fn cache_key_bundle(
         &mut self,
         user_id: &str,
-        bundle: &StoredKeyBundle,
+        bundle: &UploadableKeyBundle,
         ttl_hours: i64,
     ) -> Result<()> {
         let key = format!("key_bundle:{}", user_id);
@@ -290,13 +292,13 @@ impl MessageQueue {
     pub async fn get_cached_key_bundle(
         &mut self,
         user_id: &str,
-    ) -> Result<Option<StoredKeyBundle>> {
+    ) -> Result<Option<UploadableKeyBundle>> {
         let key = format!("key_bundle:{}", user_id);
         let bundle_json: Option<String> = self.client.get(&key).await?;
 
         match bundle_json {
             Some(json) => {
-                let bundle: StoredKeyBundle = serde_json::from_str(&json)
+                let bundle: UploadableKeyBundle = serde_json::from_str(&json)
                     .map_err(|e| anyhow::anyhow!("Failed to deserialize bundle: {}", e))?;
                 Ok(Some(bundle))
             }
@@ -374,10 +376,7 @@ impl MessageQueue {
 
     /// Polls the delivery queue for this server instance
     /// Returns a list of message payloads (as bytes) that should be delivered
-    pub async fn poll_delivery_queue(
-        &mut self,
-        server_instance_id: &str,
-    ) -> Result<Vec<Vec<u8>>> {
+    pub async fn poll_delivery_queue(&mut self, server_instance_id: &str) -> Result<Vec<Vec<u8>>> {
         let key = format!("delivery_queue:{}", server_instance_id);
 
         // Get all messages from the delivery queue

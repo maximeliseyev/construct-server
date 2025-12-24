@@ -1,283 +1,167 @@
-// ============================================================================
-// Message Handler - Ephemeral Delivery (No Database Persistence)
-// ============================================================================
-//
-// SECURITY DESIGN:
-// Messages are NEVER stored in the database. This handler implements
-// ephemeral message delivery to protect user privacy:
-//
-// Delivery Flow:
-// 1. Validate message (structure, rate limits, user not blocked)
-// 2. Check if recipient is online
-//    a) Online  → Send directly via WebSocket (no storage)
-//    b) Offline → Queue in Redis with TTL (temporary only)
-// 3. Send ACK to sender (delivered/queued status)
-//
-// Privacy Benefits:
-// - No conversation metadata in database
-// - No social graph reconstruction possible
-// - Forward secrecy maintained
-// - Messages disappear after delivery or TTL expiry
-//
-// ============================================================================
-
-// ============================================================================
-// Message Handler - Ephemeral Delivery (No Database Persistence)
-// ============================================================================
-//
-// SECURITY DESIGN:
-// Messages are NEVER stored in the database. This handler implements
-// ephemeral message delivery to protect user privacy:
-//
-// Delivery Flow:
-// 1. Validate message (structure, rate limits, user not blocked)
-// 2. Check if recipient is online
-//    a) Online  → Send directly via WebSocket (no storage)
-//    b) Offline → Queue in Redis with TTL (temporary only)
-// 3. Send ACK to sender (delivered/queued status)
-//
-// Privacy Benefits:
-// - No conversation metadata in database
-// - No social graph reconstruction possible
-// - Forward secrecy maintained
-// - Messages disappear after delivery or TTL expiry
-//
-// ============================================================================
-
 use crate::context::AppContext;
-use crate::handlers::connection::ConnectionHandler;
-use crate::message::{ChatMessage, ServerMessage};
-use base64::Engine;
+use crate::e2e::{EncryptedMessageV3, ServerCryptoValidator};
+use crate::utils::log_safe_id;
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Incoming as IncomingBody, HeaderMap, Response, StatusCode};
+use serde_json::json;
+use uuid::Uuid;
 
-/// Handles message sending
-/// Delivers immediately if recipient is online, otherwise queues for later delivery
-/// IMPORTANT: Messages are NEVER persisted to database (Redis queue only)
+/// POST /messages/send
+/// Sends an E2E-encrypted message
 pub async fn handle_send_message(
-    handler: &mut ConnectionHandler,
     ctx: &AppContext,
-    msg: ChatMessage,
-) {
-    // ========================================================================
-    // CRITICAL: Prevent Message Spoofing (IDOR)
-    // ========================================================================
-    // Ensure the `from` field in the message matches the authenticated user's
-    // ID associated with this WebSocket connection.
-    let sender_id = match handler.user_id() {
-        Some(id) => id.clone(),
-        None => {
-            // This should ideally not be reached if the connection logic is sound
-            tracing::error!("Unauthenticated user attempted to send a message");
-            handler
-                .send_error("AUTH_REQUIRED", "Authentication is required to send messages")
-                .await;
-            return;
+    headers: &HeaderMap,
+    body: IncomingBody,
+) -> Response<Full<Bytes>> {
+    // 1. Extract and verify JWT token
+    let sender_id = match extract_user_id_from_jwt(ctx, headers) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
+    // 2. Read request body
+    let body_bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to read request body");
+            return error_response(StatusCode::BAD_REQUEST, "Failed to read request body");
         }
     };
 
-    if sender_id != msg.from {
+    // 3. Parse JSON to EncryptedMessageV3
+    let message: EncryptedMessageV3 = match serde_json::from_slice(&body_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "Invalid JSON in request body");
+            return error_response(StatusCode::BAD_REQUEST, "Invalid JSON format");
+        }
+    };
+
+    // 4. Validate the message
+    if let Err(e) = ServerCryptoValidator::validate_encrypted_message_v3(&message) {
         tracing::warn!(
-            authenticated_user = %sender_id,
-            message_sender = %msg.from,
-            "Message spoofing attempt detected (IDOR)"
+            error = %e,
+            sender_id = %sender_id,
+            "Message validation failed"
         );
-        handler
-            .send_error(
-                "FORBIDDEN",
-                "You are not allowed to send messages from another user's account.",
-            )
-            .await;
-        return;
+        return error_response(StatusCode::BAD_REQUEST, &e.to_string());
     }
-    // ========================================================================
 
+    // 5. Parse recipient_id
+    let recipient_id = match Uuid::parse_str(&message.recipient_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return error_response(StatusCode::BAD_REQUEST, "Invalid recipient ID format");
+        }
+    };
+
+    // 6. Security check: prevent sending to self
+    if sender_id == recipient_id {
+        return error_response(StatusCode::BAD_REQUEST, "Cannot send message to self");
+    }
+
+    // 7. Serialize message to JSON for storage in Redis
+    let message_json = match serde_json::to_string(&message) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to serialize message");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to process message",
+            );
+        }
+    };
+
+    // 8. Queue message in Redis for recipient
     let mut queue = ctx.queue.lock().await;
-
-    // 1. Проверка блокировки пользователя
-    if let Ok(Some(reason)) = queue.is_user_blocked(&msg.from).await {
-        tracing::warn!(user_id = %msg.from, reason = %reason, "Blocked user attempted to send message");
-        handler
-            .send_error(
-                "USER_BLOCKED",
-                &format!("Your account is temporarily blocked: {}", reason),
-            )
-            .await;
-        return;
-    }
-
-    // 2. Replay protection - проверка уникальности сообщения
-    // For Double Ratchet, we use ephemeral_public_key and message_number for replay detection
-    let ephemeral_key_b64 =
-        base64::engine::general_purpose::STANDARD.encode(&msg.ephemeral_public_key);
-    match queue
-        .check_message_replay(&msg.id, &msg.content, &ephemeral_key_b64)
+    if let Err(e) = queue
+        .enqueue_message_raw(&message.recipient_id, &message_json)
         .await
     {
-        Ok(true) => {} // Сообщение уникальное, продолжаем
-        Ok(false) => {
-            tracing::warn!(message_id = %msg.id, "Duplicate message detected");
-            handler
-                .send_error("DUPLICATE_MESSAGE", "This message was already sent")
-                .await;
-            return;
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to check message replay");
-            // Продолжаем, но логируем ошибку
-        }
+        tracing::error!(
+            error = %e,
+            sender_id = %sender_id,
+            recipient_id = %recipient_id,
+            "Failed to queue message"
+        );
+        drop(queue);
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue message");
     }
-
-    match queue.increment_message_count(&msg.from).await {
-        Ok(count) => {
-            let max_messages = ctx.config.security.max_messages_per_hour;
-            let block_threshold = max_messages + (max_messages / 2);
-
-            if count > block_threshold {
-                let block_duration = ctx.config.security.rate_limit_block_duration_seconds;
-                if let Err(e) = queue
-                    .block_user_temporarily(&msg.from, block_duration, "Rate limit exceeded")
-                    .await
-                {
-                    tracing::error!(error = %e, "Failed to block user for rate limiting");
-                    handler
-                        .send_error("SERVER_ERROR", "Failed to apply rate limit")
-                        .await;
-                } else {
-                    let message =
-                        format!("Too many messages. Blocked for {} seconds.", block_duration);
-                    handler.send_error("RATE_LIMIT_BLOCKED", &message).await;
-                }
-                return;
-            } else if count > max_messages {
-                tracing::warn!(user_id = %msg.from, count = count, "Rate limit warning");
-                handler
-                    .send_error(
-                        "RATE_LIMIT_WARNING",
-                        &format!("Slow down! ({}/{})", count, max_messages),
-                    )
-                    .await;
-                return;
-            }
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to check rate limit");
-        }
-    }
-
-    // Validate ChatMessage structure
-    if !msg.is_valid() {
-        tracing::warn!(user_id = %msg.from, "Invalid chat message format");
-        handler
-            .send_error("INVALID_MESSAGE_FORMAT", "Message validation failed")
-            .await;
-        return;
-    }
-
-    // Additional validation: check ephemeral_public_key length
-    if msg.ephemeral_public_key.len() != 32 {
-        tracing::warn!(user_id = %msg.from, "Invalid ephemeral public key size");
-        handler
-            .send_error(
-                "INVALID_MESSAGE_FORMAT",
-                "Ephemeral public key must be 32 bytes",
-            )
-            .await;
-        return;
-    }
-
     drop(queue);
 
-    let recipient_tx = {
-        let clients_read = ctx.clients.read().await;
-        clients_read.get(&msg.to).cloned()
-    };
-
-    if let Some(tx) = recipient_tx {
-        match tx.send(ServerMessage::Message(msg.clone())) {
-            Ok(_) => {
-                let ack = ServerMessage::Ack(crate::message::AckData {
-                    message_id: msg.id.clone(),
-                    status: "delivered".to_string(),
-                });
-                if handler.send_msgpack(&ack).await.is_err() {
-                    return;
-                }
-
-                if ctx.config.logging.enable_message_metadata {
-                    tracing::debug!(
-                        message_id = %msg.id,
-                        from = %msg.from,
-                        to = %msg.to,
-                        content_len = msg.content.len(),
-                        "Message delivered to online recipient"
-                    );
-                } else {
-                    tracing::debug!(message_id = %msg.id, "Message delivered to online recipient");
-                }
-            }
-            Err(e) => {
-                if ctx.config.logging.enable_message_metadata {
-                    tracing::warn!(
-                        error = %e,
-                        message_id = %msg.id,
-                        from = %msg.from,
-                        to = %msg.to,
-                        "Failed to deliver to online recipient, queueing message"
-                    );
-                } else {
-                    tracing::warn!(
-                        error = %e,
-                        message_id = %msg.id,
-                        "Failed to deliver to online recipient, queueing message"
-                    );
-                }
-
-                let mut queue = ctx.queue.lock().await;
-                if let Err(qe) = queue.enqueue_message(&msg.to, &msg).await {
-                    tracing::error!(error = %qe, "Failed to queue message after delivery failure");
-                    handler
-                        .send_error("DELIVERY_FAILED", "Failed to deliver message")
-                        .await;
-                } else {
-                    let ack = ServerMessage::Ack(crate::message::AckData {
-                        message_id: msg.id.clone(),
-                        status: "queued".to_string(),
-                    });
-                    if handler.send_msgpack(&ack).await.is_err() {
-                        return;
-                    }
-                }
-            }
-        }
+    // 9. Log the operation (with privacy in mind)
+    if ctx.config.logging.enable_user_identifiers {
+        tracing::info!(
+            sender_id = %sender_id,
+            recipient_id = %recipient_id,
+            suite_id = message.suite_id,
+            "Message queued (v3)"
+        );
     } else {
-        let mut queue = ctx.queue.lock().await;
-        match queue.enqueue_message(&msg.to, &msg).await {
-            Ok(_) => {
-                let ack = ServerMessage::Ack(crate::message::AckData {
-                    message_id: msg.id.clone(),
-                    status: "queued".to_string(),
-                });
-                if handler.send_msgpack(&ack).await.is_err() {
-                    return;
-                }
-
-                if ctx.config.logging.enable_message_metadata {
-                    tracing::debug!(
-                        message_id = %msg.id,
-                        from = %msg.from,
-                        to = %msg.to,
-                        content_len = msg.content.len(),
-                        "Message queued for offline recipient"
-                    );
-                } else {
-                    tracing::debug!(message_id = %msg.id, "Message queued for offline recipient");
-                }
-            }
-            Err(e) => {
-                tracing::error!(error = %e, message_id = %msg.id, "Error queuing message");
-                handler
-                    .send_error("QUEUE_FAILED", "Failed to queue message")
-                    .await;
-            }
-        }
+        tracing::info!(
+            sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+            recipient_hash = %log_safe_id(&recipient_id.to_string(), &ctx.config.logging.hash_salt),
+            suite_id = message.suite_id,
+            "Message queued (v3)"
+        );
     }
+
+    // 10. Return success (202 Accepted - message is queued for delivery)
+    json_response(
+        StatusCode::ACCEPTED,
+        json!({"status": "accepted", "message": "Message queued for delivery"}),
+    )
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Extracts user_id from JWT token in Authorization header
+fn extract_user_id_from_jwt(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+) -> Result<Uuid, Response<Full<Bytes>>> {
+    // Extract Authorization header
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Missing authorization header"))?;
+
+    // Extract token from "Bearer <token>"
+    let token = auth_header
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Invalid authorization format"))?;
+
+    // Verify and decode JWT
+    let claims = ctx
+        .auth_manager
+        .verify_token(token)
+        .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?;
+
+    // Parse user_id from claims
+    Uuid::parse_str(&claims.sub).map_err(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Invalid user ID in token",
+        )
+    })
+}
+
+/// Creates a JSON response
+fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<Bytes>> {
+    let json_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let mut response = Response::new(Full::new(Bytes::from(json_bytes)));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        "content-type",
+        "application/json".parse().unwrap(),
+    );
+    response
+}
+
+/// Creates an error JSON response
+fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
+    json_response(status, json!({"error": message}))
 }
