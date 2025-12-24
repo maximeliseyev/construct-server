@@ -2,6 +2,7 @@ use crate::e2e::{BundleData, UploadableKeyBundle};
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bcrypt::{DEFAULT_COST, hash};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
@@ -152,7 +153,7 @@ struct KeyBundleRecord {
     pub master_identity_key: Vec<u8>,
     pub bundle_data: Vec<u8>,
     pub signature: Vec<u8>,
-    pub registered_at: chrono::NaiveDateTime,
+    pub registered_at: DateTime<Utc>,
 }
 
 /// Stores a key bundle in the crypto-agile format
