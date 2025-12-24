@@ -57,7 +57,8 @@ pub async fn handle_register(
     };
 
     // Validate the bundle using the V3 validator
-    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&key_bundle) {
+    // Allow empty user_id during registration since it will be set after user creation
+    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&key_bundle, true) {
         tracing::warn!("Key bundle validation failed: {}", e);
         handler.send_error("INVALID_KEY_BUNDLE", &e.to_string()).await;
         return;
