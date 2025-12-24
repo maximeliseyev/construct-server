@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use crate::e2e::UploadableKeyBundle;
 
 // ============================================================================
 // ChatMessage (formerly Message) - Updated for Double Ratchet Protocol
@@ -70,8 +71,8 @@ impl ChatMessage {
 pub struct RegisterData {
     pub username: String,
     pub password: String,
-    /// Base64-encoded MessagePack of RegistrationBundle
-    pub public_key: String,
+    /// Native UploadableKeyBundle structure (MessagePack serialized)
+    pub public_key: UploadableKeyBundle,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,8 +104,8 @@ pub struct GetPublicKeyData {
 #[serde(rename_all = "camelCase")]
 pub struct RotatePrekeyData {
     pub user_id: String,
-    /// Base64-encoded MessagePack of SignedPrekeyUpdate
-    pub update: String,
+    /// Native UploadableKeyBundle structure (MessagePack serialized)
+    pub update: UploadableKeyBundle,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

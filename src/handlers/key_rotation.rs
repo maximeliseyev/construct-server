@@ -13,7 +13,7 @@ pub async fn handle_rotate_prekey(
     handler: &mut ConnectionHandler,
     ctx: &AppContext,
     user_id: String,
-    bundle_base64: String,
+    bundle: UploadableKeyBundle,
 ) {
     // 1. Validate user_id
     let uuid = match Uuid::parse_str(&user_id) {
@@ -32,7 +32,7 @@ pub async fn handle_rotate_prekey(
         Err(e) => {
             tracing::error!(error = %e, "Failed to check key update rate limit");
             // Fail open, but log it.
-            0 
+            0
         }
     };
 
@@ -53,27 +53,7 @@ pub async fn handle_rotate_prekey(
     }
     drop(queue);
 
-    // 3. Decode base64 to get the JSON bytes for the UploadableKeyBundle
-    let key_bundle_bytes = match crate::e2e::decode_base64(&bundle_base64) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::warn!(error = %e, "Invalid base64 in key bundle update");
-            handler.send_error("INVALID_BUNDLE", "Invalid base64").await;
-            return;
-        }
-    };
-
-    // 4. Deserialize JSON to UploadableKeyBundle
-    let bundle: UploadableKeyBundle = match serde_json::from_slice(&key_bundle_bytes) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(error = %e, "Invalid key bundle update (JSON)");
-            handler.send_error("INVALID_BUNDLE", "Invalid bundle format").await;
-            return;
-        }
-    };
-
-    // 5. Validate the new bundle
+    // 3. Validate the new bundle
     // Don't allow empty user_id for key rotation (user must already exist)
     if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false) {
         tracing::warn!(

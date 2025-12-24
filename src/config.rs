@@ -17,6 +17,8 @@ pub struct SecurityConfig {
     pub prekey_max_ttl_days: i64,
     pub max_messages_per_hour: u32,
     pub max_key_rotations_per_day: u32,
+    pub max_password_changes_per_day: u32,
+    pub max_failed_login_attempts: u32,
     #[allow(dead_code)]
     pub max_connections_per_user: u32,
     pub key_bundle_cache_hours: i64,
@@ -117,6 +119,14 @@ impl Config {
                     .ok()
                     .and_then(|k| k.parse().ok())
                     .unwrap_or(10),
+                max_password_changes_per_day: std::env::var("MAX_PASSWORD_CHANGES_PER_DAY")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(5),
+                max_failed_login_attempts: std::env::var("MAX_FAILED_LOGIN_ATTEMPTS")
+                    .ok()
+                    .and_then(|f| f.parse().ok())
+                    .unwrap_or(5),
                 max_connections_per_user: std::env::var("MAX_CONNECTIONS_PER_USER")
                     .ok()
                     .and_then(|c| c.parse().ok())

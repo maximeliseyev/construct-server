@@ -229,6 +229,41 @@ impl MessageQueue {
         Ok(count)
     }
 
+    /// Increments password change attempt counter for rate limiting
+    /// Returns the total count of password changes in the last 24 hours
+    pub async fn increment_password_change_count(&mut self, user_id: &str) -> Result<u32> {
+        let key = format!("rate:pwd:{}", user_id);
+
+        let count: u32 = self.client.incr(&key, 1).await?;
+
+        if count == 1 {
+            let _: () = self.client.expire(&key, 86400).await?; // 24 hours
+        }
+
+        Ok(count)
+    }
+
+    /// Increments failed login attempt counter for rate limiting
+    /// Returns the total count of failed login attempts in the last 15 minutes
+    pub async fn increment_failed_login_count(&mut self, username: &str) -> Result<u32> {
+        let key = format!("rate:login:{}", username);
+
+        let count: u32 = self.client.incr(&key, 1).await?;
+
+        if count == 1 {
+            let _: () = self.client.expire(&key, 900).await?; // 15 minutes
+        }
+
+        Ok(count)
+    }
+
+    /// Resets failed login counter after successful login
+    pub async fn reset_failed_login_count(&mut self, username: &str) -> Result<()> {
+        let key = format!("rate:login:{}", username);
+        let _: () = self.client.del(&key).await?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub async fn get_message_count_last_hour(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:msg:{}", user_id);
