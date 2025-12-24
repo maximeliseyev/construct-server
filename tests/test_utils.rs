@@ -114,16 +114,38 @@ impl TestClient {
     }
 
     pub async fn register(&mut self, username: &str, password: &str) -> Result<()> {
-        // Create a dummy RegistrationBundle
-        let dummy_bundle = construct_server::e2e::RegistrationBundle {
-            identity_public: BASE64.encode("a".repeat(32).as_bytes()),
-            signed_prekey_public: BASE64.encode("b".repeat(32).as_bytes()),
-            signature: BASE64.encode("c".repeat(64).as_bytes()),
-            verifying_key: BASE64.encode("d".repeat(32).as_bytes()),
+        // Create a valid UploadableKeyBundle for testing
+        use construct_server::e2e::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
+
+        // Create dummy key material for suite 1 (CLASSIC_X25519)
+        let suite_material = SuiteKeyMaterial {
+            suite_id: 1,
+            identity_key: BASE64.encode(vec![0u8; 32]),      // 32 bytes for X25519
+            signed_prekey: BASE64.encode(vec![1u8; 32]),     // 32 bytes for X25519
+            one_time_prekeys: vec![],
         };
 
-        let bundle_bytes = rmp_serde::to_vec_named(&dummy_bundle).unwrap();
-        let public_key = BASE64.encode(&bundle_bytes);
+        // Create BundleData
+        let bundle_data = BundleData {
+            user_id: "temp-user-id".to_string(), // Will be replaced after registration
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            supported_suites: vec![suite_material],
+        };
+
+        // Serialize BundleData to JSON
+        let bundle_data_json = serde_json::to_string(&bundle_data).unwrap();
+        let bundle_data_base64 = BASE64.encode(bundle_data_json.as_bytes());
+
+        // Create UploadableKeyBundle
+        let uploadable_bundle = UploadableKeyBundle {
+            master_identity_key: BASE64.encode(vec![2u8; 32]),  // 32 bytes for Ed25519
+            bundle_data: bundle_data_base64,
+            signature: BASE64.encode(vec![3u8; 64]),             // 64 bytes for Ed25519 signature
+        };
+
+        // Serialize UploadableKeyBundle to JSON
+        let bundle_json = serde_json::to_string(&uploadable_bundle).unwrap();
+        let public_key = BASE64.encode(bundle_json.as_bytes());
 
         let msg = ClientMessage::Register(construct_server::message::RegisterData {
             username: username.to_string(),

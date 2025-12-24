@@ -1,10 +1,12 @@
 use crate::context::AppContext;
 
 use crate::db::{self, User};
+use crate::e2e::BundleData;
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
 use crate::message::ServerMessage;
 use crate::utils::log_safe_id;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use uuid::Uuid;
 
 /// Helper function to establish session and update handler with user ID
@@ -63,8 +65,45 @@ pub async fn handle_register(
 
     match db::create_user(&ctx.db_pool, &username, &password).await {
         Ok(user) => {
-            // Store the key bundle
-            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &key_bundle).await {
+            // Update bundle_data with correct user_id
+            let mut updated_bundle = key_bundle.clone();
+
+            // Decode bundle_data
+            let bundle_data_bytes = match BASE64.decode(&key_bundle.bundle_data) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to decode bundle_data");
+                    handler.send_error("SERVER_ERROR", "Failed to process key bundle").await;
+                    return;
+                }
+            };
+
+            // Parse BundleData
+            let mut bundle_data: BundleData = match serde_json::from_slice(&bundle_data_bytes) {
+                Ok(data) => data,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to parse bundle_data");
+                    handler.send_error("SERVER_ERROR", "Failed to process key bundle").await;
+                    return;
+                }
+            };
+
+            // Update user_id with the actual created user ID
+            bundle_data.user_id = user.id.to_string();
+
+            // Re-serialize and encode
+            let updated_json = match serde_json::to_string(&bundle_data) {
+                Ok(json) => json,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to serialize bundle_data");
+                    handler.send_error("SERVER_ERROR", "Failed to process key bundle").await;
+                    return;
+                }
+            };
+            updated_bundle.bundle_data = BASE64.encode(updated_json.as_bytes());
+
+            // Store the updated key bundle
+            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &updated_bundle).await {
                 tracing::error!(error = %e, "Failed to store key bundle during registration");
                 handler.send_error("SERVER_ERROR", "Failed to store encryption keys").await;
                 return;
