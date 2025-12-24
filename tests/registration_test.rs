@@ -7,7 +7,7 @@ use construct_server::message::ClientMessage;
 use serial_test::serial;
 
 /// Helper function to create a valid test UploadableKeyBundle
-fn create_test_bundle(user_id: &str) -> String {
+fn create_test_bundle(user_id: &str) -> UploadableKeyBundle {
     // Create key material for suite 1 (CLASSIC_X25519)
     let suite_material = SuiteKeyMaterial {
         suite_id: 1,
@@ -27,16 +27,13 @@ fn create_test_bundle(user_id: &str) -> String {
     let bundle_data_json = serde_json::to_string(&bundle_data).unwrap();
     let bundle_data_base64 = BASE64.encode(bundle_data_json.as_bytes());
 
-    // Create UploadableKeyBundle
-    let uploadable_bundle = UploadableKeyBundle {
+    // Create and return UploadableKeyBundle directly
+    // No need for additional JSON/Base64 encoding - MessagePack handles serialization
+    UploadableKeyBundle {
         master_identity_key: BASE64.encode(vec![2u8; 32]),  // 32 bytes for Ed25519
         bundle_data: bundle_data_base64,
         signature: BASE64.encode(vec![3u8; 64]),             // 64 bytes for Ed25519 signature
-    };
-
-    // Serialize to JSON and encode as Base64
-    let bundle_json = serde_json::to_string(&uploadable_bundle).unwrap();
-    BASE64.encode(bundle_json.as_bytes())
+    }
 }
 
 #[tokio::test]

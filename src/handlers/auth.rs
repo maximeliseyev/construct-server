@@ -5,7 +5,7 @@ use crate::e2e::BundleData;
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
 use crate::message::ServerMessage;
-use crate::utils::log_safe_id;
+use crate::utils::{log_safe_id, validate_password_strength};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use uuid::Uuid;
 
@@ -34,27 +34,14 @@ pub async fn handle_register(
     ctx: &AppContext,
     username: String,
     password: String,
-    public_key: String,
+    key_bundle: UploadableKeyBundle,
 ) {
-    // Decode base64 to get the JSON bytes for the UploadableKeyBundle
-    let key_bundle_bytes = match crate::e2e::decode_base64(&public_key) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::warn!("Invalid base64 for key bundle: {}", e);
-            handler.send_error("INVALID_KEY", "Invalid base64 encoding for key bundle").await;
-            return;
-        }
-    };
-
-    // Deserialize JSON to UploadableKeyBundle
-    let key_bundle: UploadableKeyBundle = match serde_json::from_slice(&key_bundle_bytes) {
-        Ok(bundle) => bundle,
-        Err(e) => {
-            tracing::warn!("Invalid registration bundle (JSON): {}", e);
-            handler.send_error("INVALID_KEY_BUNDLE", "Invalid key bundle format").await;
-            return;
-        }
-    };
+    // Validate password strength before proceeding
+    if let Err(error_msg) = validate_password_strength(&password) {
+        tracing::warn!("Registration rejected: weak password");
+        handler.send_error("WEAK_PASSWORD", &error_msg).await;
+        return;
+    }
 
     // Validate the bundle using the V3 validator
     // Allow empty user_id during registration since it will be set after user creation
@@ -160,9 +147,43 @@ pub async fn handle_login(
     username: String,
     password: String,
 ) {
+    // 1. Check rate limiting for failed login attempts
+    let mut queue = ctx.queue.lock().await;
+    let failed_attempts = match queue.increment_failed_login_count(&username).await {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to check login rate limit");
+            0 // Fail open
+        }
+    };
+    drop(queue);
+
+    let max_attempts = ctx.config.security.max_failed_login_attempts;
+    if failed_attempts > max_attempts {
+        tracing::warn!(
+            username = %username,
+            attempts = failed_attempts,
+            limit = max_attempts,
+            "Login rate limit exceeded"
+        );
+        handler
+            .send_error(
+                "RATE_LIMIT_EXCEEDED",
+                &format!("Too many failed login attempts. Try again in 15 minutes."),
+            )
+            .await;
+        return;
+    }
+
     match db::get_user_by_username(&ctx.db_pool, &username).await {
         Ok(Some(user)) => {
             if db::verify_password(&user, &password).await.unwrap_or(false) {
+                // Password correct - reset failed login counter
+                let mut queue = ctx.queue.lock().await;
+                if let Err(e) = queue.reset_failed_login_count(&username).await {
+                    tracing::warn!(error = %e, "Failed to reset login counter");
+                }
+                drop(queue);
                 if ctx.config.logging.enable_user_identifiers {
                     tracing::info!(
                         username = %user.username,
@@ -344,6 +365,36 @@ pub async fn handle_change_password(
         }
     };
 
+    // 2.5. Rate limiting check for password changes
+    let mut queue = ctx.queue.lock().await;
+    let change_count = match queue.increment_password_change_count(&user_id.to_string()).await {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to check password change rate limit");
+            // Fail open for now, but log it
+            0
+        }
+    };
+
+    let max_changes = ctx.config.security.max_password_changes_per_day;
+    if change_count > max_changes {
+        tracing::warn!(
+            user_id = %user_id,
+            count = change_count,
+            limit = max_changes,
+            "Password change rate limit exceeded"
+        );
+        drop(queue);
+        handler
+            .send_error(
+                "RATE_LIMIT_EXCEEDED",
+                &format!("Too many password changes. Limit: {}/day", max_changes),
+            )
+            .await;
+        return;
+    }
+    drop(queue);
+
     // 3. Get user from database
     let user = match db::get_user_by_id(&ctx.db_pool, &user_id).await {
         Ok(Some(user)) => user,
@@ -405,14 +456,13 @@ pub async fn handle_change_password(
         return;
     }
 
-    // 7. Validate new password strength (minimum 8 characters)
-    if new_password.len() < 8 {
-        handler
-            .send_error(
-                "WEAK_PASSWORD",
-                "New password must be at least 8 characters long",
-            )
-            .await;
+    // 7. Validate new password strength
+    if let Err(error_msg) = validate_password_strength(&new_password) {
+        tracing::warn!(
+            user_id = %user_id,
+            "Password change rejected: weak password"
+        );
+        handler.send_error("WEAK_PASSWORD", &error_msg).await;
         return;
     }
 

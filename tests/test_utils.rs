@@ -143,14 +143,11 @@ impl TestClient {
             signature: BASE64.encode(vec![3u8; 64]),             // 64 bytes for Ed25519 signature
         };
 
-        // Serialize UploadableKeyBundle to JSON
-        let bundle_json = serde_json::to_string(&uploadable_bundle).unwrap();
-        let public_key = BASE64.encode(bundle_json.as_bytes());
-
+        // Use native UploadableKeyBundle directly (no additional encoding needed)
         let msg = ClientMessage::Register(construct_server::message::RegisterData {
             username: username.to_string(),
             password: password.to_string(),
-            public_key,
+            public_key: uploadable_bundle,
         });
         self.send(&msg).await?;
         match self.recv().await? {

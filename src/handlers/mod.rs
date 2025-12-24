@@ -45,7 +45,7 @@ pub async fn handle_websocket(
                                     &ctx,
                                     data.username,
                                     data.password,
-                                    data.public_key,
+                                    data.public_key,  // Now native UploadableKeyBundle
                                 )
                                 .await;
                             }
@@ -109,7 +109,7 @@ pub async fn handle_websocket(
                                     &mut handler,
                                     &ctx,
                                     data.user_id,
-                                    data.update,
+                                    data.update,  // Now native UploadableKeyBundle
                                 )
                                 .await;
                             }
