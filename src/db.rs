@@ -208,26 +208,43 @@ pub async fn store_key_bundle(
     Ok(())
 }
 
-/// Retrieves a key bundle in the crypto-agile format
+// Record for key bundle with username
+#[derive(sqlx::FromRow)]
+struct KeyBundleWithUsername {
+    pub master_identity_key: Vec<u8>,
+    pub bundle_data: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub username: String,
+}
+
+/// Retrieves a key bundle in the crypto-agile format along with username
+/// Returns (bundle, username) tuple
 pub async fn get_key_bundle(
     pool: &DbPool,
     user_id: &Uuid,
-) -> Result<Option<UploadableKeyBundle>> {
-    let record = sqlx::query_as::<_, KeyBundleRecord>(
+) -> Result<Option<(UploadableKeyBundle, String)>> {
+    let record = sqlx::query_as::<_, KeyBundleWithUsername>(
         r#"
-        SELECT user_id, master_identity_key, bundle_data, signature, registered_at
-        FROM key_bundles
-        WHERE user_id = $1
+        SELECT
+            kb.master_identity_key,
+            kb.bundle_data,
+            kb.signature,
+            u.username
+        FROM key_bundles kb
+        JOIN users u ON kb.user_id = u.id
+        WHERE kb.user_id = $1
         "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(record.map(|r| UploadableKeyBundle {
-        // Encode Vec<u8> to base64 strings
-        master_identity_key: BASE64.encode(r.master_identity_key),
-        bundle_data: BASE64.encode(r.bundle_data),
-        signature: BASE64.encode(r.signature),
-    }))
+    Ok(record.map(|r| (
+        UploadableKeyBundle {
+            master_identity_key: BASE64.encode(r.master_identity_key),
+            bundle_data: BASE64.encode(r.bundle_data),
+            signature: BASE64.encode(r.signature),
+        },
+        r.username
+    )))
 }
