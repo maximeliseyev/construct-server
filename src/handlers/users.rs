@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 /// Helper function to extract PublicKeyBundleData from UploadableKeyBundle
 /// Decodes the bundle_data and extracts the first cipher suite's keys
-fn extract_first_suite_data(bundle: &UploadableKeyBundle) -> Result<message::PublicKeyBundleData, String> {
+fn extract_first_suite_data(bundle: &UploadableKeyBundle, username: &str) -> Result<message::PublicKeyBundleData, String> {
     // 1. Decode bundle_data from base64
     let bundle_data_bytes = BASE64
         .decode(&bundle.bundle_data)
@@ -26,6 +26,7 @@ fn extract_first_suite_data(bundle: &UploadableKeyBundle) -> Result<message::Pub
     // 4. Return data in the format expected by WebSocket clients
     Ok(message::PublicKeyBundleData {
         user_id: bundle_data.user_id,
+        username: username.to_string(),
         identity_public: first_suite.identity_key.clone(),
         signed_prekey_public: first_suite.signed_prekey.clone(),
         signature: bundle.signature.clone(),
@@ -66,8 +67,8 @@ pub async fn handle_get_public_key(
     };
 
     match crate::db::get_key_bundle(&ctx.db_pool, &uuid).await {
-        Ok(Some(bundle)) => {
-            match extract_first_suite_data(&bundle) {
+        Ok(Some((bundle, username))) => {
+            match extract_first_suite_data(&bundle, &username) {
                 Ok(data) => {
                     let response = ServerMessage::PublicKeyBundle(data);
                     if handler.send_msgpack(&response).await.is_err() {

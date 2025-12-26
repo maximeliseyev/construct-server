@@ -181,6 +181,8 @@ pub struct SearchResultsData {
 #[serde(rename_all = "camelCase")]
 pub struct PublicKeyBundleData {
     pub user_id: String,
+    /// Username of the user (for display purposes, shared during key exchange)
+    pub username: String,
     /// Base64-encoded X25519 identity public key (32 bytes)
     pub identity_public: String,
     /// Base64-encoded X25519 signed prekey public key (32 bytes)
