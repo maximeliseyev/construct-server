@@ -15,7 +15,6 @@ use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use uuid::Uuid;
 
 pub async fn handle_websocket(
     ws_stream: WebSocketStreamType,
@@ -98,9 +97,10 @@ pub async fn handle_websocket(
                                 users::handle_get_public_key(&mut handler, &ctx, data.user_id).await;
                             }
 
-                            Ok(ClientMessage::SendMessage(mut msg)) => {
+                            Ok(ClientMessage::SendMessage(msg)) => {
                                 metrics::MESSAGES_SENT_TOTAL.inc();
-                                msg.id = Uuid::new_v4().to_string();
+                                // ✅ Use client-provided message ID (don't overwrite!)
+                                // Client generates UUID for offline-first and idempotency
                                 ws_messages::handle_send_message(&mut handler, &ctx, msg).await;
                             }
 
