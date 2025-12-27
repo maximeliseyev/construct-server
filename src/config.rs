@@ -37,6 +37,8 @@ pub struct Config {
     pub refresh_token_ttl_days: i64,
     pub jwt_issuer: String,
     pub online_channel: String,
+    pub offline_queue_prefix: String,
+    pub delivery_queue_prefix: String,
     pub rust_log: String,
     pub logging: LoggingConfig,
     pub security: SecurityConfig,
@@ -79,6 +81,10 @@ impl Config {
             jwt_issuer: std::env::var("JWT_ISSUER")
                 .unwrap_or_else(|_| "construct-server".to_string()),
             online_channel: std::env::var("ONLINE_CHANNEL")?,
+            offline_queue_prefix: std::env::var("OFFLINE_QUEUE_PREFIX")
+                .unwrap_or_else(|_| "queue:".to_string()),
+            delivery_queue_prefix: std::env::var("DELIVERY_QUEUE_PREFIX")
+                .unwrap_or_else(|_| "delivery_queue:".to_string()),
             rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
             logging: LoggingConfig {
                 enable_message_metadata: std::env::var("LOG_MESSAGE_METADATA")

@@ -230,12 +230,22 @@ fn spawn_delivery_listener(
                         // V3 format: send to the recipient via WebSocket
                         let clients_guard = clients.read().await;
                         if let Some(tx) = clients_guard.get(&v3_msg.recipient_id) {
-                            // Wrap in appropriate server message type
-                            // For now, we need to create a ChatMessage-like structure
-                            // TODO: Define proper ServerMessage variant for v3 messages
+                            let server_msg = message::ServerMessage::EncryptedV3(v3_msg);
+                            if tx.send(server_msg).is_err() {
+                                tracing::warn!(
+                                    recipient_id = %v3_msg.recipient_id,
+                                    "Failed to send V3 message to client (channel closed)"
+                                );
+                            } else {
+                                tracing::info!(
+                                    recipient_id = %v3_msg.recipient_id,
+                                    "Delivered offline V3 message to online client"
+                                );
+                            }
+                        } else {
                             tracing::warn!(
                                 recipient_id = %v3_msg.recipient_id,
-                                "V3 message delivery not yet implemented (need to define ServerMessage::NewMessageV3)"
+                                "Client not found for V3 message delivery"
                             );
                         }
                     } else {

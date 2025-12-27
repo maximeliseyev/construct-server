@@ -108,6 +108,7 @@ async fn main() -> Result<()> {
 
         // Process offline messages for this user
         if let Err(e) = process_offline_messages(
+            &config,
             &mut data_conn,
             &notification.user_id,
             &notification.server_instance_id,
@@ -125,66 +126,52 @@ async fn main() -> Result<()> {
 
 /// Processes offline messages for a user who came online
 async fn process_offline_messages(
+    config: &Config,
     conn: &mut redis::aio::MultiplexedConnection,
     user_id: &str,
     server_instance_id: &str,
 ) -> Result<()> {
-    let queue_key = format!("queue:{}", user_id);
-    let delivery_key = format!("delivery_queue:{}", server_instance_id);
+    let queue_key = format!("{}{}", config.offline_queue_prefix, user_id);
+    let delivery_key = format!("{}{}", config.delivery_queue_prefix, server_instance_id);
+    let mut moved_count = 0;
 
-    // Get all messages from the user's offline queue
-    let messages: Vec<Vec<u8>> = conn
-        .lrange(&queue_key, 0, -1)
-        .await
-        .context("Failed to read messages from queue")?;
-
-    let message_count = messages.len();
-
-    if message_count == 0 {
-        info!(user_id = %user_id, "No offline messages to deliver");
-        return Ok(());
-    }
-
-    info!(
-        user_id = %user_id,
-        count = message_count,
-        "Retrieved offline messages"
-    );
-
-    // Delete the queue (messages will be moved to delivery queue)
-    let _: () = conn
-        .del(&queue_key)
-        .await
-        .context("Failed to delete offline queue")?;
-
-    // Move each message to the server instance's delivery queue
-    for (idx, message_bytes) in messages.iter().enumerate() {
-        match conn.lpush::<_, _, ()>(&delivery_key, message_bytes).await {
-            Ok(_) => {
-                info!(
-                    user_id = %user_id,
-                    message_index = idx + 1,
-                    total = message_count,
-                    "Message moved to delivery queue"
-                );
+    loop {
+        let result: Result<Vec<u8>, _> = conn.lmove(&queue_key, &delivery_key, "LEFT", "RIGHT").await;
+        match result {
+            Ok(message) => {
+                if message.is_empty() {
+                    // LMOVE returns an empty bulk reply when the source key does not exist.
+                    break;
+                }
+                moved_count += 1;
             }
             Err(e) => {
+                // Check if the error indicates that the source key is empty
+                if e.to_string().contains("source key is empty") {
+                    break;
+                }
                 error!(
                     error = %e,
                     user_id = %user_id,
-                    message_index = idx + 1,
-                    "Failed to push message to delivery queue"
+                    "Failed to move message from offline queue to delivery queue"
                 );
+                // Decide on error handling strategy: continue, break, or return error
+                // For now, we'll break and log the number of messages moved.
+                break;
             }
         }
     }
 
-    info!(
-        user_id = %user_id,
-        count = message_count,
-        server_instance_id = %server_instance_id,
-        "All offline messages queued for delivery"
-    );
+    if moved_count > 0 {
+        info!(
+            user_id = %user_id,
+            count = moved_count,
+            server_instance_id = %server_instance_id,
+            "Moved offline messages to delivery queue"
+        );
+    } else {
+        info!(user_id = %user_id, "No offline messages to deliver");
+    }
 
     Ok(())
 }
