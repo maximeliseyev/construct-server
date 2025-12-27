@@ -26,7 +26,7 @@
 use crate::e2e::UploadableKeyBundle;
 use crate::message::ChatMessage;
 use anyhow::Result;
-use redis::{AsyncCommands, Client, cmd};
+use redis::{AsyncCommands, Client, cmd, Direction};
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
@@ -417,7 +417,7 @@ impl MessageQueue {
 
         // Atomically move all messages from the delivery queue to a temporary processing queue
         loop {
-            let result: Result<Vec<u8>, _> = self.client.lmove(&key, &processing_key, "LEFT", "RIGHT").await;
+            let result: Result<Vec<u8>, _> = self.client.lmove(&key, &processing_key, Direction::Left, Direction::Right).await;
             match result {
                 Ok(message) => {
                     if message.is_empty() {
