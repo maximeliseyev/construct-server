@@ -230,7 +230,7 @@ fn spawn_delivery_listener(
                         // V3 format: send to the recipient via WebSocket
                         let clients_guard = clients.read().await;
                         if let Some(tx) = clients_guard.get(&v3_msg.recipient_id) {
-                            let server_msg = message::ServerMessage::EncryptedV3(v3_msg);
+                            let server_msg = message::ServerMessage::EncryptedV3(v3_msg.clone());
                             if tx.send(server_msg).is_err() {
                                 tracing::warn!(
                                     recipient_id = %v3_msg.recipient_id,

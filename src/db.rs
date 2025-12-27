@@ -147,6 +147,7 @@ pub async fn update_user_password(
 // Key Bundle Functions for Crypto-Agility
 // ============================================================================
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct KeyBundleRecord {
     pub user_id: Uuid,

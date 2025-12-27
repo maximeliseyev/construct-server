@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use construct_server::config::Config;
 use futures_util::stream::StreamExt;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, Direction};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -136,7 +136,7 @@ async fn process_offline_messages(
     let mut moved_count = 0;
 
     loop {
-        let result: Result<Vec<u8>, _> = conn.lmove(&queue_key, &delivery_key, "LEFT", "RIGHT").await;
+        let result: Result<Vec<u8>, _> = conn.lmove(&queue_key, &delivery_key, Direction::Left, Direction::Right).await;
         match result {
             Ok(message) => {
                 if message.is_empty() {
