@@ -387,6 +387,7 @@ impl MessageQueue {
         &mut self,
         user_id: &str,
         server_instance_id: &str,
+        online_channel: &str,
     ) -> Result<()> {
         let notification = serde_json::json!({
             "user_id": user_id,
@@ -397,12 +398,13 @@ impl MessageQueue {
 
         let _: () = self
             .client
-            .publish("user_online_notifications", notification_str)
+            .publish(online_channel, notification_str)
             .await?;
 
         tracing::debug!(
             user_id = %user_id,
             server_instance_id = %server_instance_id,
+            channel = %online_channel,
             "Published user online notification"
         );
 

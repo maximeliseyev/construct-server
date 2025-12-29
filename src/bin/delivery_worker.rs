@@ -64,8 +64,13 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to subscribe to user_online_notifications channel")?;
 
-    info!("Subscribed to channel: {}", config.online_channel);
-    info!("Delivery Worker ready to process offline messages");
+    info!("========================================");
+    info!("📬 Delivery Worker Started");
+    info!("========================================");
+    info!("Channel: {}", config.online_channel);
+    info!("Offline queue prefix: {}", config.offline_queue_prefix);
+    info!("Delivery queue prefix: {}", config.delivery_queue_prefix);
+    info!("Waiting for user online notifications...");
 
     // Main event loop
     loop {
@@ -167,10 +172,16 @@ async fn process_offline_messages(
             user_id = %user_id,
             count = moved_count,
             server_instance_id = %server_instance_id,
-            "Moved offline messages to delivery queue"
+            queue_key = %queue_key,
+            delivery_key = %delivery_key,
+            "✅ Moved offline messages to delivery queue"
         );
     } else {
-        info!(user_id = %user_id, "No offline messages to deliver");
+        info!(
+            user_id = %user_id,
+            queue_key = %queue_key,
+            "📭 No offline messages to deliver"
+        );
     }
 
     Ok(())
