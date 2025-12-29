@@ -35,7 +35,7 @@ pub async fn establish_session(
         // Publish notification that user came online
         // This triggers the Delivery Worker to process offline messages
         if let Err(e) = queue_lock
-            .publish_user_online(&uid_str, &ctx.server_instance_id)
+            .publish_user_online(&uid_str, &ctx.server_instance_id, &ctx.config.online_channel)
             .await
         {
             tracing::error!(
@@ -47,6 +47,7 @@ pub async fn establish_session(
             tracing::debug!(
                 user_id = %uid_str,
                 server_instance_id = %ctx.server_instance_id,
+                channel = %ctx.config.online_channel,
                 "Published user online notification"
             );
         }
