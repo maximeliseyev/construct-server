@@ -139,23 +139,21 @@ async fn process_offline_messages(
     let mut moved_count = 0;
 
     loop {
-        let result: Result<Vec<u8>, _> = conn
+        let result: Result<Option<Vec<u8>>, _> = conn
             .lmove(&queue_key, &delivery_key, Direction::Left, Direction::Right)
             .await;
 
         match result {
-            Ok(_) => {
+            Ok(Some(_)) => {
                 // Message moved successfully, continue loop
                 moved_count += 1;
             }
+            Ok(None) => {
+                // Source list was empty, this is the expected way to finish
+                break;
+            }
             Err(e) => {
-                // Check if the error is because the source queue is empty
-                if e.kind() == redis::ErrorKind::Nil {
-                    // This is the expected and correct way to finish
-                    break;
-                }
-                
-                // For any other Redis error, log it and break the loop
+                // For any Redis error, log it and break the loop
                 // to prevent getting stuck in a tight loop on a persistent error.
                 error!(
                     error = %e,
