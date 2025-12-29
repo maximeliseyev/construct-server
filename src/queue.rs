@@ -37,6 +37,8 @@ pub struct MessageQueue {
     /// TTL for queued messages in seconds (configured via message_ttl_days)
     /// After this period, undelivered messages are automatically deleted by Redis
     message_ttl_seconds: i64,
+    offline_queue_prefix: String,
+    delivery_queue_prefix: String,
 }
 impl MessageQueue {
     pub async fn new(config: &Config) -> Result<Self> {
@@ -68,10 +70,12 @@ impl MessageQueue {
         Ok(Self {
             client: conn,
             message_ttl_seconds,
+            offline_queue_prefix: config.offline_queue_prefix.clone(),
+            delivery_queue_prefix: config.delivery_queue_prefix.clone(),
         })
     }
     pub async fn enqueue_message(&mut self, user_id: &str, message: &ChatMessage) -> Result<()> {
-        let key = format!("queue:{}", user_id);
+        let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = rmp_serde::encode::to_vec_named(message)?;
         let _: () = self.client.lpush(&key, message_bytes).await?;
         let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
@@ -82,7 +86,7 @@ impl MessageQueue {
     /// Enqueues a raw JSON message (for API v3)
     /// This stores the message as JSON bytes in Redis
     pub async fn enqueue_message_raw(&mut self, user_id: &str, message_json: &str) -> Result<()> {
-        let key = format!("queue:{}", user_id);
+        let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = message_json.as_bytes();
         let _: () = self.client.lpush(&key, message_bytes).await?;
         let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
@@ -90,7 +94,7 @@ impl MessageQueue {
         Ok(())
     }
     pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
-        let key = format!("queue:{}", user_id);
+        let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let messages: Vec<Vec<u8>> = self.client.lrange(&key, 0, -1).await?;
         let total_messages = messages.len();
         if total_messages == 0 {
@@ -122,7 +126,7 @@ impl MessageQueue {
     }
     #[allow(dead_code)]
     pub async fn has_messages(&mut self, user_id: &str) -> Result<bool> {
-        let key = format!("queue:{}", user_id);
+        let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let count: i32 = self.client.llen(&key).await?;
         Ok(count > 0)
     }
@@ -414,7 +418,7 @@ impl MessageQueue {
     /// Polls the delivery queue for this server instance
     /// Returns a list of message payloads (as bytes) that should be delivered
     pub async fn poll_delivery_queue(&mut self, server_instance_id: &str) -> Result<Vec<Vec<u8>>> {
-        let key = format!("delivery_queue:{}", server_instance_id);
+        let key = format!("{}{}", self.delivery_queue_prefix, server_instance_id);
         let processing_key = format!("processing_queue:{}:{}", server_instance_id, uuid::Uuid::new_v4());
 
         // Atomically move all messages from the delivery queue to a temporary processing queue
