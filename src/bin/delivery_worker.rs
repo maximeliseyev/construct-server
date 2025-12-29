@@ -23,9 +23,7 @@ async fn main() -> Result<()> {
 
     // Initialize tracing
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            config.rust_log.clone(),
-        ))
+        .with(tracing_subscriber::EnvFilter::new(config.rust_log.clone()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -65,7 +63,7 @@ async fn main() -> Result<()> {
         .context("Failed to subscribe to user_online_notifications channel")?;
 
     info!("========================================");
-    info!("📬 Delivery Worker Started");
+    info!("Delivery Worker Started");
     info!("========================================");
     info!("Channel: {}", config.online_channel);
     info!("Offline queue prefix: {}", config.offline_queue_prefix);
@@ -141,27 +139,29 @@ async fn process_offline_messages(
     let mut moved_count = 0;
 
     loop {
-        let result: Result<Vec<u8>, _> = conn.lmove(&queue_key, &delivery_key, Direction::Left, Direction::Right).await;
+        let result: Result<Vec<u8>, _> = conn
+            .lmove(&queue_key, &delivery_key, Direction::Left, Direction::Right)
+            .await;
+
         match result {
-            Ok(message) => {
-                if message.is_empty() {
-                    // LMOVE returns an empty bulk reply when the source key does not exist.
-                    break;
-                }
+            Ok(_) => {
+                // Message moved successfully, continue loop
                 moved_count += 1;
             }
             Err(e) => {
-                // Check if the error indicates that the source key is empty
-                if e.to_string().contains("source key is empty") {
+                // Check if the error is because the source queue is empty
+                if e.kind() == redis::ErrorKind::Nil {
+                    // This is the expected and correct way to finish
                     break;
                 }
+                
+                // For any other Redis error, log it and break the loop
+                // to prevent getting stuck in a tight loop on a persistent error.
                 error!(
                     error = %e,
                     user_id = %user_id,
                     "Failed to move message from offline queue to delivery queue"
                 );
-                // Decide on error handling strategy: continue, break, or return error
-                // For now, we'll break and log the number of messages moved.
                 break;
             }
         }
