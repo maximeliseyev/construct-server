@@ -62,9 +62,7 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to subscribe to user_online_notifications channel")?;
 
-    info!("========================================");
     info!("Delivery Worker Started");
-    info!("========================================");
     info!("Channel: {}", config.online_channel);
     info!("Offline queue prefix: {}", config.offline_queue_prefix);
     info!("Delivery queue prefix: {}", config.delivery_queue_prefix);
@@ -145,16 +143,12 @@ async fn process_offline_messages(
 
         match result {
             Ok(Some(_)) => {
-                // Message moved successfully, continue loop
                 moved_count += 1;
             }
             Ok(None) => {
-                // Source list was empty, this is the expected way to finish
                 break;
             }
             Err(e) => {
-                // For any Redis error, log it and break the loop
-                // to prevent getting stuck in a tight loop on a persistent error.
                 error!(
                     error = %e,
                     user_id = %user_id,
@@ -172,13 +166,13 @@ async fn process_offline_messages(
             server_instance_id = %server_instance_id,
             queue_key = %queue_key,
             delivery_key = %delivery_key,
-            "✅ Moved offline messages to delivery queue"
+            "Moved offline messages to delivery queue"
         );
     } else {
         info!(
             user_id = %user_id,
             queue_key = %queue_key,
-            "📭 No offline messages to deliver"
+            "No offline messages to deliver"
         );
     }
 
