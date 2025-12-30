@@ -25,6 +25,7 @@ pub mod e2e;
 pub mod db;
 pub mod handlers;
 pub mod health;
+pub mod kafka;
 pub mod message;
 pub mod metrics;
 pub mod queue;
