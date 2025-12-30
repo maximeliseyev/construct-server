@@ -43,6 +43,9 @@ redis = { version = "1.0", features = ["tokio-comp", "connection-manager", "toki
 tokio-native-tls = "0.3.1"
 native-tls = "0.2.14"
 
+# Kafka (message broker for reliable delivery)
+rdkafka = { version = "0.36", features = ["cmake-build", "ssl", "sasl"] }
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

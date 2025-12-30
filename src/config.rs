@@ -25,6 +25,27 @@ pub struct SecurityConfig {
     pub rate_limit_block_duration_seconds: i64,
 }
 
+/// Kafka configuration for reliable message delivery
+#[derive(Clone, Debug)]
+pub struct KafkaConfig {
+    /// Whether Kafka is enabled (false = Redis-only mode for testing/rollback)
+    pub enabled: bool,
+    /// Comma-separated list of Kafka brokers (e.g., "kafka1:9092,kafka2:9092")
+    pub brokers: String,
+    /// Kafka topic name for messages
+    pub topic: String,
+    /// Consumer group ID for delivery workers
+    pub consumer_group: String,
+    /// SSL/TLS enabled
+    pub ssl_enabled: bool,
+    /// SASL mechanism (e.g., "SCRAM-SHA-256", "PLAIN")
+    pub sasl_mechanism: Option<String>,
+    /// SASL username
+    pub sasl_username: Option<String>,
+    /// SASL password
+    pub sasl_password: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
@@ -43,6 +64,7 @@ pub struct Config {
     pub rust_log: String,
     pub logging: LoggingConfig,
     pub security: SecurityConfig,
+    pub kafka: KafkaConfig,
 }
 
 impl Config {
@@ -150,6 +172,25 @@ impl Config {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(3600),
+            },
+            kafka: KafkaConfig {
+                enabled: std::env::var("KAFKA_ENABLED")
+                    .unwrap_or_else(|_| "false".to_string())
+                    .parse()
+                    .unwrap_or(false),
+                brokers: std::env::var("KAFKA_BROKERS")
+                    .unwrap_or_else(|_| "localhost:9092".to_string()),
+                topic: std::env::var("KAFKA_TOPIC")
+                    .unwrap_or_else(|_| "construct-messages".to_string()),
+                consumer_group: std::env::var("KAFKA_CONSUMER_GROUP")
+                    .unwrap_or_else(|_| "construct-delivery-workers".to_string()),
+                ssl_enabled: std::env::var("KAFKA_SSL_ENABLED")
+                    .unwrap_or_else(|_| "false".to_string())
+                    .parse()
+                    .unwrap_or(false),
+                sasl_mechanism: std::env::var("KAFKA_SASL_MECHANISM").ok(),
+                sasl_username: std::env::var("KAFKA_SASL_USERNAME").ok(),
+                sasl_password: std::env::var("KAFKA_SASL_PASSWORD").ok(),
             },
         })
     }
