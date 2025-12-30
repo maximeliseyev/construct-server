@@ -4,7 +4,6 @@ mod key_rotation;
 pub mod keys;
 pub mod messages;
 pub mod session;
-mod users;
 mod ws_messages;
 
 use crate::context::AppContext;
@@ -89,12 +88,8 @@ pub async fn handle_websocket(
                                 .await;
                             }
 
-                            Ok(ClientMessage::SearchUsers(data)) => {
-                                users::handle_search_users(&mut handler, &ctx, data.query).await;
-                            }
-
                             Ok(ClientMessage::GetPublicKey(data)) => {
-                                users::handle_get_public_key(&mut handler, &ctx, data.user_id).await;
+                                keys::handle_get_public_key(&mut handler, &ctx, data.user_id).await;
                             }
 
                             Ok(ClientMessage::SendMessage(msg)) => {

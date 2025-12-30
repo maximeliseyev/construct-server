@@ -88,11 +88,6 @@ pub struct ConnectData {
     pub session_token: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchUsersData {
-    pub query: String,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -134,7 +129,6 @@ pub enum ClientMessage {
     Register(RegisterData),
     Login(LoginData),
     Connect(ConnectData),
-    SearchUsers(SearchUsersData),
     GetPublicKey(GetPublicKeyData),
     SendMessage(ChatMessage),
     RotatePrekey(RotatePrekeyData),
@@ -171,11 +165,6 @@ pub struct ConnectSuccessData {
     pub username: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchResultsData {
-    pub users: Vec<crate::db::PublicUser>,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -219,7 +208,6 @@ pub enum ServerMessage {
     LoginSuccess(LoginSuccessData),
     ConnectSuccess(ConnectSuccessData),
     SessionExpired,
-    SearchResults(SearchResultsData),
     PublicKeyBundle(PublicKeyBundleData),
     Message(ChatMessage),
     EncryptedV3(crate::e2e::EncryptedMessageV3), // New variant for API v3 encrypted messages
