@@ -3,7 +3,6 @@ use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bcrypt::{DEFAULT_COST, hash};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
@@ -71,50 +70,7 @@ pub async fn get_user_by_id(pool: &DbPool, user_id: &Uuid) -> Result<Option<User
     Ok(user)
 }
 
-// Helper module для сериализации UUID как строки
-mod uuid_as_string {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use uuid::Uuid;
 
-    pub fn serialize<S>(uuid: &Uuid, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&uuid.to_string())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Uuid::parse_str(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct PublicUser {
-    #[serde(with = "uuid_as_string")]
-    pub id: Uuid,
-    pub username: String,
-}
-
-pub async fn search_users_by_username(pool: &DbPool, query: &str) -> Result<Vec<PublicUser>> {
-    let users = sqlx::query_as::<_, PublicUser>(
-        r#"
-        SELECT id, username
-        FROM users
-        WHERE username ILIKE $1
-        LIMIT 10
-        "#,
-    )
-    .bind(format!("%{}%", query))
-    .fetch_all(pool)
-    .await?;
-
-    Ok(users)
-}
 
 pub async fn verify_password(user: &User, password: &str) -> Result<bool> {
     Ok(bcrypt::verify(password, &user.password_hash)?)
