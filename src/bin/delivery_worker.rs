@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use construct_server::config::Config;
 use futures_util::stream::StreamExt;
-use redis::{AsyncCommands, Direction};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -134,30 +133,35 @@ async fn process_offline_messages(
 ) -> Result<()> {
     let queue_key = format!("{}{}", config.offline_queue_prefix, user_id);
     let delivery_key = format!("{}{}", config.delivery_queue_prefix, server_instance_id);
-    let mut moved_count = 0;
 
-    loop {
-        let result: Result<Option<Vec<u8>>, _> = conn
-            .lmove(&queue_key, &delivery_key, Direction::Left, Direction::Right)
-            .await;
+    // Use Lua script to atomically move all messages from offline queue to delivery queue
+    // and publish notification to the server instance
+    // This replaces the loop of LMOVE operations with a single atomic operation
+    let notification_channel = format!("delivery_notification:{}", server_instance_id);
+    let script = redis::Script::new(
+        r"
+        local queue_key = KEYS[1]
+        local delivery_key = KEYS[2]
+        local notification_channel = ARGV[1]
+        local messages = redis.call('LRANGE', queue_key, 0, -1)
+        local count = #messages
+        if count > 0 then
+            for i = 1, count do
+                redis.call('RPUSH', delivery_key, messages[i])
+            end
+            redis.call('DEL', queue_key)
+            redis.call('PUBLISH', notification_channel, tostring(count))
+        end
+        return count
+        "
+    );
 
-        match result {
-            Ok(Some(_)) => {
-                moved_count += 1;
-            }
-            Ok(None) => {
-                break;
-            }
-            Err(e) => {
-                error!(
-                    error = %e,
-                    user_id = %user_id,
-                    "Failed to move message from offline queue to delivery queue"
-                );
-                break;
-            }
-        }
-    }
+    let moved_count: i64 = script
+        .key(&queue_key)
+        .key(&delivery_key)
+        .arg(&notification_channel)
+        .invoke_async(conn)
+        .await?;
 
     if moved_count > 0 {
         info!(

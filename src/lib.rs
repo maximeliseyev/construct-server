@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bytes::Bytes;
+use futures_util::stream::StreamExt;
 use http_body_util::Full;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -169,13 +170,63 @@ fn spawn_delivery_listener(
     queue: Arc<Mutex<MessageQueue>>,
     clients: Clients,
     server_instance_id: String,
+    config: Arc<Config>,
 ) {
+    let redis_url = config.redis_url.clone();
+    let poll_interval = config.delivery_poll_interval_ms;
+
     tokio::spawn(async move {
         tracing::info!("📬 Delivery listener started for instance: {}", server_instance_id);
 
+        // Create a separate Redis client for Pub/Sub
+        let redis_client = match redis::Client::open(redis_url.as_str()) {
+            Ok(client) => client,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to create Redis client for Pub/Sub");
+                return;
+            }
+        };
+
+        let mut pubsub_conn = match redis_client.get_async_pubsub().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to connect to Redis Pub/Sub");
+                return;
+            }
+        };
+
+        let notification_channel = format!("delivery_notification:{}", server_instance_id);
+        if let Err(e) = pubsub_conn.subscribe(&notification_channel).await {
+            tracing::error!(error = %e, channel = %notification_channel, "Failed to subscribe to notification channel");
+            return;
+        }
+
+        tracing::info!(channel = %notification_channel, "Subscribed to Redis Pub/Sub notifications");
+
+        // Use a notify to trigger immediate polling from pub/sub
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notify_clone = notify.clone();
+
+        // Spawn a task to listen for pub/sub notifications
+        let _pubsub_listener = tokio::spawn(async move {
+            let mut stream = pubsub_conn.on_message();
+            while let Some(_msg) = stream.next().await {
+                tracing::debug!("Received delivery notification via Pub/Sub");
+                notify_clone.notify_one();
+            }
+            tracing::warn!("Pub/Sub stream ended unexpectedly");
+        });
+
         loop {
-            // Poll every 100ms
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            // Wait for either pub/sub notification or periodic polling interval
+            tokio::select! {
+                _ = notify.notified() => {
+                    tracing::debug!("Triggered poll by Pub/Sub notification");
+                }
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(poll_interval)) => {
+                    tracing::trace!("Triggered poll by periodic interval");
+                }
+            }
 
             // Poll the delivery queue
             let messages = {
@@ -325,7 +376,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Spawn background task to listen for messages from delivery worker
-    spawn_delivery_listener(queue.clone(), clients.clone(), server_instance_id.clone());
+    spawn_delivery_listener(queue.clone(), clients.clone(), server_instance_id.clone(), app_config.clone());
 
     let http_server_config = app_config.as_ref().clone();
     let websocket_server = run_websocket_server(app_context, listener);

@@ -26,7 +26,7 @@
 use crate::e2e::UploadableKeyBundle;
 use crate::message::ChatMessage;
 use anyhow::Result;
-use redis::{AsyncCommands, Client, cmd, Direction};
+use redis::{AsyncCommands, Client, cmd};
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
@@ -419,37 +419,22 @@ impl MessageQueue {
     /// Returns a list of message payloads (as bytes) that should be delivered
     pub async fn poll_delivery_queue(&mut self, server_instance_id: &str) -> Result<Vec<Vec<u8>>> {
         let key = format!("{}{}", self.delivery_queue_prefix, server_instance_id);
-        let processing_key = format!("processing_queue:{}:{}", server_instance_id, uuid::Uuid::new_v4());
 
-        // Atomically move all messages from the delivery queue to a temporary processing queue
-        loop {
-            let result: Result<Vec<u8>, _> = self.client.lmove(&key, &processing_key, Direction::Left, Direction::Right).await;
-            match result {
-                Ok(message) => {
-                    if message.is_empty() {
-                        // LMOVE returns an empty bulk reply when the source key does not exist.
-                        break;
-                    }
-                }
-                Err(e) => {
-                    if e.to_string().contains("source key is empty") {
-                        break;
-                    }
-                    // If we fail to move messages, we should probably clean up the processing queue
-                    // to avoid partial processing.
-                    let _: Result<(), _> = self.client.del(&processing_key).await;
-                    return Err(anyhow::anyhow!("Failed to move messages to processing queue: {}", e));
-                }
-            }
-        }
+        // Use Lua script to atomically get all messages and delete the queue
+        // This replaces the loop of LMOVE operations with a single atomic operation
+        let script = redis::Script::new(
+            r"
+            local messages = redis.call('LRANGE', KEYS[1], 0, -1)
+            if #messages > 0 then
+                redis.call('DEL', KEYS[1])
+            end
+            return messages
+            "
+        );
 
-        // Get all messages from the processing queue
-        let messages: Vec<Vec<u8>> = self.client.lrange(&processing_key, 0, -1).await?;
+        let messages: Vec<Vec<u8>> = script.key(&key).invoke_async(&mut self.client).await?;
 
         if !messages.is_empty() {
-            // Delete the processing queue after retrieving messages
-            let _: () = self.client.del(&processing_key).await?;
-
             tracing::debug!(
                 server_instance_id = %server_instance_id,
                 count = messages.len(),
