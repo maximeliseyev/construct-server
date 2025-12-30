@@ -39,6 +39,7 @@ pub struct Config {
     pub online_channel: String,
     pub offline_queue_prefix: String,
     pub delivery_queue_prefix: String,
+    pub delivery_poll_interval_ms: u64,
     pub rust_log: String,
     pub logging: LoggingConfig,
     pub security: SecurityConfig,
@@ -85,6 +86,10 @@ impl Config {
                 .unwrap_or_else(|_| "queue:".to_string()),
             delivery_queue_prefix: std::env::var("DELIVERY_QUEUE_PREFIX")
                 .unwrap_or_else(|_| "delivery_queue:".to_string()),
+            delivery_poll_interval_ms: std::env::var("DELIVERY_POLL_INTERVAL_MS")
+                .ok()
+                .and_then(|d| d.parse().ok())
+                .unwrap_or(1000),
             rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
             logging: LoggingConfig {
                 enable_message_metadata: std::env::var("LOG_MESSAGE_METADATA")
