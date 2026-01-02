@@ -2,6 +2,7 @@ use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::handlers::session::Clients;
+use crate::kafka::MessageProducer;
 use crate::queue::MessageQueue;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -15,6 +16,8 @@ pub struct AppContext {
     pub auth_manager: Arc<AuthManager>,
     pub clients: Clients,
     pub config: Arc<Config>,
+    /// Kafka producer for reliable message delivery (Phase 1+)
+    pub kafka_producer: Arc<MessageProducer>,
     /// Unique identifier for this server instance (for delivery worker coordination)
     pub server_instance_id: String,
 }
@@ -27,6 +30,7 @@ impl AppContext {
         auth_manager: Arc<AuthManager>,
         clients: Clients,
         config: Arc<Config>,
+        kafka_producer: Arc<MessageProducer>,
         server_instance_id: String,
     ) -> Self {
         Self {
@@ -35,6 +39,7 @@ impl AppContext {
             auth_manager,
             clients,
             config,
+            kafka_producer,
             server_instance_id,
         }
     }

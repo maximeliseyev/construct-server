@@ -36,6 +36,7 @@ use config::Config;
 use context::AppContext;
 use db::DbPool;
 use handlers::{handle_websocket, session::Clients};
+use kafka::MessageProducer;
 use queue::MessageQueue;
 
 type HttpResult = Result<Response<Full<Bytes>>, Infallible>;
@@ -47,12 +48,14 @@ async fn http_handler(
     auth_manager: Arc<AuthManager>,
     clients: Clients,
     config: Arc<Config>,
+    kafka_producer: Arc<MessageProducer>,
+    server_instance_id: String,
 ) -> HttpResult {
     let path = req.uri().path().to_string();
     let method = req.method().clone();
 
     let response = match (method.as_str(), path.as_str()) {
-        ("GET", "/health") => match health::health_check(&db_pool, queue).await {
+        ("GET", "/health") => match health::health_check(&db_pool, queue, kafka_producer).await {
             Ok(_) => Response::new(Full::new(Bytes::from("OK"))),
             Err(e) => {
                 tracing::error!("Health check failed: {}", e);
@@ -78,18 +81,18 @@ async fn http_handler(
 
         // API routes
         ("POST", "/keys/upload") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
             let (parts, body) = req.into_parts();
             handlers::keys::handle_upload_keys(&ctx, &parts.headers, body).await
         },
         ("GET", p) if p.starts_with("/keys/") => {
             let user_id = p.trim_start_matches("/keys/");
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
             let (parts, _) = req.into_parts();
             handlers::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
         },
         ("POST", "/messages/send") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, String::new());
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
             let (parts, body) = req.into_parts();
             handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
         },
@@ -109,6 +112,8 @@ pub async fn run_http_server(
     queue: Arc<Mutex<MessageQueue>>,
     auth_manager: Arc<AuthManager>,
     clients: Clients,
+    kafka_producer: Arc<MessageProducer>,
+    server_instance_id: String,
 ) -> Result<()> {
     let http_addr = format!("0.0.0.0:{}", config.health_port);
     let listener = TcpListener::bind(&http_addr).await?;
@@ -125,6 +130,8 @@ pub async fn run_http_server(
         let auth_manager_clone = auth_manager.clone();
         let clients_clone = clients.clone();
         let config_clone = config.clone();
+        let kafka_producer_clone = kafka_producer.clone();
+        let server_instance_id_clone = server_instance_id.clone();
 
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
@@ -135,6 +142,8 @@ pub async fn run_http_server(
                     auth_manager_clone.clone(),
                     clients_clone.clone(),
                     config_clone.clone(),
+                    kafka_producer_clone.clone(),
+                    server_instance_id_clone.clone(),
                 )
             });
 
@@ -353,6 +362,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let queue = Arc::new(Mutex::new(message_queue));
 
+    // Initialize Kafka producer (Phase 1: Foundation)
+    tracing::info!("Initializing Kafka producer...");
+    let kafka_producer = MessageProducer::new(
+        &app_config.kafka.brokers,
+        app_config.kafka.topic.clone(),
+        app_config.kafka.enabled,
+    )?;
+    tracing::info!(
+        enabled = app_config.kafka.enabled,
+        brokers = %app_config.kafka.brokers,
+        topic = %app_config.kafka.topic,
+        "Kafka producer initialized"
+    );
+    let kafka_producer = Arc::new(kafka_producer);
+
     // Create auth manager
     let auth_manager = Arc::new(AuthManager::new(&app_config));
 
@@ -373,6 +397,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         auth_manager.clone(),
         clients.clone(),
         app_config.clone(),
+        kafka_producer.clone(),
         server_instance_id.clone(),
     );
 
@@ -387,6 +412,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         queue.clone(),
         auth_manager,
         clients,
+        kafka_producer.clone(),
+        server_instance_id.clone(),
     );
 
     tokio::select! {
