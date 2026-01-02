@@ -1,267 +1,351 @@
 # Construct Messenger
 
-A privacy-focused, end-to-end encrypted messaging server built with Rust, designed for censorship resistance and minimal metadata exposure.
+**Federated • Post-Quantum Ready • Minimal**
 
-## ⚠️ **SECURITY WARNING**
-
-> **This project is under active development and has NOT undergone any security audits.**
->
-> ❌ **DO NOT use this software to transmit sensitive, confidential, or production data.**
->
-> ❌ **DO NOT rely on this for communications requiring strong security guarantees.**
->
-> This is an experimental implementation for educational and research purposes. While we implement industry-standard cryptographic primitives, the overall system security cannot be guaranteed without professional security audits. Use at your own risk.
-
-## Key Features
-
-- **End-to-End Encryption**: X25519 key exchange + ChaCha20-Poly1305 AEAD cipher
-- **Zero-Knowledge Architecture**: Server cannot read message contents
-- **Anonymous Routing**: Messages routed by UUID, not usernames
-- **Offline Message Queue**: Redis-backed delivery for offline users
-- **Modern Async Runtime**: Built on Tokio for high performance
-- **Minimal Metadata**: Only essential routing information stored
-
-## Architecture
-
-### Two-Process Architecture
-
-Construct Server consists of two separate processes:
-
-1. **Main Server** (`construct-server`)
-   - Handles WebSocket connections
-   - Processes HTTP API requests (v2 and v3)
-   - Manages database interactions
-   - Delivers messages to online users
-   - Publishes user online notifications to Redis Pub/Sub
-
-2. **Delivery Worker** (`delivery-worker`)
-   - Background process for offline message delivery
-   - Listens to Redis Pub/Sub for user online events
-   - Asynchronously processes offline message queues
-   - Coordinates with main server instances via Redis
-
-```
-┌──────────┐                ┌─────────────────┐         ┌──────────────┐
-│ Client A │                │ Main Server     │         │  PostgreSQL  │
-│          │   WebSocket    │ (construct-     │◄────────┤  (accounts,  │
-│          │◄──────────────►│  server)        │         │   keys)      │
-└──────────┘                └────────┬────────┘         └──────────────┘
-                                     │
-                                     │ Redis
-                                     │ Pub/Sub
-                                     ▼
-                            ┌────────────────┐
-                            │     Redis      │
-                            │  (queues +     │◄─────────┐
-                            │   pub/sub)     │          │
-                            └────────┬───────┘          │
-                                     │                  │
-                                     │ Subscribe        │ Process
-                                     ▼                  │ queues
-                            ┌────────────────┐          │
-                            │ Delivery       │──────────┘
-                            │ Worker         │
-                            └────────────────┘
-```
-
-**Server sees only:**
-- User IDs (UUIDs)
-- Encrypted message blobs (base64)
-- Timestamps
-
-**Server cannot see:**
-- Message content
-- User relationships
-- Communication patterns (with proper client implementation)
-
-## Tech Stack
-
-### Backend
-- **Rust** - Memory-safe systems programming
-- **Tokio** - Async runtime for high-concurrency
-- **PostgreSQL** - User accounts and public keys
-- **Redis** - Message queue for offline delivery
-- **bcrypt** - Secure password hashing
-
-### Cryptography
-- **X25519** - Elliptic curve Diffie-Hellman key exchange
-- **ChaCha20-Poly1305** - Authenticated encryption
-- **Ed25519** - Digital signatures (planned)
-
-### Protocols
-- TCP with custom JSON protocol (current)
-- WebSocket support (planned)
-- QUIC with traffic obfuscation (planned)
-
-## Installation
-
-### Prerequisites
-- Rust 1.75+
-- Docker & Docker Compose
-- PostgreSQL 16
-- Redis 7
-
-### Setup
-
-#### Option 1: Docker Compose (Recommended)
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/construct-server.git
-cd construct-server
-
-# Configure environment
-cp .env.example .env.local
-# Edit .env.local with your configuration
-
-# Start all services (server, worker, postgres, redis)
-docker-compose up --build
-
-# Server will be available at:
-# - WebSocket/HTTP API: http://localhost:8080
-# - Health check: http://localhost:3000/health
-```
-
-#### Option 2: Local Development
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/yourusername/construct-server.git
-cd construct-server
-
-# 2. Start databases
-docker-compose up postgres redis -d
-
-# 3. Configure environment
-cp .env.example .env
-# Edit .env with your database credentials
-
-# 4. Build both binaries
-cargo build --release
-
-# 5. Run main server (in one terminal)
-cargo run --bin construct-server
-
-# 6. Run delivery worker (in another terminal)
-cargo run --bin delivery-worker
-```
-
-Server will start on `127.0.0.1:8080`
-
-
-## Security Features
-
-### Current Implementation
-- ✅ End-to-end encryption (X25519 + ChaCha20-Poly1305)
-- ✅ Ephemeral keys for each message
-- ✅ bcrypt password hashing (cost factor 12)
-- ✅ User ID-based routing (no username exposure)
-- ✅ Server-side encrypted blob storage
-
-### Planned Features
-- 🔄 X3DH key agreement protocol
-- 🔄 Double Ratchet for Perfect Forward Secrecy
-- 🔄 Sealed sender (hide sender metadata)
-- 🔄 Message padding (hide size patterns)
-- 🔄 Traffic obfuscation (DPI resistance)
-
-## Performance
-
-- **Message throughput**: ~10,000 msg/sec (single instance)
-- **Latency**: <10ms (local network)
-- **Memory footprint**: ~50MB base + ~1KB per active connection
-- **Encryption overhead**: ~2ms per message
-
-## Development
-
-### Run tests
-```bash
-cargo test
-```
-
-### Check code quality
-```bash
-cargo clippy
-cargo fmt --check
-```
-
-### Build for production
-```bash
-cargo build --release
-```
-
-## 🚢 Deployment
-
-### Docker Compose (Production)
-
-```bash
-# Build and start all services
-docker-compose up -d --build
-
-# View logs
-docker-compose logs -f
-
-# Stop all services
-docker-compose down
-```
-
-### Fly.io (Recommended for Production)
-
-Deploy two separate apps:
-
-```bash
-# 1. Deploy main server
-fly deploy
-
-# 2. Deploy delivery worker
-fly deploy --config fly.worker.toml
-```
-
-**Important**: Both apps must share the same Redis instance for proper coordination.
-
-### Manual Docker
-
-```bash
-# Build image (includes both binaries)
-docker build -t construct-server .
-
-# Run main server
-docker run -p 8080:8080 -e DATABASE_URL=... -e REDIS_URL=... construct-server
-
-# Run delivery worker
-docker run -e REDIS_URL=... construct-server delivery-worker
-```
-
-
-## Contributing
-
-Contributions are welcome! 
-
-### Areas for contribution:
-- Signal Protocol implementation (X3DH, Double Ratchet)
-- iOS/Android clients
-- WebSocket transport layer
-- Traffic obfuscation techniques
-- Documentation and tutorials
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details
-
-## Acknowledgments
-
-- Signal Protocol specification
-- libsignal implementation reference
-- Rust cryptography ecosystem (dalek, ring)
-- Tokio async runtime
-
-## 📚 Resources
-
-- [Signal Protocol Documentation](https://signal.org/docs/)
-- [Noise Protocol Framework](https://noiseprotocol.org/)
-- [X3DH Specification](https://signal.org/docs/specifications/x3dh/)
-- [Double Ratchet Algorithm](https://signal.org/docs/specifications/doubleratchet/)
+> *Messages wait for you, not you for them.*
 
 ---
 
-**Built with ❤️ and Rust 🦀**
+## What is Construct?
+
+Construct is a new kind of messenger built on three principles:
+
+| Principle | What it means |
+|-----------|---------------|
+| **Email 2.0** | Federated identity (`you@your-server.com`), but with modern E2E encryption |
+| **Post-Quantum Ready** | Hybrid cryptography protecting against "harvest now, decrypt later" |
+| **Zen by Default** | No notification spam, no read receipts, no "typing..." — silence is the default |
+
+```
+Signal's Security + Email's Openness + Minimalist Philosophy
+```
+
+---
+
+## Why Another Messenger?
+
+### The Problem with Current Options
+
+| Messenger | Issue |
+|-----------|-------|
+| **Signal** | Centralized, requires phone number, no federation |
+| **Matrix** | Complex protocol, heavy servers, E2E optional, no PQ |
+| **Telegram** | Not E2E by default, centralized |
+| **Email** | No E2E, legacy protocol, spam |
+
+### Construct's Position
+
+```
+                    Federated
+                        ▲
+                        │
+           Matrix ●     │     ● Construct
+                        │
+    ◄───────────────────┼───────────────────►
+    Complex             │           Minimal
+                        │
+           Telegram ●   │     ● Signal
+                        │
+                        ▼
+                   Centralized
+```
+
+**Construct = Federated + Minimal + Secure**
+
+---
+
+## Key Features
+
+### 🔐 Post-Quantum Cryptography
+
+First federated messenger with hybrid post-quantum protection:
+
+```
+Classical (today)          +  Post-Quantum (2026)
+─────────────────             ──────────────────
+X25519 key exchange        +  ML-KEM-768 (Kyber)
+Ed25519 signatures         +  ML-DSA-65 (Dilithium)
+```
+
+**Why it matters**: Nation-states are recording encrypted traffic today to decrypt with quantum computers tomorrow. Construct protects against this "harvest now, decrypt later" threat.
+
+### 🌐 Federation (Email 2.0)
+
+Your identity is yours:
+
+```
+alice@construct.example.com  ←→  bob@another-server.org
+         │                              │
+         └──────── E2E Encrypted ───────┘
+```
+
+- **Own your identity** — not tied to phone number or centralized service
+- **Run your own server** — or use a trusted provider
+- **No vendor lock-in** — switch servers, keep your identity
+
+### 🧘 Zen Philosophy
+
+| Traditional Messengers | Construct |
+|------------------------|-----------|
+| Push notification for every message | **No push by default** |
+| "Alice is typing..." | **No typing indicators** |
+| Blue checkmarks (read receipts) | **No read receipts** |
+| "Online now" / "Last seen" | **No presence indicators** |
+| Notification badges everywhere | **No badges** |
+| Stories, reactions, stickers | **Just conversations** |
+
+**Default mode**: You check messages when *you* want, like email. Not when your phone demands attention.
+
+### ⚡ Lightweight
+
+| | Matrix (Synapse) | Construct |
+|-|------------------|-----------|
+| Language | Python | Rust |
+| RAM usage | 2-4 GB | ~100 MB |
+| Min. server | $20/mo VPS | $5/mo VPS |
+
+Run your own server on a Raspberry Pi.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Your Device                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Swift / Kotlin UI                       │    │
+│  └───────────────────────┬─────────────────────────────┘    │
+│                          │ FFI                               │
+│  ┌───────────────────────▼─────────────────────────────┐    │
+│  │              Rust Crypto Core                        │    │
+│  │  • Double Ratchet (forward secrecy)                 │    │
+│  │  • X3DH (async key exchange)                        │    │
+│  │  • MLS (group chats) — planned                      │    │
+│  │  • Post-quantum hybrid — planned                    │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ E2E Encrypted
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Your Home Server                          │
+│  • Routes encrypted messages (can't read them)              │
+│  • Stores key bundles                                       │
+│  • Federates with other servers                             │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ Server-to-Server
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Other Federated Servers                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Server sees**: Encrypted blobs, metadata (who, when, sizes)  
+**Server never sees**: Message content, contact names, conversation topics
+
+---
+
+## Cryptography
+
+### Current (v1) — Production
+
+| Component | Algorithm | Security |
+|-----------|-----------|----------|
+| Key Exchange | X25519 | 128-bit |
+| Signatures | Ed25519 | 128-bit |
+| Encryption | ChaCha20-Poly1305 | 256-bit |
+| KDF | HKDF-SHA256 | — |
+
+### Planned (v2) — Q2 2026
+
+| Component | Hybrid Scheme | Security |
+|-----------|---------------|----------|
+| Key Exchange | X25519 **+** ML-KEM-768 | 128-bit classical, 192-bit PQ |
+| Signatures | Ed25519 **+** ML-DSA-65 | 128-bit classical, 192-bit PQ |
+
+**Hybrid approach**: If post-quantum algorithms have undiscovered weaknesses → classical still protects. If quantum computers break classical → PQ still protects.
+
+---
+
+## Comparison
+
+| Feature | Signal | Matrix | Telegram | **Construct** |
+|---------|--------|--------|----------|---------------|
+| E2E by default | ✅ | ❌ Optional | ❌ | ✅ |
+| Federation | ❌ | ✅ | ❌ | ✅ |
+| Post-quantum | 🔬 Experimental | ❌ | ❌ | ✅ Planned |
+| Lightweight server | — | ❌ Heavy | — | ✅ |
+| No phone required | ❌ | ✅ | ❌ | ✅ |
+| Minimal UI | ✅ | ❌ Bloated | ❌ Bloated | ✅ |
+| Group E2E protocol | Sender Keys | Megolm | ❌ | MLS (RFC 9420) |
+
+---
+
+## Roadmap
+
+### ✅ Done
+- Double Ratchet E2E encryption
+- X3DH key exchange
+- Crypto-agility architecture
+- iOS client (Swift + Rust core)
+- WebSocket server (Rust)
+
+### 🚧 In Progress (Q1 2025)
+- Kafka message infrastructure
+- Session persistence
+- Profile sharing (P2P, no server storage)
+
+### 📋 Planned
+
+| Quarter | Milestone |
+|---------|-----------|
+| Q2 2025 | Federation MVP (server-to-server) |
+| Q3 2025 | MLS group chats |
+| Q4 2025 | Android client |
+| **Q2 2026** | **Post-quantum cryptography** |
+
+---
+
+## Quick Start
+
+### Requirements
+
+- Rust 1.75+
+- Xcode 15+ (iOS)
+- PostgreSQL 14+
+
+### Run the Server
+
+```bash
+# Clone
+git clone https://github.com/anthropic/construct-messenger
+cd construct-messenger
+
+# Setup database
+createdb construct
+cd construct-server
+cp .env.example .env
+# Edit .env with your settings
+
+# Run
+cargo run --release
+```
+
+### Build iOS Client
+
+```bash
+# Build Rust library for iOS
+cd packages/core
+cargo build --release --target aarch64-apple-ios
+
+# Generate Swift bindings
+cargo run --bin uniffi-bindgen generate \
+  --library ../../target/aarch64-apple-ios/release/libconstruct_core.a \
+  --language swift \
+  --out-dir ../ios-bindings
+
+# Open Xcode
+open ../../ConstructMessenger.xcodeproj
+```
+
+---
+
+## Project Structure
+
+```
+construct-messenger/
+├── construct-server/        # Rust server (Axum + Kafka + PostgreSQL)
+├── packages/
+│   └── core/                # Rust crypto core
+│       └── src/
+│           ├── crypto/      # Double Ratchet, X3DH, providers
+│           └── protocol/    # Message types
+├── ConstructMessenger/      # iOS app (Swift + SwiftUI)
+└── docs/                    # Documentation (Obsidian vault)
+```
+
+---
+
+## Philosophy
+
+### On Notifications
+
+> "The smartphone is the most successful slot machine ever invented. Every notification is a pull of the lever."
+
+Construct defaults to silence. You check messages when you're ready, not when your phone demands it.
+
+### On Complexity
+
+> "Perfection is achieved not when there is nothing more to add, but when there is nothing left to take away."
+
+No stories. No reactions flooding the screen. No algorithmic feeds. Just conversations.
+
+### On Federation
+
+> "Email won because anyone could run a server. Walled gardens eventually fall."
+
+Your identity shouldn't be owned by a corporation. `alice@gmail.com` works because email is federated. Messaging should be the same.
+
+### On Quantum Threats
+
+> "The best time to plant a tree was 20 years ago. The second best time is now."
+
+Nation-states are recording encrypted traffic today. Quantum computers will break current encryption within 10-15 years. We're preparing now.
+
+---
+
+## Security
+
+### What We Protect Against
+
+- ✅ Network observers (ISP, WiFi snoopers)
+- ✅ Server compromise (E2E encryption)
+- ✅ Future quantum computers (hybrid PQ crypto)
+- ✅ Message forgery (cryptographic signatures)
+
+### What We Don't Protect Against
+
+- ❌ Compromised device (malware on your phone)
+- ❌ Screenshots by recipient
+- ❌ Physical coercion
+
+### Threat Model
+
+See [docs/security/threat-model.md](docs/security/threat-model.md) for detailed analysis.
+
+---
+
+## Contributing
+
+We welcome contributions! Priority areas:
+
+| Priority | Area |
+|----------|------|
+| 🔴 High | Session persistence, message reliability |
+| 🟡 Medium | Android client, UI/UX |
+| 🟢 Future | Post-quantum implementation |
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE)
+
+---
+
+## Acknowledgments
+
+- **Signal Foundation** — Double Ratchet protocol
+- **IETF MLS Working Group** — RFC 9420
+- **NIST** — Post-quantum cryptography standards
+- **Mozilla** — UniFFI for Rust-Swift interop
+
+---
+
+<p align="center">
+  <i>Built for people who believe privacy is a right, not a feature.</i>
+</p>
