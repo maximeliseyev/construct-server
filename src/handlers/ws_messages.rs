@@ -46,6 +46,7 @@
 
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
+use crate::kafka::KafkaMessageEnvelope;
 use crate::message::{ChatMessage, ServerMessage};
 use base64::Engine;
 
@@ -185,6 +186,28 @@ pub async fn handle_send_message(
     }
 
     drop(queue);
+
+    // ========================================================================
+    // PHASE 2: Kafka Dual-Write
+    // Write to Kafka BEFORE Redis (source of truth)
+    // ========================================================================
+    let envelope = KafkaMessageEnvelope::from(&msg);
+    if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
+        tracing::warn!(
+            error = %e,
+            message_id = %msg.id,
+            kafka_enabled = ctx.kafka_producer.is_enabled(),
+            "Kafka write failed (dual-write phase, continuing with Redis)"
+        );
+        // In Phase 2 (dual-write), we continue with Redis even if Kafka fails
+        // In Phase 5 (cutover), this would be a hard error
+    } else if ctx.kafka_producer.is_enabled() {
+        tracing::debug!(
+            message_id = %msg.id,
+            "Message persisted to Kafka"
+        );
+    }
+    // ========================================================================
 
     let recipient_tx = {
         let clients_read = ctx.clients.read().await;

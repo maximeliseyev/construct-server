@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Type of message being sent through Kafka
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -193,6 +194,49 @@ impl KafkaMessageEnvelope {
         }
 
         Ok(())
+    }
+}
+
+// ============================================================================
+// Conversions from existing message types
+// ============================================================================
+
+impl From<&crate::message::ChatMessage> for KafkaMessageEnvelope {
+    fn from(msg: &crate::message::ChatMessage) -> Self {
+        // Calculate content hash for deduplication
+        let mut hasher = Sha256::new();
+        hasher.update(msg.id.as_bytes());
+        hasher.update(&msg.ephemeral_public_key);
+        hasher.update(msg.content.as_bytes());
+        let content_hash = format!("{:x}", hasher.finalize());
+
+        Self {
+            message_id: msg.id.clone(),
+            sender_id: msg.from.clone(),
+            recipient_id: msg.to.clone(),
+            timestamp: msg.timestamp as i64,
+            message_type: MessageType::DirectMessage,
+            ephemeral_public_key: Some(base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &msg.ephemeral_public_key,
+            )),
+            message_number: Some(msg.message_number),
+            mls_payload: None,
+            group_id: None,
+            encrypted_payload: msg.content.clone(),
+            content_hash,
+            suite_id: 0, // ChaCha20-Poly1305 (classic Double Ratchet)
+            origin_server: None,
+            federated: false,
+            server_signature: None,
+        }
+    }
+}
+
+// For convenience, also implement From<ChatMessage> (owned)
+impl From<crate::message::ChatMessage> for KafkaMessageEnvelope {
+    fn from(msg: crate::message::ChatMessage) -> Self {
+        Self::from(&msg)
     }
 }
 
