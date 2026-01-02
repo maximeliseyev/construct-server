@@ -232,16 +232,10 @@ docker run -p 8080:8080 -e DATABASE_URL=... -e REDIS_URL=... construct-server
 docker run -e REDIS_URL=... construct-server delivery-worker
 ```
 
-📖 **See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment guide including:**
-- Fly.io step-by-step setup
-- Environment variables reference
-- Scaling and monitoring
-- Troubleshooting guide
-- Production checklist
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+Contributions are welcome! 
 
 ### Areas for contribution:
 - Signal Protocol implementation (X3DH, Double Ratchet)
@@ -271,4 +265,3 @@ MIT License - see [LICENSE](LICENSE) file for details
 ---
 
 **Built with ❤️ and Rust 🦀**
-
