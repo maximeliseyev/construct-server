@@ -5,17 +5,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 
-use crate::config::KafkaConfig;
+use super::config::create_client_config;
 use super::metrics;
 use super::types::KafkaMessageEnvelope;
-use super::config::create_client_config;
+use crate::config::KafkaConfig;
 
 /// Kafka message producer for reliable message delivery
 ///
 /// This producer is configured for:
 /// - At-least-once delivery guarantees
 /// - Idempotent writes (no duplicates within producer session)
-/// - Compression (zstd for encrypted payloads)
+/// - Compression (snappy)
 /// - Low latency (10ms linger)
 pub struct MessageProducer {
     producer: Arc<FutureProducer>,
@@ -33,7 +33,7 @@ impl MessageProducer {
     /// - `acks=all`: Wait for all in-sync replicas to acknowledge.
     /// - `enable.idempotence=true`: Prevent duplicate writes.
     /// - `retries=2147483647`: Retry indefinitely on transient errors.
-    /// - `compression.type=zstd`: Best compression for encrypted data.
+    /// - `compression.type=snappy`: Optimized compression.
     /// - `linger.ms=10`: Small batching window for low latency.
     pub fn new(config: &KafkaConfig) -> Result<Self> {
         if !config.enabled {
@@ -61,7 +61,7 @@ impl MessageProducer {
             .set("max.in.flight.requests.per.connection", "5")
             .set("retries", "2147483647") // Retry indefinitely (i32::MAX)
             // Performance settings
-            .set("compression.type", "zstd") // Best compression for encrypted data
+            .set("compression.type", "snappy")
             .set("linger.ms", "10") // Small batch window for low latency
             .set("batch.size", "16384") // 16KB batches
             // Timeout settings
@@ -70,7 +70,10 @@ impl MessageProducer {
             .create()
             .context("Failed to create Kafka producer")?;
 
-        info!("Kafka producer initialized successfully for topic '{}'", config.topic);
+        info!(
+            "Kafka producer initialized successfully for topic '{}'",
+            config.topic
+        );
 
         Ok(Self {
             producer: Arc::new(producer),
@@ -91,10 +94,7 @@ impl MessageProducer {
     /// # Returns
     /// * `Ok((partition, offset))` - Successfully written to Kafka
     /// * `Err(anyhow::Error)` - Failed to write (should be logged/alerted)
-    pub async fn send_message(
-        &self,
-        envelope: &KafkaMessageEnvelope,
-    ) -> Result<(i32, i64)> {
+    pub async fn send_message(&self, envelope: &KafkaMessageEnvelope) -> Result<(i32, i64)> {
         // Skip if Kafka disabled (Phase 1 testing)
         if !self.enabled {
             return Ok((-1, -1)); // Dummy partition/offset
@@ -104,21 +104,23 @@ impl MessageProducer {
         envelope.validate().context("Invalid message envelope")?;
 
         // Serialize to JSON
-        let payload = serde_json::to_vec(envelope)
-            .context("Failed to serialize message envelope")?;
+        let payload =
+            serde_json::to_vec(envelope).context("Failed to serialize message envelope")?;
 
         // Partition key: recipient_id (ensures ordering per user/group)
         let key = envelope.recipient_id.as_bytes();
 
         // Create Kafka record
-        let record = FutureRecord::to(&self.topic)
-            .key(key)
-            .payload(&payload);
+        let record = FutureRecord::to(&self.topic).key(key).payload(&payload);
 
         // Send with timeout (2 seconds for async feedback)
         let start = std::time::Instant::now();
 
-        match self.producer.send(record, Timeout::After(Duration::from_secs(2))).await {
+        match self
+            .producer
+            .send(record, Timeout::After(Duration::from_secs(2)))
+            .await
+        {
             Ok((partition, offset)) => {
                 let latency = start.elapsed();
 
@@ -176,7 +178,8 @@ impl MessageProducer {
 
         info!("Flushing Kafka producer (timeout: {:?})", timeout);
 
-        self.producer.flush(Timeout::After(timeout))
+        self.producer
+            .flush(Timeout::After(timeout))
             .context("Failed to flush Kafka producer")?;
 
         info!("Kafka producer flushed successfully");

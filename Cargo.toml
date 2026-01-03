@@ -44,7 +44,7 @@ tokio-native-tls = "0.3.1"
 native-tls = "0.2.14"
 
 # Kafka (message broker for reliable delivery)
-rdkafka = { version = "0.36", features = ["zstd","cmake-build", "ssl", "sasl"] }
+rdkafka = { version = "0.36", features = ["cmake-build", "ssl", "sasl"] }
 
 # APNs (Apple Push Notification service)
 a2 = "0.10"
