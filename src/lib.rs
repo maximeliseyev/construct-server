@@ -373,11 +373,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize Kafka producer (Phase 1: Foundation)
     tracing::info!("Initializing Kafka producer...");
-    let kafka_producer = MessageProducer::new(
-        &app_config.kafka.brokers,
-        app_config.kafka.topic.clone(),
-        app_config.kafka.enabled,
-    )?;
+    let kafka_producer = MessageProducer::new(&app_config.kafka)?;
     tracing::info!(
         enabled = app_config.kafka.enabled,
         brokers = %app_config.kafka.brokers,

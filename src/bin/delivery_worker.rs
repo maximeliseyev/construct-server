@@ -107,12 +107,8 @@ async fn main() -> Result<()> {
 /// Kafka-based delivery worker (Phase 3+)
 async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
     // Initialize Kafka consumer
-    let consumer = MessageConsumer::new(
-        &state.config.kafka.brokers,
-        state.config.kafka.topic.clone(),
-        &state.config.kafka.consumer_group,
-    )
-    .context("Failed to initialize Kafka consumer")?;
+    let consumer = MessageConsumer::new(&state.config.kafka)
+        .context("Failed to initialize Kafka consumer")?;
 
     info!("Kafka consumer initialized successfully");
     info!("Polling messages from Kafka topic: {}", state.config.kafka.topic);

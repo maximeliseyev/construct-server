@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
-use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use rdkafka::util::Timeout;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 
+use crate::config::KafkaConfig;
 use super::metrics;
 use super::types::KafkaMessageEnvelope;
+use super::config::create_client_config;
 
 /// Kafka message producer for reliable message delivery
 ///
@@ -23,41 +24,37 @@ pub struct MessageProducer {
 }
 
 impl MessageProducer {
-    /// Create a new Kafka producer
+    /// Create a new Kafka producer from the application configuration.
     ///
     /// # Arguments
-    /// * `brokers` - Comma-separated list of Kafka brokers (e.g., "kafka1:9092,kafka2:9092")
-    /// * `topic` - Kafka topic name (e.g., "construct-messages")
-    /// * `enabled` - Whether Kafka is enabled (false = no-op producer for testing)
+    /// * `config` - The Kafka configuration struct.
     ///
     /// # Configuration
-    /// - `acks=all`: Wait for all in-sync replicas to acknowledge
-    /// - `enable.idempotence=true`: Prevent duplicate writes
-    /// - `retries=2147483647`: Retry indefinitely on transient errors
-    /// - `compression.type=zstd`: Best compression for encrypted data
-    /// - `linger.ms=10`: Small batching window for low latency
-    pub fn new(brokers: &str, topic: String, enabled: bool) -> Result<Self> {
-        if !enabled {
+    /// - `acks=all`: Wait for all in-sync replicas to acknowledge.
+    /// - `enable.idempotence=true`: Prevent duplicate writes.
+    /// - `retries=2147483647`: Retry indefinitely on transient errors.
+    /// - `compression.type=zstd`: Best compression for encrypted data.
+    /// - `linger.ms=10`: Small batching window for low latency.
+    pub fn new(config: &KafkaConfig) -> Result<Self> {
+        if !config.enabled {
             info!("Kafka producer disabled (KAFKA_ENABLED=false)");
-            // Create a dummy producer (won't be used)
-            let producer = ClientConfig::new()
-                .set("bootstrap.servers", "localhost:9092")
+            // Create a dummy producer, which requires a minimal config.
+            let producer = create_client_config(config)?
                 .create()
                 .context("Failed to create disabled Kafka producer")?;
 
             return Ok(Self {
                 producer: Arc::new(producer),
-                topic,
+                topic: config.topic.clone(),
                 enabled: false,
             });
         }
 
-        info!("Initializing Kafka producer");
-        info!("Brokers: {}", brokers);
-        info!("Topic: {}", topic);
+        info!("Initializing Kafka producer...");
+        let mut client_config = create_client_config(config)?;
 
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
+        // Producer-specific settings
+        let producer: FutureProducer = client_config
             // Reliability settings
             .set("acks", "all") // Wait for all in-sync replicas
             .set("enable.idempotence", "true") // Exactly-once semantics within producer
@@ -73,11 +70,11 @@ impl MessageProducer {
             .create()
             .context("Failed to create Kafka producer")?;
 
-        info!("Kafka producer initialized successfully");
+        info!("Kafka producer initialized successfully for topic '{}'", config.topic);
 
         Ok(Self {
             producer: Arc::new(producer),
-            topic,
+            topic: config.topic.clone(),
             enabled: true,
         })
     }
@@ -201,14 +198,21 @@ impl Clone for MessageProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::KafkaConfig;
 
     #[test]
     fn test_disabled_producer_creation() {
-        let producer = MessageProducer::new(
-            "localhost:9092",
-            "test-topic".to_string(),
-            false, // disabled
-        );
+        let config = KafkaConfig {
+            enabled: false,
+            brokers: "localhost:9092".to_string(),
+            topic: "test-topic".to_string(),
+            consumer_group: "test-group".to_string(),
+            ssl_enabled: false,
+            sasl_mechanism: None,
+            sasl_username: None,
+            sasl_password: None,
+        };
+        let producer = MessageProducer::new(&config);
 
         assert!(producer.is_ok());
         assert!(!producer.unwrap().is_enabled());
@@ -216,11 +220,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_producer_send() {
-        let producer = MessageProducer::new(
-            "localhost:9092",
-            "test-topic".to_string(),
-            false,
-        ).unwrap();
+        let config = KafkaConfig {
+            enabled: false,
+            brokers: "localhost:9092".to_string(),
+            topic: "test-topic".to_string(),
+            consumer_group: "test-group".to_string(),
+            ssl_enabled: false,
+            sasl_mechanism: None,
+            sasl_username: None,
+            sasl_password: None,
+        };
+        let producer = MessageProducer::new(&config).unwrap();
 
         let envelope = KafkaMessageEnvelope::new_direct_message(
             "msg-123".to_string(),
