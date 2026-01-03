@@ -44,6 +44,16 @@ pub struct KafkaConfig {
     pub sasl_username: Option<String>,
     /// SASL password
     pub sasl_password: Option<String>,
+    // producer-specific settings
+    pub producer_compression: String, // "zstd" | "snappy" | "gzip" | "lz4" | "none"
+    pub producer_acks: String,        // "all" | "1" | "-1" | "0"
+    pub producer_linger_ms: u32,
+    pub producer_batch_size: u32,
+    pub producer_max_in_flight: u32,
+    pub producer_retries: u32,
+    pub producer_request_timeout_ms: u32,
+    pub producer_delivery_timeout_ms: u32,
+    pub producer_enable_idempotence: bool,
 }
 
 /// APNs (Apple Push Notification service) configuration
@@ -81,7 +91,10 @@ impl std::str::FromStr for ApnsEnvironment {
         match s.to_lowercase().as_str() {
             "production" | "prod" => Ok(Self::Production),
             "development" | "dev" => Ok(Self::Development),
-            _ => anyhow::bail!("Invalid APNs environment: {}. Must be 'production' or 'development'", s),
+            _ => anyhow::bail!(
+                "Invalid APNs environment: {}. Must be 'production' or 'development'",
+                s
+            ),
         }
     }
 }
@@ -232,6 +245,39 @@ impl Config {
                 sasl_mechanism: std::env::var("KAFKA_SASL_MECHANISM").ok(),
                 sasl_username: std::env::var("KAFKA_SASL_USERNAME").ok(),
                 sasl_password: std::env::var("KAFKA_SASL_PASSWORD").ok(),
+                // producer-specific settings
+                producer_compression: std::env::var("KAFKA_PRODUCER_COMPRESSION")
+                    .unwrap_or_else(|_| "snappy".to_string()),
+                producer_acks: std::env::var("KAFKA_PRODUCER_ACKS")
+                    .unwrap_or_else(|_| "all".to_string()),
+                producer_linger_ms: std::env::var("KAFKA_PRODUCER_LINGER_MS")
+                    .unwrap_or_else(|_| "10".to_string())
+                    .parse()
+                    .unwrap_or(10),
+                producer_batch_size: std::env::var("KAFKA_PRODUCER_BATCH_SIZE")
+                    .unwrap_or_else(|_| "16384".to_string())
+                    .parse()
+                    .unwrap_or(16384),
+                producer_max_in_flight: std::env::var("KAFKA_PRODUCER_MAX_IN_FLIGHT")
+                    .unwrap_or_else(|_| "5".to_string())
+                    .parse()
+                    .unwrap_or(5),
+                producer_retries: std::env::var("KAFKA_PRODUCER_RETRIES")
+                    .unwrap_or_else(|_| "2147483647".to_string())
+                    .parse()
+                    .unwrap_or(2147483647),
+                producer_request_timeout_ms: std::env::var("KAFKA_PRODUCER_REQUEST_TIMEOUT_MS")
+                    .unwrap_or_else(|_| "30000".to_string())
+                    .parse()
+                    .unwrap_or(30000),
+                producer_delivery_timeout_ms: std::env::var("KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS")
+                    .unwrap_or_else(|_| "120000".to_string())
+                    .parse()
+                    .unwrap_or(120000),
+                producer_enable_idempotence: std::env::var("KAFKA_PRODUCER_ENABLE_IDEMPOTENCE")
+                    .unwrap_or_else(|_| "true".to_string())
+                    .parse()
+                    .unwrap_or(true),
             },
             apns: ApnsConfig {
                 enabled: std::env::var("APNS_ENABLED")
@@ -244,23 +290,29 @@ impl Config {
                     .unwrap_or(ApnsEnvironment::Development),
                 key_path: std::env::var("APNS_KEY_PATH")
                     .unwrap_or_else(|_| "AuthKey_XXXXXXXXXX.p8".to_string()),
-                key_id: std::env::var("APNS_KEY_ID")
-                    .unwrap_or_else(|_| "XXXXXXXXXX".to_string()),
-                team_id: std::env::var("APNS_TEAM_ID")
-                    .unwrap_or_else(|_| "XXXXXXXXXX".to_string()),
+                key_id: std::env::var("APNS_KEY_ID").unwrap_or_else(|_| "XXXXXXXXXX".to_string()),
+                team_id: std::env::var("APNS_TEAM_ID").unwrap_or_else(|_| "XXXXXXXXXX".to_string()),
                 bundle_id: std::env::var("APNS_BUNDLE_ID")
                     .unwrap_or_else(|_| "com.example.construct".to_string()),
-                topic: std::env::var("APNS_TOPIC")
-                    .unwrap_or_else(|_| std::env::var("APNS_BUNDLE_ID")
-                        .unwrap_or_else(|_| "com.example.construct".to_string())),
+                topic: std::env::var("APNS_TOPIC").unwrap_or_else(|_| {
+                    std::env::var("APNS_BUNDLE_ID")
+                        .unwrap_or_else(|_| "com.example.construct".to_string())
+                }),
                 device_token_encryption_key: {
-                    let key = std::env::var("APNS_DEVICE_TOKEN_ENCRYPTION_KEY")
-                        .unwrap_or_else(|_| "0000000000000000000000000000000000000000000000000000000000000000".to_string());
+                    let key =
+                        std::env::var("APNS_DEVICE_TOKEN_ENCRYPTION_KEY").unwrap_or_else(|_| {
+                            "0000000000000000000000000000000000000000000000000000000000000000"
+                                .to_string()
+                        });
                     if key.len() != 64 {
-                        anyhow::bail!("APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)");
+                        anyhow::bail!(
+                            "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+                        );
                     }
                     if key == "0000000000000000000000000000000000000000000000000000000000000000" {
-                        anyhow::bail!("APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be changed from default value");
+                        anyhow::bail!(
+                            "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be changed from default value"
+                        );
                     }
                     key
                 },
