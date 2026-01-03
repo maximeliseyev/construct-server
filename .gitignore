@@ -19,6 +19,9 @@ target/
 .env
 .env.local
 
+# APNs Keys (SENSITIVE - Never commit!)
+*.p8
+
 # IDE
 .vscode/
 .idea/

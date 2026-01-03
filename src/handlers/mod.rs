@@ -1,5 +1,6 @@
 mod auth;
 mod connection;
+pub mod device_tokens;
 mod key_rotation;
 pub mod keys;
 pub mod messages;
@@ -105,6 +106,37 @@ pub async fn handle_websocket(
                                     &ctx,
                                     data.user_id,
                                     data.update,  // Now native UploadableKeyBundle
+                                )
+                                .await;
+                            }
+
+                            Ok(ClientMessage::RegisterDeviceToken(data)) => {
+                                device_tokens::handle_register_device_token(
+                                    &mut handler,
+                                    &ctx,
+                                    data.device_token,
+                                    data.device_name,
+                                    data.notification_filter,
+                                )
+                                .await;
+                            }
+
+                            Ok(ClientMessage::UnregisterDeviceToken(data)) => {
+                                device_tokens::handle_unregister_device_token(
+                                    &mut handler,
+                                    &ctx,
+                                    data.device_token,
+                                )
+                                .await;
+                            }
+
+                            Ok(ClientMessage::UpdateDeviceTokenPreferences(data)) => {
+                                device_tokens::handle_update_device_token_preferences(
+                                    &mut handler,
+                                    &ctx,
+                                    data.device_token,
+                                    data.notification_filter,
+                                    data.enabled,
                                 )
                                 .await;
                             }

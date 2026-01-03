@@ -111,6 +111,35 @@ pub struct LogoutData {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RegisterDeviceTokenData {
+    /// APNs device token (hex string)
+    pub device_token: String,
+    /// Optional device name for user identification
+    pub device_name: Option<String>,
+    /// Notification filter preference
+    pub notification_filter: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnregisterDeviceTokenData {
+    /// APNs device token to remove
+    pub device_token: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDeviceTokenPreferencesData {
+    /// Device token to update
+    pub device_token: String,
+    /// New notification filter
+    pub notification_filter: String,
+    /// Whether push is enabled for this device
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChangePasswordData {
     pub session_token: String,
     pub old_password: String,
@@ -134,6 +163,9 @@ pub enum ClientMessage {
     RotatePrekey(RotatePrekeyData),
     ChangePassword(ChangePasswordData),
     Logout(LogoutData),
+    RegisterDeviceToken(RegisterDeviceTokenData),
+    UnregisterDeviceToken(UnregisterDeviceTokenData),
+    UpdateDeviceTokenPreferences(UpdateDeviceTokenPreferencesData),
 }
 
 // ============================================================================
@@ -216,6 +248,9 @@ pub enum ServerMessage {
     ChangePasswordSuccess,
     Error(ErrorData),
     LogoutSuccess,
+    DeviceTokenRegistered,
+    DeviceTokenUnregistered,
+    DeviceTokenPreferencesUpdated,
 }
 
 // ============================================================================

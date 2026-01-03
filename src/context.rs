@@ -1,3 +1,4 @@
+use crate::apns::ApnsClient;
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
@@ -18,6 +19,8 @@ pub struct AppContext {
     pub config: Arc<Config>,
     /// Kafka producer for reliable message delivery (Phase 1+)
     pub kafka_producer: Arc<MessageProducer>,
+    /// APNs client for push notifications
+    pub apns_client: Arc<ApnsClient>,
     /// Unique identifier for this server instance (for delivery worker coordination)
     pub server_instance_id: String,
 }
@@ -31,6 +34,7 @@ impl AppContext {
         clients: Clients,
         config: Arc<Config>,
         kafka_producer: Arc<MessageProducer>,
+        apns_client: Arc<ApnsClient>,
         server_instance_id: String,
     ) -> Self {
         Self {
@@ -40,6 +44,7 @@ impl AppContext {
             clients,
             config,
             kafka_producer,
+            apns_client,
             server_instance_id,
         }
     }

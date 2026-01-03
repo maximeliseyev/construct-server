@@ -18,6 +18,7 @@ use hyper::service::service_fn;
 use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 
+pub mod apns;
 pub mod auth;
 pub mod config;
 pub mod context;
@@ -49,6 +50,7 @@ async fn http_handler(
     clients: Clients,
     config: Arc<Config>,
     kafka_producer: Arc<MessageProducer>,
+    apns_client: Arc<apns::ApnsClient>,
     server_instance_id: String,
 ) -> HttpResult {
     let path = req.uri().path().to_string();
@@ -81,18 +83,18 @@ async fn http_handler(
 
         // API routes
         ("POST", "/keys/upload") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, server_instance_id);
             let (parts, body) = req.into_parts();
             handlers::keys::handle_upload_keys(&ctx, &parts.headers, body).await
         },
         ("GET", p) if p.starts_with("/keys/") => {
             let user_id = p.trim_start_matches("/keys/");
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, server_instance_id);
             let (parts, _) = req.into_parts();
             handlers::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
         },
         ("POST", "/messages/send") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, server_instance_id);
             let (parts, body) = req.into_parts();
             handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
         },
@@ -113,6 +115,7 @@ pub async fn run_http_server(
     auth_manager: Arc<AuthManager>,
     clients: Clients,
     kafka_producer: Arc<MessageProducer>,
+    apns_client: Arc<apns::ApnsClient>,
     server_instance_id: String,
 ) -> Result<()> {
     let http_addr = format!("0.0.0.0:{}", config.health_port);
@@ -131,6 +134,7 @@ pub async fn run_http_server(
         let clients_clone = clients.clone();
         let config_clone = config.clone();
         let kafka_producer_clone = kafka_producer.clone();
+        let apns_client_clone = apns_client.clone();
         let server_instance_id_clone = server_instance_id.clone();
 
         tokio::task::spawn(async move {
@@ -143,6 +147,7 @@ pub async fn run_http_server(
                     clients_clone.clone(),
                     config_clone.clone(),
                     kafka_producer_clone.clone(),
+                    apns_client_clone.clone(),
                     server_instance_id_clone.clone(),
                 )
             });
@@ -377,6 +382,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     let kafka_producer = Arc::new(kafka_producer);
 
+    // Initialize APNs client
+    tracing::info!("Initializing APNs client...");
+    let apns_client = apns::ApnsClient::new(app_config.apns.clone())?;
+    if app_config.apns.enabled {
+        apns_client.initialize().await?;
+        tracing::info!(
+            environment = ?app_config.apns.environment,
+            key_id = %app_config.apns.key_id,
+            "APNs client initialized successfully"
+        );
+    } else {
+        tracing::info!("APNs is disabled");
+    }
+    let apns_client = Arc::new(apns_client);
+
     // Create auth manager
     let auth_manager = Arc::new(AuthManager::new(&app_config));
 
@@ -398,6 +418,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         clients.clone(),
         app_config.clone(),
         kafka_producer.clone(),
+        apns_client.clone(),
         server_instance_id.clone(),
     );
 
@@ -413,6 +434,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         auth_manager,
         clients,
         kafka_producer.clone(),
+        apns_client.clone(),
         server_instance_id.clone(),
     );
 
