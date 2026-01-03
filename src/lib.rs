@@ -51,6 +51,7 @@ async fn http_handler(
     config: Arc<Config>,
     kafka_producer: Arc<MessageProducer>,
     apns_client: Arc<apns::ApnsClient>,
+    token_encryption: Arc<apns::DeviceTokenEncryption>,
     server_instance_id: String,
 ) -> HttpResult {
     let path = req.uri().path().to_string();
@@ -83,18 +84,18 @@ async fn http_handler(
 
         // API routes
         ("POST", "/keys/upload") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, server_instance_id);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
             let (parts, body) = req.into_parts();
             handlers::keys::handle_upload_keys(&ctx, &parts.headers, body).await
         },
         ("GET", p) if p.starts_with("/keys/") => {
             let user_id = p.trim_start_matches("/keys/");
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, server_instance_id);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
             let (parts, _) = req.into_parts();
             handlers::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
         },
         ("POST", "/messages/send") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, server_instance_id);
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
             let (parts, body) = req.into_parts();
             handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
         },
@@ -116,6 +117,7 @@ pub async fn run_http_server(
     clients: Clients,
     kafka_producer: Arc<MessageProducer>,
     apns_client: Arc<apns::ApnsClient>,
+    token_encryption: Arc<apns::DeviceTokenEncryption>,
     server_instance_id: String,
 ) -> Result<()> {
     let http_addr = format!("0.0.0.0:{}", config.health_port);
@@ -135,6 +137,7 @@ pub async fn run_http_server(
         let config_clone = config.clone();
         let kafka_producer_clone = kafka_producer.clone();
         let apns_client_clone = apns_client.clone();
+        let token_encryption_clone = token_encryption.clone();
         let server_instance_id_clone = server_instance_id.clone();
 
         tokio::task::spawn(async move {
@@ -148,6 +151,7 @@ pub async fn run_http_server(
                     config_clone.clone(),
                     kafka_producer_clone.clone(),
                     apns_client_clone.clone(),
+                    token_encryption_clone.clone(),
                     server_instance_id_clone.clone(),
                 )
             });
@@ -397,6 +401,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let apns_client = Arc::new(apns_client);
 
+    // Initialize device token encryption
+    tracing::info!("Initializing device token encryption...");
+    let token_encryption = apns::DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key)?;
+    let token_encryption = Arc::new(token_encryption);
+    tracing::info!("Device token encryption initialized");
+
     // Create auth manager
     let auth_manager = Arc::new(AuthManager::new(&app_config));
 
@@ -419,6 +429,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         app_config.clone(),
         kafka_producer.clone(),
         apns_client.clone(),
+        token_encryption.clone(),
         server_instance_id.clone(),
     );
 
@@ -435,6 +446,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         clients,
         kafka_producer.clone(),
         apns_client.clone(),
+        token_encryption.clone(),
         server_instance_id.clone(),
     );
 

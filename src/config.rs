@@ -63,6 +63,8 @@ pub struct ApnsConfig {
     pub bundle_id: String,
     /// APNs topic (usually same as bundle_id)
     pub topic: String,
+    /// Encryption key for device tokens in database (32 bytes hex = 64 chars)
+    pub device_token_encryption_key: String,
 }
 
 /// APNs environment
@@ -251,6 +253,17 @@ impl Config {
                 topic: std::env::var("APNS_TOPIC")
                     .unwrap_or_else(|_| std::env::var("APNS_BUNDLE_ID")
                         .unwrap_or_else(|_| "com.example.construct".to_string())),
+                device_token_encryption_key: {
+                    let key = std::env::var("APNS_DEVICE_TOKEN_ENCRYPTION_KEY")
+                        .unwrap_or_else(|_| "0000000000000000000000000000000000000000000000000000000000000000".to_string());
+                    if key.len() != 64 {
+                        anyhow::bail!("APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)");
+                    }
+                    if key == "0000000000000000000000000000000000000000000000000000000000000000" {
+                        anyhow::bail!("APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be changed from default value");
+                    }
+                    key
+                },
             },
         })
     }

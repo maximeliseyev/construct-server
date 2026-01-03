@@ -1,3 +1,4 @@
+use crate::apns::DeviceTokenEncryption;
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::ServerMessage;
@@ -6,6 +7,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Handle device token registration (APNs)
+/// IMPORTANT: Notifications are OPT-IN only!
+/// Users must explicitly register their device token to receive push notifications
 pub async fn handle_register_device_token(
     handler: &mut ConnectionHandler,
     ctx: &AppContext,
@@ -50,23 +53,50 @@ pub async fn handle_register_device_token(
         user_id, filter
     );
 
+    // Encrypt device token and device name
+    let token_hash = DeviceTokenEncryption::hash_token(&device_token);
+    let token_encrypted = match ctx.token_encryption.encrypt(&device_token) {
+        Ok(enc) => enc,
+        Err(e) => {
+            error!("Failed to encrypt device token: {:?}", e);
+            handler
+                .send_error("SERVER_ERROR", "Failed to encrypt device token")
+                .await;
+            return;
+        }
+    };
+
+    let name_encrypted = if let Some(ref name) = device_name {
+        match ctx.token_encryption.encrypt(name) {
+            Ok(enc) => Some(enc),
+            Err(e) => {
+                error!("Failed to encrypt device name: {:?}", e);
+                handler
+                    .send_error("SERVER_ERROR", "Failed to encrypt device name")
+                    .await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     // Insert or update device token in database
     let query_result = sqlx::query(
         r#"
-        INSERT INTO device_tokens (user_id, device_token, device_name, notification_filter, enabled)
-        VALUES ($1, $2, $3, $4, TRUE)
-        ON CONFLICT (user_id, device_token)
+        INSERT INTO device_tokens (user_id, device_token_hash, device_token_encrypted, device_name_encrypted, notification_filter, enabled)
+        VALUES ($1, $2, $3, $4, $5, TRUE)
+        ON CONFLICT (user_id, device_token_hash)
         DO UPDATE SET
-            device_name = EXCLUDED.device_name,
+            device_name_encrypted = EXCLUDED.device_name_encrypted,
             notification_filter = EXCLUDED.notification_filter,
-            enabled = TRUE,
-            last_used_at = NOW(),
-            updated_at = NOW()
+            enabled = TRUE
         "#,
     )
     .bind(Uuid::parse_str(&user_id).unwrap())
-    .bind(&device_token)
-    .bind(&device_name)
+    .bind(&token_hash)
+    .bind(&token_encrypted)
+    .bind(&name_encrypted)
     .bind(&filter)
     .execute(&*ctx.db_pool)
     .await;
@@ -105,20 +135,20 @@ pub async fn handle_unregister_device_token(
         }
     };
 
-    debug!(
-        "Unregistering device token for user_id={}",
-        user_id
-    );
+    debug!("Unregistering device token for user_id={}", user_id);
+
+    // Hash token for lookup
+    let token_hash = DeviceTokenEncryption::hash_token(&device_token);
 
     // Delete device token from database
     let query_result = sqlx::query(
         r#"
         DELETE FROM device_tokens
-        WHERE user_id = $1 AND device_token = $2
+        WHERE user_id = $1 AND device_token_hash = $2
         "#,
     )
     .bind(Uuid::parse_str(&user_id).unwrap())
-    .bind(&device_token)
+    .bind(&token_hash)
     .execute(&*ctx.db_pool)
     .await;
 
@@ -179,16 +209,19 @@ pub async fn handle_update_device_token_preferences(
         user_id, notification_filter, enabled
     );
 
+    // Hash token for lookup
+    let token_hash = DeviceTokenEncryption::hash_token(&device_token);
+
     // Update device token preferences
     let query_result = sqlx::query(
         r#"
         UPDATE device_tokens
-        SET notification_filter = $3, enabled = $4, updated_at = NOW()
-        WHERE user_id = $1 AND device_token = $2
+        SET notification_filter = $3, enabled = $4
+        WHERE user_id = $1 AND device_token_hash = $2
         "#,
     )
     .bind(Uuid::parse_str(&user_id).unwrap())
-    .bind(&device_token)
+    .bind(&token_hash)
     .bind(&notification_filter)
     .bind(enabled)
     .execute(&*ctx.db_pool)
@@ -219,6 +252,7 @@ pub async fn handle_update_device_token_preferences(
 }
 
 /// Get active device tokens for a user (for sending push notifications)
+/// Returns decrypted tokens
 pub async fn get_user_device_tokens(
     ctx: &AppContext,
     user_id: &str,
@@ -232,23 +266,35 @@ pub async fn get_user_device_tokens(
 
     let rows = sqlx::query(
         r#"
-        SELECT device_token, notification_filter
+        SELECT device_token_encrypted, notification_filter
         FROM device_tokens
         WHERE user_id = $1 AND enabled = TRUE
-        ORDER BY last_used_at DESC
         "#,
     )
     .bind(user_uuid)
     .fetch_all(&*ctx.db_pool)
     .await?;
 
-    let tokens = rows
-        .into_iter()
-        .map(|row| DeviceToken {
-            device_token: row.get("device_token"),
-            notification_filter: row.get("notification_filter"),
-        })
-        .collect();
+    let mut tokens = Vec::new();
+    for row in rows {
+        let encrypted: Vec<u8> = row.get("device_token_encrypted");
+        let filter: String = row.get("notification_filter");
+
+        // Decrypt token
+        match ctx.token_encryption.decrypt(&encrypted) {
+            Ok(decrypted_token) => {
+                tokens.push(DeviceToken {
+                    device_token: decrypted_token,
+                    notification_filter: filter,
+                });
+            }
+            Err(e) => {
+                error!("Failed to decrypt device token: {:?}", e);
+                // Skip this token, continue with others
+                continue;
+            }
+        }
+    }
 
     Ok(tokens)
 }

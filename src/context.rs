@@ -1,4 +1,4 @@
-use crate::apns::ApnsClient;
+use crate::apns::{ApnsClient, DeviceTokenEncryption};
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
@@ -21,6 +21,8 @@ pub struct AppContext {
     pub kafka_producer: Arc<MessageProducer>,
     /// APNs client for push notifications
     pub apns_client: Arc<ApnsClient>,
+    /// Device token encryption for privacy
+    pub token_encryption: Arc<DeviceTokenEncryption>,
     /// Unique identifier for this server instance (for delivery worker coordination)
     pub server_instance_id: String,
 }
@@ -35,6 +37,7 @@ impl AppContext {
         config: Arc<Config>,
         kafka_producer: Arc<MessageProducer>,
         apns_client: Arc<ApnsClient>,
+        token_encryption: Arc<DeviceTokenEncryption>,
         server_instance_id: String,
     ) -> Self {
         Self {
@@ -45,6 +48,7 @@ impl AppContext {
             config,
             kafka_producer,
             apns_client,
+            token_encryption,
             server_instance_id,
         }
     }
