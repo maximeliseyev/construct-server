@@ -46,6 +46,44 @@ pub struct KafkaConfig {
     pub sasl_password: Option<String>,
 }
 
+/// APNs (Apple Push Notification service) configuration
+#[derive(Clone, Debug)]
+pub struct ApnsConfig {
+    /// Whether APNs is enabled (default: false)
+    pub enabled: bool,
+    /// APNs environment: "production" or "development"
+    pub environment: ApnsEnvironment,
+    /// Path to .p8 authentication key file
+    pub key_path: String,
+    /// APNs Key ID (10 characters)
+    pub key_id: String,
+    /// APNs Team ID
+    pub team_id: String,
+    /// iOS app Bundle ID
+    pub bundle_id: String,
+    /// APNs topic (usually same as bundle_id)
+    pub topic: String,
+}
+
+/// APNs environment
+#[derive(Clone, Debug, PartialEq)]
+pub enum ApnsEnvironment {
+    Production,
+    Development,
+}
+
+impl std::str::FromStr for ApnsEnvironment {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "production" | "prod" => Ok(Self::Production),
+            "development" | "dev" => Ok(Self::Development),
+            _ => anyhow::bail!("Invalid APNs environment: {}. Must be 'production' or 'development'", s),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
@@ -65,6 +103,7 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub security: SecurityConfig,
     pub kafka: KafkaConfig,
+    pub apns: ApnsConfig,
 }
 
 impl Config {
@@ -191,6 +230,27 @@ impl Config {
                 sasl_mechanism: std::env::var("KAFKA_SASL_MECHANISM").ok(),
                 sasl_username: std::env::var("KAFKA_SASL_USERNAME").ok(),
                 sasl_password: std::env::var("KAFKA_SASL_PASSWORD").ok(),
+            },
+            apns: ApnsConfig {
+                enabled: std::env::var("APNS_ENABLED")
+                    .unwrap_or_else(|_| "false".to_string())
+                    .parse()
+                    .unwrap_or(false),
+                environment: std::env::var("APNS_ENVIRONMENT")
+                    .unwrap_or_else(|_| "development".to_string())
+                    .parse()
+                    .unwrap_or(ApnsEnvironment::Development),
+                key_path: std::env::var("APNS_KEY_PATH")
+                    .unwrap_or_else(|_| "AuthKey_XXXXXXXXXX.p8".to_string()),
+                key_id: std::env::var("APNS_KEY_ID")
+                    .unwrap_or_else(|_| "XXXXXXXXXX".to_string()),
+                team_id: std::env::var("APNS_TEAM_ID")
+                    .unwrap_or_else(|_| "XXXXXXXXXX".to_string()),
+                bundle_id: std::env::var("APNS_BUNDLE_ID")
+                    .unwrap_or_else(|_| "com.example.construct".to_string()),
+                topic: std::env::var("APNS_TOPIC")
+                    .unwrap_or_else(|_| std::env::var("APNS_BUNDLE_ID")
+                        .unwrap_or_else(|_| "com.example.construct".to_string())),
             },
         })
     }

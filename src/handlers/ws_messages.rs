@@ -46,9 +46,11 @@
 
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
+use crate::handlers::device_tokens;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::message::{ChatMessage, ServerMessage};
 use base64::Engine;
+use sqlx::Row;
 
 /// Handles message sending
 /// Delivers immediately if recipient is online, otherwise queues for later delivery
@@ -294,6 +296,9 @@ pub async fn handle_send_message(
                 } else {
                     tracing::debug!(message_id = %msg.id, "Message queued for offline recipient");
                 }
+
+                // Send push notification to offline recipient
+                send_push_notification_for_message(ctx, &msg).await;
             }
             Err(e) => {
                 tracing::error!(error = %e, message_id = %msg.id, "Error queuing message");
@@ -304,3 +309,106 @@ pub async fn handle_send_message(
         }
     }
 }
+
+
+/// Send push notification for a message to an offline recipient
+/// Implements Phase 1 (Silent Push) and Phase 2 (Visible Push with filters)
+async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage) {
+    if !ctx.apns_client.is_enabled() {
+        return;
+    }
+
+    // Get device tokens for recipient
+    let device_tokens = match device_tokens::get_user_device_tokens(ctx, &msg.to).await {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            tracing::warn!(error = %e, recipient_id = %msg.to, "Failed to fetch device tokens for push notification");
+            return;
+        }
+    };
+
+    if device_tokens.is_empty() {
+        tracing::debug!(recipient_id = %msg.to, "No device tokens registered for recipient");
+        return;
+    }
+
+    // Get sender username for visible notifications
+    let sender_username = match get_username_for_push(ctx, &msg.from).await {
+        Ok(username) => username,
+        Err(e) => {
+            tracing::warn!(error = %e, sender_id = %msg.from, "Failed to get sender username for push");
+            "Someone".to_string() // Fallback
+        }
+    };
+
+    // Send push notification to each device based on its filter preference
+    for device in device_tokens {
+        let notification_result = match device.notification_filter.as_str() {
+            "silent" => {
+                // Phase 1: Silent push (background fetch)
+                ctx.apns_client
+                    .send_silent_push(&device.device_token, Some(msg.from.clone()))
+                    .await
+            }
+            "visible_all" | "visible_dm" => {
+                // Phase 2: Visible push (user notification)
+                // TODO: Add logic to differentiate between DM and group messages
+                ctx.apns_client
+                    .send_visible_push(&device.device_token, &sender_username, Some(msg.from.clone()))
+                    .await
+            }
+            "visible_mentions" | "visible_contacts" => {
+                // Phase 3: Advanced filtering
+                // For now, treat as silent push
+                // TODO: Implement mention detection and contact filtering
+                ctx.apns_client
+                    .send_silent_push(&device.device_token, Some(msg.from.clone()))
+                    .await
+            }
+            _ => {
+                tracing::warn!(filter = %device.notification_filter, "Unknown notification filter");
+                continue;
+            }
+        };
+
+        if let Err(e) = notification_result {
+            tracing::warn!(
+                error = %e,
+                recipient_id = %msg.to,
+                device_token = &device.device_token[..8],
+                filter = %device.notification_filter,
+                "Failed to send push notification"
+            );
+        } else {
+            tracing::debug!(
+                recipient_id = %msg.to,
+                device_token = &device.device_token[..8],
+                filter = %device.notification_filter,
+                "Push notification sent successfully"
+            );
+        }
+    }
+}
+
+/// Get username for push notification display
+/// Returns username if found, otherwise returns "Someone" as fallback
+async fn get_username_for_push(ctx: &AppContext, user_id: &str) -> Result<String, sqlx::Error> {
+    let user_uuid = uuid::Uuid::parse_str(user_id).map_err(|_| {
+        sqlx::Error::Decode(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid user_id UUID",
+        )))
+    })?;
+
+    let result = sqlx::query(
+        r#"SELECT username FROM users WHERE id = $1"#,
+    )
+    .bind(user_uuid)
+    .fetch_optional(&*ctx.db_pool)
+    .await?;
+
+    Ok(result
+        .and_then(|row| row.try_get("username").ok())
+        .unwrap_or_else(|| "Someone".to_string()))
+}
+
