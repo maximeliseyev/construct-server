@@ -43,6 +43,8 @@ struct UserOnlineNotification {
 struct WorkerState {
     config: Arc<Config>,
     redis_conn: Arc<RwLock<redis::aio::MultiplexedConnection>>,
+    /// Counter for consecutive "no delivery queues" errors (for periodic summary logging)
+    no_queues_count: Arc<RwLock<u64>>,
 }
 
 #[tokio::main]
@@ -92,6 +94,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(WorkerState {
         config: config.clone(),
         redis_conn: redis_conn.clone(),
+        no_queues_count: Arc::new(RwLock::new(0)),
     });
 
     // Choose delivery mode based on KAFKA_ENABLED
@@ -118,11 +121,16 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
         match consumer.poll(std::time::Duration::from_secs(1)).await {
             Ok(Some(envelope)) => {
                 if let Err(e) = process_kafka_message(&state, &envelope).await {
-                    error!(
-                        error = %e,
-                        message_id = %envelope.message_id,
-                        "Failed to process Kafka message"
-                    );
+                    // Log unexpected errors (no delivery queues are already logged in process_kafka_message)
+                    let error_msg = e.to_string();
+                    if !error_msg.contains("No delivery queues available") {
+                        error!(
+                            error = %e,
+                            message_id = %envelope.message_id,
+                            recipient_id = %envelope.recipient_id,
+                            "Failed to process Kafka message"
+                        );
+                    }
                     // Do NOT commit offset on error - message will be redelivered
                     continue;
                 }
@@ -197,14 +205,49 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     drop(conn); // Release write lock
 
     if delivery_keys.is_empty() {
-        warn!(
-            message_id = %message_id,
-            recipient_id = %recipient_id,
-            "No delivery queues found (no servers online)"
-        );
-        // Message stays in Kafka, will retry later
-        return Ok(());
+        // Return error to prevent Kafka offset commit - message will be retried
+        // This happens when no server instances are running to accept deliveries
+
+        // Track consecutive failures and log summary periodically to avoid spam
+        let mut count = state.no_queues_count.write().await;
+        *count += 1;
+        let current_count = *count;
+        drop(count);
+
+        // Log detailed warning every 100 messages, or for the first occurrence
+        if current_count == 1 || current_count % 100 == 0 {
+            warn!(
+                message_id = %message_id,
+                recipient_id = %recipient_id,
+                delivery_queue_prefix = %state.config.delivery_queue_prefix,
+                consecutive_failures = current_count,
+                "No delivery queues available - no server instances running. Messages are being held in Kafka and will be retried when servers come online."
+            );
+        } else {
+            // Use debug level for subsequent messages to reduce log spam
+            debug!(
+                message_id = %message_id,
+                recipient_id = %recipient_id,
+                consecutive_failures = current_count,
+                "No delivery queues available (message will retry)"
+            );
+        }
+
+        return Err(anyhow::anyhow!(
+            "No delivery queues available (no server instances online). Message will be retried."
+        ));
     }
+
+    // Reset counter when we successfully find delivery queues
+    let mut count = state.no_queues_count.write().await;
+    if *count > 0 {
+        info!(
+            recovered_after = *count,
+            "Server instances are back online, resuming message delivery"
+        );
+        *count = 0;
+    }
+    drop(count);
 
     // 3. Serialize envelope to JSON for Redis storage
     let message_json = serde_json::to_string(&envelope)

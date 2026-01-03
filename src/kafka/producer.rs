@@ -56,17 +56,31 @@ impl MessageProducer {
         // Producer-specific settings
         let producer: FutureProducer = client_config
             // Reliability settings
-            .set("acks", "all") // Wait for all in-sync replicas
-            .set("enable.idempotence", "true") // Exactly-once semantics within producer
-            .set("max.in.flight.requests.per.connection", "5")
-            .set("retries", "2147483647") // Retry indefinitely (i32::MAX)
-            // Performance settings
-            .set("compression.type", "snappy")
-            .set("linger.ms", "10") // Small batch window for low latency
-            .set("batch.size", "16384") // 16KB batches
-            // Timeout settings
-            .set("request.timeout.ms", "30000") // 30s request timeout
-            .set("delivery.timeout.ms", "120000") // 2min overall delivery timeout
+            .set("acks", &config.producer_acks)
+            .set(
+                "enable.idempotence",
+                if config.producer_enable_idempotence {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .set(
+                "max.in.flight.requests.per.connection",
+                &config.producer_max_in_flight.to_string(),
+            )
+            .set("retries", &config.producer_retries.to_string())
+            .set("compression.type", &config.producer_compression)
+            .set("linger.ms", &config.producer_linger_ms.to_string())
+            .set("batch.size", &config.producer_batch_size.to_string())
+            .set(
+                "request.timeout.ms",
+                &config.producer_request_timeout_ms.to_string(),
+            )
+            .set(
+                "delivery.timeout.ms",
+                &config.producer_delivery_timeout_ms.to_string(),
+            )
             .create()
             .context("Failed to create Kafka producer")?;
 
@@ -214,6 +228,15 @@ mod tests {
             sasl_mechanism: None,
             sasl_username: None,
             sasl_password: None,
+            producer_compression: String::from("gzip"),
+            producer_acks: String::from("all"),
+            producer_linger_ms: 5,
+            producer_batch_size: 1024,
+            producer_max_in_flight: 10,
+            producer_retries: 3,
+            producer_request_timeout_ms: 10000,
+            producer_delivery_timeout_ms: 30000,
+            producer_enable_idempotence: true,
         };
         let producer = MessageProducer::new(&config);
 
@@ -232,6 +255,15 @@ mod tests {
             sasl_mechanism: None,
             sasl_username: None,
             sasl_password: None,
+            producer_compression: String::from("gzip"),
+            producer_acks: String::from("all"),
+            producer_linger_ms: 5,
+            producer_batch_size: 1024,
+            producer_max_in_flight: 10,
+            producer_retries: 3,
+            producer_request_timeout_ms: 10000,
+            producer_delivery_timeout_ms: 30000,
+            producer_enable_idempotence: true,
         };
         let producer = MessageProducer::new(&config).unwrap();
 
