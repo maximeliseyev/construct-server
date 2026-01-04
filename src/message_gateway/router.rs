@@ -3,41 +3,82 @@
 // ============================================================================
 //
 // Routes messages to their destination:
-// - Currently: all messages go to local Kafka
-// - Future: local vs remote node routing for federation
+// - Local messages: go to Kafka for local delivery
+// - Federated messages: sent to remote instance via HTTP
 //
-// This is the foundation for federation - when we add S2S support,
-// this module will parse recipient domains and route accordingly.
 // ============================================================================
 
+use crate::federation::FederationClient;
 use crate::kafka::MessageProducer;
 use crate::message::ChatMessage;
+use crate::user_id::UserId;
 use anyhow::Result;
 
 pub struct MessageRouter {
     kafka_producer: MessageProducer,
-    // Future: federation_client: FederationClient,
-    // Future: local_domain: String,
+    federation_client: Option<FederationClient>,
+    local_domain: String,
+    federation_enabled: bool,
 }
 
 impl MessageRouter {
     /// Create a new message router
-    pub fn new(kafka_producer: MessageProducer) -> Self {
-        Self { kafka_producer }
+    pub fn new(
+        kafka_producer: MessageProducer,
+        local_domain: String,
+        federation_enabled: bool,
+    ) -> Self {
+        let federation_client = if federation_enabled {
+            Some(FederationClient::new())
+        } else {
+            None
+        };
+
+        Self {
+            kafka_producer,
+            federation_client,
+            local_domain,
+            federation_enabled,
+        }
     }
 
     /// Route message to destination
     ///
-    /// Currently: all messages go to local Kafka
-    /// Future: parse recipient, check if local or remote domain
+    /// Checks recipient domain:
+    /// - Local: routes to Kafka for local delivery
+    /// - Remote: sends to remote instance via federation
     pub async fn route_message(&self, msg: &ChatMessage) -> Result<()> {
-        // Phase 1: Local-only routing
-        // Everything goes to Kafka for local delivery
+        // Parse recipient to check if local or federated
+        let recipient = UserId::parse(&msg.to)?;
 
-        // Create Kafka envelope
+        // Check if recipient is local
+        let is_local = if recipient.is_local() {
+            // No domain specified - assume local
+            true
+        } else {
+            // Check if recipient domain matches our instance
+            recipient.domain() == Some(self.local_domain.as_str())
+        };
+
+        if is_local {
+            // Local delivery via Kafka
+            self.route_to_local_kafka(msg).await?;
+        } else if self.federation_enabled {
+            // Remote delivery via federation
+            self.route_to_remote_instance(msg, recipient.domain().unwrap()).await?;
+        } else {
+            anyhow::bail!(
+                "Cannot route to remote instance {} - federation is disabled",
+                recipient.domain().unwrap()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Route to local Kafka
+    async fn route_to_local_kafka(&self, msg: &ChatMessage) -> Result<()> {
         let envelope = crate::kafka::KafkaMessageEnvelope::from(msg);
-
-        // Send to Kafka
         self.kafka_producer.send_message(&envelope).await?;
 
         tracing::debug!(
@@ -49,23 +90,23 @@ impl MessageRouter {
         Ok(())
     }
 
-    // Future: Federation routing
-    // pub async fn route_message_federated(&self, msg: &ChatMessage) -> Result<()> {
-    //     let recipient = UserId::parse(&msg.to)?;
-    //
-    //     if recipient.is_local(&self.local_domain) {
-    //         // Local delivery via Kafka
-    //         self.route_to_local_kafka(msg).await?;
-    //     } else {
-    //         // Remote delivery via Federation Client
-    //         self.federation_client.send_to_node(&recipient.domain, msg).await?;
-    //
-    //         // Track communication pattern for smart replication
-    //         self.track_communication_pattern(&msg.from, &recipient.domain).await?;
-    //     }
-    //
-    //     Ok(())
-    // }
+    /// Route to remote instance via federation
+    async fn route_to_remote_instance(&self, msg: &ChatMessage, target_domain: &str) -> Result<()> {
+        let client = self.federation_client.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Federation client not initialized"))?;
+
+        client.send_message(target_domain, msg).await?;
+
+        tracing::info!(
+            message_id = %msg.id,
+            from = %msg.from,
+            to = %msg.to,
+            target_domain = %target_domain,
+            "Message routed to remote instance"
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +137,11 @@ mod tests {
         };
 
         let producer = MessageProducer::new(&kafka_config).unwrap();
-        let router = MessageRouter::new(producer);
+        let router = MessageRouter::new(
+            producer,
+            "eu.konstruct.cc".to_string(),
+            false, // federation disabled for test
+        );
 
         // Router should be created successfully
         assert!(std::mem::size_of_val(&router) > 0);

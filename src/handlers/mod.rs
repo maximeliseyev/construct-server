@@ -1,6 +1,8 @@
 mod auth;
 mod connection;
+// pub mod deeplinks;  // TODO: Requires axum and qrcode dependencies
 pub mod device_tokens;
+pub mod federation;
 mod key_rotation;
 pub mod keys;
 pub mod messages;
