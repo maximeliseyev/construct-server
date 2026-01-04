@@ -43,6 +43,7 @@ struct UserOnlineNotification {
 struct WorkerState {
     config: Arc<Config>,
     redis_conn: Arc<RwLock<redis::aio::MultiplexedConnection>>,
+    redis_client: Arc<redis::Client>,
     /// Counter for consecutive "no delivery queues" errors (for periodic summary logging)
     no_queues_count: Arc<RwLock<u64>>,
 }
@@ -94,6 +95,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(WorkerState {
         config: config.clone(),
         redis_conn: redis_conn.clone(),
+        redis_client: Arc::new(client),
         no_queues_count: Arc::new(RwLock::new(0)),
     });
 
@@ -156,6 +158,72 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
     }
 }
 
+/// Execute a Redis operation with retry logic and auto-reconnection
+async fn execute_redis_with_retry<F, T>(
+    state: &WorkerState,
+    operation_name: &str,
+    mut operation: F,
+) -> Result<T>
+where
+    F: FnMut(&mut redis::aio::MultiplexedConnection) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, redis::RedisError>> + Send + '_>>,
+{
+    const MAX_RETRIES: u32 = 3;
+    const INITIAL_BACKOFF_MS: u64 = 100;
+
+    for attempt in 1..=MAX_RETRIES {
+        let mut conn = state.redis_conn.write().await;
+
+        match operation(&mut *conn).await {
+            Ok(result) => {
+                if attempt > 1 {
+                    info!(
+                        operation = operation_name,
+                        attempt = attempt,
+                        "Redis operation succeeded after retry"
+                    );
+                }
+                return Ok(result);
+            }
+            Err(e) => {
+                drop(conn); // Release lock before potentially reconnecting
+
+                warn!(
+                    operation = operation_name,
+                    attempt = attempt,
+                    max_retries = MAX_RETRIES,
+                    error = %e,
+                    "Redis operation failed, will retry"
+                );
+
+                if attempt < MAX_RETRIES {
+                    // Exponential backoff
+                    let backoff_ms = INITIAL_BACKOFF_MS * 2_u64.pow(attempt - 1);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+
+                    // Try to reconnect on last retry before final attempt
+                    if attempt == MAX_RETRIES - 1 {
+                        info!("Attempting to reconnect to Redis...");
+                        match state.redis_client.get_multiplexed_async_connection().await {
+                            Ok(new_conn) => {
+                                let mut conn = state.redis_conn.write().await;
+                                *conn = new_conn;
+                                info!("Successfully reconnected to Redis");
+                            }
+                            Err(reconnect_err) => {
+                                error!(error = %reconnect_err, "Failed to reconnect to Redis");
+                            }
+                        }
+                    }
+                } else {
+                    return Err(anyhow::anyhow!("Redis operation '{}' failed after {} retries: {}", operation_name, MAX_RETRIES, e));
+                }
+            }
+        }
+    }
+
+    unreachable!()
+}
+
 /// Process a single Kafka message
 async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvelope) -> Result<()> {
     let message_id = &envelope.message_id;
@@ -169,13 +237,22 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
 
     // 1. Deduplication check: have we already processed this message?
     let dedup_key = format!("processed_msg:{}", message_id);
-    let mut conn = state.redis_conn.write().await;
 
-    let exists_result: i64 = redis::cmd("EXISTS")
-        .arg(&dedup_key)
-        .query_async(&mut *conn)
-        .await
-        .context("Failed to check deduplication")?;
+    let exists_result: i64 = execute_redis_with_retry(
+        state,
+        "check_deduplication",
+        |conn| {
+            let key = dedup_key.clone();
+            Box::pin(async move {
+                redis::cmd("EXISTS")
+                    .arg(&key)
+                    .query_async(conn)
+                    .await
+            })
+        },
+    )
+    .await
+    .context("Failed to check deduplication after retries")?;
 
     let already_processed = exists_result > 0;
 
@@ -196,13 +273,21 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     // For now, we broadcast to all delivery queues (inefficient but functional)
 
     // Get list of all delivery queue keys
-    let delivery_keys: Vec<String> = redis::cmd("KEYS")
-        .arg(format!("{}*", state.config.delivery_queue_prefix))
-        .query_async(&mut *conn)
-        .await
-        .context("Failed to fetch delivery queue keys")?;
-
-    drop(conn); // Release write lock
+    let delivery_keys: Vec<String> = execute_redis_with_retry(
+        state,
+        "fetch_delivery_queues",
+        |conn| {
+            let prefix = state.config.delivery_queue_prefix.clone();
+            Box::pin(async move {
+                redis::cmd("KEYS")
+                    .arg(format!("{}*", prefix))
+                    .query_async(conn)
+                    .await
+            })
+        },
+    )
+    .await
+    .context("Failed to fetch delivery queue keys after retries")?;
 
     if delivery_keys.is_empty() {
         // Return error to prevent Kafka offset commit - message will be retried
@@ -254,18 +339,27 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         .context("Failed to serialize Kafka envelope")?;
 
     // 4. Forward message to delivery queues
-    let mut conn = state.redis_conn.write().await;
-
     // Push to first available delivery queue (simplification)
     // In production, you'd route to specific server instance where user is connected
-    let delivery_key = &delivery_keys[0];
+    let delivery_key = delivery_keys[0].clone();
 
-    let _: i64 = redis::cmd("RPUSH")
-        .arg(delivery_key)
-        .arg(&message_json)
-        .query_async(&mut *conn)
-        .await
-        .context("Failed to push message to delivery queue")?;
+    let _: i64 = execute_redis_with_retry(
+        state,
+        "push_to_delivery_queue",
+        |conn| {
+            let key = delivery_key.clone();
+            let msg = message_json.clone();
+            Box::pin(async move {
+                redis::cmd("RPUSH")
+                    .arg(&key)
+                    .arg(&msg)
+                    .query_async(conn)
+                    .await
+            })
+        },
+    )
+    .await
+    .context("Failed to push message to delivery queue after retries")?;
 
     // Notify server instance via Pub/Sub
     let server_instance_id = delivery_key
@@ -273,22 +367,43 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         .unwrap_or("unknown");
     let notification_channel = format!("delivery_notification:{}", server_instance_id);
 
-    let _: i64 = redis::cmd("PUBLISH")
-        .arg(&notification_channel)
-        .arg("1") // Message count
-        .query_async(&mut *conn)
-        .await
-        .context("Failed to publish delivery notification")?;
+    let _: i64 = execute_redis_with_retry(
+        state,
+        "publish_notification",
+        |conn| {
+            let channel = notification_channel.clone();
+            Box::pin(async move {
+                redis::cmd("PUBLISH")
+                    .arg(&channel)
+                    .arg("1")
+                    .query_async(conn)
+                    .await
+            })
+        },
+    )
+    .await
+    .context("Failed to publish delivery notification after retries")?;
 
     // 5. Mark message as processed (7-day TTL)
     let ttl_seconds = state.config.message_ttl_days * 24 * 60 * 60;
-    let _: String = redis::cmd("SETEX")
-        .arg(&dedup_key)
-        .arg(ttl_seconds)
-        .arg("1")
-        .query_async(&mut *conn)
-        .await
-        .context("Failed to mark message as processed")?;
+    let _: String = execute_redis_with_retry(
+        state,
+        "mark_message_processed",
+        |conn| {
+            let key = dedup_key.clone();
+            let ttl = ttl_seconds;
+            Box::pin(async move {
+                redis::cmd("SETEX")
+                    .arg(&key)
+                    .arg(ttl)
+                    .arg("1")
+                    .query_async(conn)
+                    .await
+            })
+        },
+    )
+    .await
+    .context("Failed to mark message as processed after retries")?;
 
     info!(
         message_id = %message_id,
