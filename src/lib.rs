@@ -28,9 +28,15 @@ pub mod handlers;
 pub mod health;
 pub mod kafka;
 pub mod message;
+pub mod message_gateway;
 pub mod metrics;
 pub mod queue;
+pub mod server_registry;
+pub mod user_id;
 pub mod utils;
+
+// Re-export delivery_worker modules for use in bin/delivery_worker.rs
+pub mod delivery_worker;
 
 use auth::AuthManager;
 use config::Config;
@@ -431,6 +437,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn background task to listen for messages from delivery worker
     spawn_delivery_listener(queue.clone(), clients.clone(), server_instance_id.clone(), app_config.clone());
+
+    // Spawn heartbeat task to register this server in Redis
+    server_registry::spawn_server_heartbeat(
+        queue.clone(),
+        server_instance_id.clone(),
+        app_config.delivery_queue_prefix.clone(),
+    );
 
     let http_server_config = app_config.as_ref().clone();
     let websocket_server = run_websocket_server(app_context, listener);

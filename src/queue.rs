@@ -444,4 +444,20 @@ impl MessageQueue {
 
         Ok(messages)
     }
+
+    /// Register this server instance in Redis
+    /// Creates a delivery queue key with TTL to signal that this server is active
+    /// delivery-worker uses KEYS delivery_queue:* to discover active servers
+    pub async fn register_server_instance(&mut self, queue_key: &str) -> Result<()> {
+        // Create an empty list (if doesn't exist) and set TTL to 60 seconds
+        // The heartbeat task will refresh this every 30 seconds
+        let ttl_seconds = 60;
+
+        // Ensure key exists (create empty list if needed)
+        // Then set TTL
+        self.client.sadd::<_, _, ()>(queue_key, "heartbeat").await?;
+        self.client.expire::<_, ()>(queue_key, ttl_seconds).await?;
+
+        Ok(())
+    }
 }

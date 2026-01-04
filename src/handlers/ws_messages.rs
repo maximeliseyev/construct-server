@@ -190,9 +190,62 @@ pub async fn handle_send_message(
     drop(queue);
 
     // ========================================================================
+    // MESSAGE GATEWAY PATH (Phase 2+)
+    // If Message Gateway client is configured, delegate processing to it
+    // ========================================================================
+    if let Some(gateway_client) = &ctx.gateway_client {
+        tracing::debug!(
+            message_id = %msg.id,
+            "Forwarding message to Message Gateway service"
+        );
+
+        let mut client = gateway_client.lock().await;
+        match client.submit_message(&msg, &sender_id).await {
+            Ok(()) => {
+                // Message successfully submitted to gateway
+                let ack = ServerMessage::Ack(crate::message::AckData {
+                    message_id: msg.id.clone(),
+                    status: "accepted".to_string(),
+                });
+                handler.send_msgpack(&ack).await.ok();
+
+                tracing::info!(
+                    message_id = %msg.id,
+                    "Message accepted by Message Gateway"
+                );
+                return;
+            }
+            Err(e) => {
+                // Message Gateway rejected the message
+                tracing::warn!(
+                    message_id = %msg.id,
+                    error = %e,
+                    "Message Gateway rejected message"
+                );
+
+                // Parse error to send appropriate error code
+                let error_msg = e.to_string();
+                if error_msg.contains("RATE_LIMIT") {
+                    handler.send_error("RATE_LIMIT_WARNING", &error_msg).await;
+                } else if error_msg.contains("USER_BLOCKED") {
+                    handler.send_error("USER_BLOCKED", &error_msg).await;
+                } else if error_msg.contains("DUPLICATE") {
+                    handler.send_error("DUPLICATE_MESSAGE", &error_msg).await;
+                } else {
+                    handler.send_error("VALIDATION_ERROR", &error_msg).await;
+                }
+                return;
+            }
+        }
+    }
+
+    // ========================================================================
+    // LEGACY PATH (Phase 1)
+    // Direct processing when Message Gateway is not configured
+    // ========================================================================
+
     // PHASE 2: Kafka Dual-Write
     // Write to Kafka BEFORE Redis (source of truth)
-    // ========================================================================
     let envelope = KafkaMessageEnvelope::from(&msg);
     if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
         tracing::warn!(
