@@ -128,13 +128,24 @@ mod tests {
             sasl_mechanism: None,
             sasl_username: None,
             sasl_password: None,
+            producer_compression: "snappy".to_string(),
+            producer_acks: "all".to_string(),
+            producer_linger_ms: 0,
+            producer_batch_size: 16384,
+            producer_max_in_flight: 5,
+            producer_retries: 10,
+            producer_request_timeout_ms: 30000,
+            producer_delivery_timeout_ms: 60000,
+            producer_enable_idempotence: true,
         };
 
         let result = MessageConsumer::new(&config);
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Cannot create Kafka consumer when Kafka is disabled"
-        );
+        if let Err(e) = result {
+            assert_eq!(
+                e.to_string(),
+                "Cannot create Kafka consumer when Kafka is disabled"
+            );
+        }
     }
 }

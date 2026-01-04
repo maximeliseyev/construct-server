@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use crate::e2e::UploadableKeyBundle;
+use crate::user_id::UserId;
 
 // ============================================================================
 // ChatMessage (formerly Message) - Updated for Double Ratchet Protocol
@@ -57,8 +58,8 @@ impl ChatMessage {
             && !self.content.is_empty()
             && self.ephemeral_public_key.len() == 32
             && Uuid::parse_str(&self.id).is_ok()
-            && Uuid::parse_str(&self.from).is_ok()
-            && Uuid::parse_str(&self.to).is_ok()
+            && UserId::parse(&self.from).is_ok()  // Support both local UUID and federated userid@domain
+            && UserId::parse(&self.to).is_ok()    // Support both local UUID and federated userid@domain
     }
 }
 

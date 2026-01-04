@@ -119,9 +119,24 @@ pub struct Config {
     pub security: SecurityConfig,
     pub kafka: KafkaConfig,
     pub apns: ApnsConfig,
+
+    // Federation and domain configuration
+    /// Instance domain (e.g., "eu.konstruct.cc")
+    pub instance_domain: String,
+    /// Base federation domain (e.g., "konstruct.cc")
+    pub federation_base_domain: String,
+    /// Whether federation is enabled
+    pub federation_enabled: bool,
+    /// Deep link base URL (e.g., "https://konstruct.cc")
+    pub deep_link_base_url: String,
 }
 
 impl Config {
+    /// Get full federation ID for a user UUID
+    pub fn federation_id(&self, user_uuid: &uuid::Uuid) -> String {
+        format!("{}@{}", user_uuid, self.instance_domain)
+    }
+
     pub fn from_env() -> Result<Self> {
         dotenvy::dotenv().ok();
 
@@ -317,6 +332,21 @@ impl Config {
                     key
                 },
             },
+
+            // Federation and domain configuration
+            instance_domain: std::env::var("INSTANCE_DOMAIN")
+                .unwrap_or_else(|_| "eu.konstruct.cc".to_string()),
+
+            federation_base_domain: std::env::var("FEDERATION_BASE_DOMAIN")
+                .unwrap_or_else(|_| "konstruct.cc".to_string()),
+
+            federation_enabled: std::env::var("FEDERATION_ENABLED")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+
+            deep_link_base_url: std::env::var("DEEP_LINK_BASE_URL")
+                .unwrap_or_else(|_| "https://konstruct.cc".to_string()),
         })
     }
 }

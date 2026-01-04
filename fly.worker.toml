@@ -17,13 +17,6 @@ primary_region = 'ams'
 [processes]
   app = "delivery-worker"
 
-[env]
-  DATABASE_URL = "postgresql://user:password@host:port/database"
-  REDIS_URL = "redis://:password@host:port"
-  JWT_SECRET = "this-will-be-set-from-a-secret"
-  LOG_HASH_SALT = "this-will-be-set-from-a-secret"
-  ONLINE_CHANNEL = "user_online_notifications"
-
 # No HTTP service for worker (it's a background process)
 
 [[vm]]
@@ -34,4 +27,3 @@ primary_region = 'ams'
 # Worker should always be running (not auto-stop like main server)
 [deploy]
   strategy = "rolling"
-
