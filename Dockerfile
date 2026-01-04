@@ -15,6 +15,10 @@ RUN apt-get update && apt-get install -y \
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
+# Copy build script and proto files (needed for gRPC code generation)
+COPY build.rs ./
+COPY proto ./proto
+
 # Copy source
 COPY src ./src
 COPY migrations ./migrations

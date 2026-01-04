@@ -24,6 +24,7 @@ pub mod config;
 pub mod context;
 pub mod e2e;
 pub mod db;
+pub mod federation;
 pub mod handlers;
 pub mod health;
 pub mod kafka;
@@ -104,6 +105,21 @@ async fn http_handler(
             let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
             let (parts, body) = req.into_parts();
             handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
+        },
+
+        // Federation routes
+        ("GET", "/.well-known/konstruct") => {
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            handlers::federation::well_known_konstruct(ctx).await
+        },
+        ("GET", "/federation/health") => {
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            handlers::federation::federation_health(ctx).await
+        },
+        ("POST", "/federation/v1/messages") => {
+            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            let (_parts, body) = req.into_parts();
+            handlers::federation::receive_federated_message_http(&ctx, body).await
         },
 
         _ => {

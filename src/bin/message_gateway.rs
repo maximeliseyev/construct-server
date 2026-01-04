@@ -54,7 +54,11 @@ impl MessageGatewayServiceImpl {
         Self {
             validator: MessageValidator::new(),
             rate_limiter: Arc::new(RwLock::new(RateLimiter::new(redis_conn))),
-            router: MessageRouter::new(kafka_producer),
+            router: MessageRouter::new(
+                kafka_producer,
+                config.instance_domain.clone(),
+                config.federation_enabled,
+            ),
             config,
         }
     }
