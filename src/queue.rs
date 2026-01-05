@@ -460,8 +460,7 @@ impl MessageQueue {
             None => {
                 // Key doesn't exist - create empty list
                 self.client.rpush::<_, _, ()>(queue_key, b"").await?;
-                let _: Option<Vec<u8>> = self.client.rpop(queue_key, None).await?;
-            }
+                    }
             Some("list") => {
                 // Key exists and is correct type - do nothing
             }
@@ -474,8 +473,7 @@ impl MessageQueue {
                 );
                 self.client.del::<_, ()>(queue_key).await?;
                 self.client.rpush::<_, _, ()>(queue_key, b"").await?;
-                let _: Option<Vec<u8>> = self.client.rpop(queue_key, None).await?;
-            }
+                    }
         }
 
         // Set/renew TTL
