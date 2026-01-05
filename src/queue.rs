@@ -426,7 +426,7 @@ impl MessageQueue {
             r"
             local messages = redis.call('LRANGE', KEYS[1], 0, -1)
             if #messages > 0 then
-                redis.call('DEL', KEYS[1])
+                redis.call('LTRIM', KEYS[1], #messages, -1)
             end
             return messages
             ",
