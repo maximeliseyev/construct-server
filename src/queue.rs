@@ -429,20 +429,26 @@ impl MessageQueue {
                 redis.call('DEL', KEYS[1])
             end
             return messages
-            "
+            ",
         );
 
         let messages: Vec<Vec<u8>> = script.key(&key).invoke_async(&mut self.client).await?;
 
-        if !messages.is_empty() {
+        // Filter out the empty placeholder message left by `register_server_instance`
+        let filtered_messages: Vec<Vec<u8>> = messages
+            .into_iter()
+            .filter(|msg| !msg.is_empty())
+            .collect();
+
+        if !filtered_messages.is_empty() {
             tracing::debug!(
                 server_instance_id = %server_instance_id,
-                count = messages.len(),
+                count = filtered_messages.len(),
                 "Polled delivery queue"
             );
         }
 
-        Ok(messages)
+        Ok(filtered_messages)
     }
 
     /// Register this server instance in Redis
@@ -457,23 +463,22 @@ impl MessageQueue {
         let key_type: Option<String> = self.client.key_type(queue_key).await?;
 
         match key_type.as_deref() {
-            None => {
-                // Key doesn't exist - create empty list
+            // Key is already a list, do nothing.
+            Some("list") => {}
+            // Key doesn't exist (redis 'TYPE' returns 'none'), create it with a placeholder.
+            Some("none") | None => {
                 self.client.rpush::<_, _, ()>(queue_key, b"").await?;
-                    }
-            Some("list") => {
-                // Key exists and is correct type - do nothing
             }
-            Some(_other_type) => {
-                // Key exists but wrong type - delete and recreate
+            // Key exists but has the wrong type, so delete and recreate it.
+            Some(other_type) => {
                 tracing::warn!(
                     queue_key = %queue_key,
-                    key_type = %_other_type,
+                    key_type = %other_type,
                     "Delivery queue key has wrong type, deleting and recreating as list"
                 );
                 self.client.del::<_, ()>(queue_key).await?;
                 self.client.rpush::<_, _, ()>(queue_key, b"").await?;
-                    }
+            }
         }
 
         // Set/renew TTL
