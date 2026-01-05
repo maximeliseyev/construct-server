@@ -453,9 +453,32 @@ impl MessageQueue {
         // The heartbeat task will refresh this every 30 seconds
         let ttl_seconds = 60;
 
-        // Ensure key exists (create empty list if needed)
-        // Then set TTL
-        self.client.sadd::<_, _, ()>(queue_key, "heartbeat").await?;
+        // Check if key exists and its type
+        let key_type: Option<String> = self.client.key_type(queue_key).await?;
+
+        match key_type.as_deref() {
+            None => {
+                // Key doesn't exist - create empty list
+                self.client.rpush::<_, _, ()>(queue_key, b"").await?;
+                let _: Option<Vec<u8>> = self.client.rpop(queue_key, None).await?;
+            }
+            Some("list") => {
+                // Key exists and is correct type - do nothing
+            }
+            Some(_other_type) => {
+                // Key exists but wrong type - delete and recreate
+                tracing::warn!(
+                    queue_key = %queue_key,
+                    key_type = %_other_type,
+                    "Delivery queue key has wrong type, deleting and recreating as list"
+                );
+                self.client.del::<_, ()>(queue_key).await?;
+                self.client.rpush::<_, _, ()>(queue_key, b"").await?;
+                let _: Option<Vec<u8>> = self.client.rpop(queue_key, None).await?;
+            }
+        }
+
+        // Set/renew TTL
         self.client.expire::<_, ()>(queue_key, ttl_seconds).await?;
 
         Ok(())

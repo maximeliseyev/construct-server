@@ -13,7 +13,7 @@ primary_region = 'ams'
   # This service runs construct-server by default (CMD in Dockerfile)
 
 [http_service]
-  internal_port = 8080
+  internal_port = 8081
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
