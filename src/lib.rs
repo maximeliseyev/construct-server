@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{Mutex, RwLock};
+use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::WebSocketStream;
 use tracing;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -149,56 +150,65 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
             let service = service_fn(move |mut req: Request<IncomingBody>| {
                 let ctx = ctx.clone();
                 async move {
-                    // Check for WebSocket upgrade
-                    if req.headers().get("upgrade")
-                        .and_then(|v| v.to_str().ok())
-                        .map(|v| v.eq_ignore_ascii_case("websocket"))
-                        .unwrap_or(false)
-                    {
-                        // Spawn WebSocket handler
-                        let ctx_clone = ctx.clone();
-                        tokio::spawn(async move {
-                            match hyper::upgrade::on(&mut req).await {
-                                Ok(upgraded) => {
-                                    let io = TokioIo::new(upgraded);
-                                    let ws_stream = WebSocketStream::from_raw_socket(
-                                        io,
-                                        tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                        None,
-                                    ).await;
-                                    use handlers::WebSocketStreamType;
-                                    handle_websocket(WebSocketStreamType::Upgraded(ws_stream), addr, ctx_clone).await;
-                                }
-                                Err(e) => {
-                                    tracing::error!("WebSocket upgrade error: {}", e);
-                                }
-                            }
-                        });
-
-                        // Return 101 Switching Protocols
-                        Ok::<Response<Full<Bytes>>, Infallible>(
-                            Response::builder()
-                                .status(StatusCode::SWITCHING_PROTOCOLS)
-                                .header("Upgrade", "websocket")
-                                .header("Connection", "Upgrade")
-                                .body(Full::new(Bytes::new()))
-                                .unwrap()
-                        )
-                    } else {
-                        // Handle regular HTTP
-                        http_handler(
-                            req,
-                            ctx.db_pool.clone(),
-                            ctx.queue.clone(),
-                            ctx.auth_manager.clone(),
-                            ctx.clients.clone(),
-                            ctx.config.clone(),
-                            ctx.kafka_producer.clone(),
-                            ctx.apns_client.clone(),
-                            ctx.token_encryption.clone(),
-                            ctx.server_instance_id.clone(),
-                        ).await
-                    }
+                                        if req.headers().get("upgrade")
+                                            .and_then(|v| v.to_str().ok())
+                                            .map(|v| v.eq_ignore_ascii_case("websocket"))
+                                            .unwrap_or(false)
+                                        {
+                                            // Manually implement the handshake response to avoid moving `req`.
+                                            // Extract the key, build the response, and then move `req` into the upgrade task.
+                                            let key = match req.headers().get(hyper::header::SEC_WEBSOCKET_KEY) {
+                                                Some(key) => key.clone(),
+                                                None => {
+                                                    let mut res = Response::new(Full::new(Bytes::from("Bad Request: Missing Sec-WebSocket-Key")));
+                                                    *res.status_mut() = StatusCode::BAD_REQUEST;
+                                                    return Ok(res);
+                                                }
+                                            };
+                    
+                                            let ctx_clone = ctx.clone();
+                                            tokio::spawn(async move {
+                                                match hyper::upgrade::on(&mut req).await {
+                                                    Ok(upgraded) => {
+                                                        let io = TokioIo::new(upgraded);
+                                                        let ws_stream = WebSocketStream::from_raw_socket(
+                                                            io,
+                                                            tungstenite::protocol::Role::Server,
+                                                            None,
+                                                        ).await;
+                                                        use handlers::WebSocketStreamType;
+                                                        handle_websocket(WebSocketStreamType::Upgraded(ws_stream), addr, ctx_clone).await;
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!("WebSocket upgrade error: {}", e);
+                                                    }
+                                                }
+                                            });
+                    
+                                            // Build the response with the derived key.
+                                            let derived_key = tungstenite::handshake::derive_accept_key(key.as_bytes());
+                                            let mut res = Response::new(Full::new(Bytes::new()));
+                                            *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+                                            res.headers_mut().insert(hyper::header::UPGRADE, "websocket".parse().unwrap());
+                                            res.headers_mut().insert(hyper::header::CONNECTION, "Upgrade".parse().unwrap());
+                                            res.headers_mut().insert(hyper::header::SEC_WEBSOCKET_ACCEPT, derived_key.parse().unwrap());
+                                            Ok(res)
+                    
+                                        } else {
+                                            // Handle regular HTTP
+                                            http_handler(
+                                                req,
+                                                ctx.db_pool.clone(),
+                                                ctx.queue.clone(),
+                                                ctx.auth_manager.clone(),
+                                                ctx.clients.clone(),
+                                                ctx.config.clone(),
+                                                ctx.kafka_producer.clone(),
+                                                ctx.apns_client.clone(),
+                                                ctx.token_encryption.clone(),
+                                                ctx.server_instance_id.clone(),
+                                            ).await
+                                        }
                 }
             });
 
