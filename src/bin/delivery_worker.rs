@@ -334,9 +334,9 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     }
     drop(count);
 
-    // 3. Serialize envelope to JSON for Redis storage
-    let message_json = serde_json::to_string(&envelope)
-        .context("Failed to serialize Kafka envelope")?;
+    // 3. Serialize envelope to MessagePack for Redis storage
+    let message_bytes = rmp_serde::encode::to_vec_named(&envelope)
+        .context("Failed to serialize Kafka envelope to MessagePack")?;
 
     // 4. Forward message to delivery queues
     // Push to first available delivery queue (simplification)
@@ -348,7 +348,7 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         "push_to_delivery_queue",
         |conn| {
             let key = delivery_key.clone();
-            let msg = message_json.clone();
+            let msg = message_bytes.clone();
             Box::pin(async move {
                 redis::cmd("RPUSH")
                     .arg(&key)
