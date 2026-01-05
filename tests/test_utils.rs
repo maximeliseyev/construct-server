@@ -89,7 +89,7 @@ pub async fn spawn_app() -> TestApp {
         server_instance_id,
     );
 
-    tokio::spawn(construct_server::run_websocket_server(
+    tokio::spawn(construct_server::run_unified_server(
         app_context,
         listener,
     ));
