@@ -272,17 +272,35 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     // OPTIMIZATION: In production, you'd maintain a "user:{user_id}:server_instance" mapping
     // For now, we broadcast to all delivery queues (inefficient but functional)
 
-    // Get list of all delivery queue keys
+    // Get list of all delivery queue keys using SCAN for production safety
     let delivery_keys: Vec<String> = execute_redis_with_retry(
         state,
         "fetch_delivery_queues",
         |conn| {
             let prefix = state.config.delivery_queue_prefix.clone();
             Box::pin(async move {
-                redis::cmd("KEYS")
-                    .arg(format!("{}*", prefix))
-                    .query_async(conn)
-                    .await
+                let mut keys = Vec::new();
+                let mut cursor: u64 = 0;
+                let pattern = format!("{}*", prefix);
+
+                loop {
+                    let (new_cursor, mut found_keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                        .arg(cursor)
+                        .arg("MATCH")
+                        .arg(&pattern)
+                        .arg("COUNT")
+                        .arg(100) // Fetch 100 keys per iteration
+                        .query_async(conn)
+                        .await?;
+
+                    keys.append(&mut found_keys);
+
+                    if new_cursor == 0 {
+                        break;
+                    }
+                    cursor = new_cursor;
+                }
+                Ok(keys)
             })
         },
     )
