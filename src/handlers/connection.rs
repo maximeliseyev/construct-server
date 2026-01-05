@@ -1,14 +1,67 @@
 use crate::message::ServerMessage;
 use futures_util::stream::SplitSink;
+use futures_util::{Stream, Sink};
+use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::WebSocketStream;
 
-pub type WebSocketStreamType = WebSocketStream<TcpStream>;
+// Support both direct TCP and upgraded HTTP connections
+pub enum WebSocketStreamType {
+    Direct(WebSocketStream<TcpStream>),
+    Upgraded(WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>),
+}
+
+// Implement Stream for WebSocketStreamType
+impl Stream for WebSocketStreamType {
+    type Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.get_mut() {
+            WebSocketStreamType::Direct(s) => Pin::new(s).poll_next(cx),
+            WebSocketStreamType::Upgraded(s) => Pin::new(s).poll_next(cx),
+        }
+    }
+}
+
+// Implement Sink for WebSocketStreamType
+impl Sink<WsMessage> for WebSocketStreamType {
+    type Error = tokio_tungstenite::tungstenite::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match self.get_mut() {
+            WebSocketStreamType::Direct(s) => Pin::new(s).poll_ready(cx),
+            WebSocketStreamType::Upgraded(s) => Pin::new(s).poll_ready(cx),
+        }
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: WsMessage) -> Result<(), Self::Error> {
+        match self.get_mut() {
+            WebSocketStreamType::Direct(s) => Pin::new(s).start_send(item),
+            WebSocketStreamType::Upgraded(s) => Pin::new(s).start_send(item),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match self.get_mut() {
+            WebSocketStreamType::Direct(s) => Pin::new(s).poll_flush(cx),
+            WebSocketStreamType::Upgraded(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match self.get_mut() {
+            WebSocketStreamType::Direct(s) => Pin::new(s).poll_close(cx),
+            WebSocketStreamType::Upgraded(s) => Pin::new(s).poll_close(cx),
+        }
+    }
+}
 
 pub struct ConnectionHandler {
     ws_sender: SplitSink<WebSocketStreamType, WsMessage>,
