@@ -110,13 +110,83 @@ if [ -n "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTIO
   fi
 fi
 
+# ============================================================================
+# Federation and Domain Configuration
+# ============================================================================
+
+if [ -n "$INSTANCE_DOMAIN" ]; then
+  echo ""
+  echo "Setting up federation domain configuration for construct-server..."
+  flyctl secrets set \
+    INSTANCE_DOMAIN="$INSTANCE_DOMAIN" \
+    --app construct-server
+fi
+
+if [ -n "$FEDERATION_BASE_DOMAIN" ]; then
+  flyctl secrets set \
+    FEDERATION_BASE_DOMAIN="$FEDERATION_BASE_DOMAIN" \
+    --app construct-server
+fi
+
+if [ -n "$FEDERATION_ENABLED" ]; then
+  flyctl secrets set \
+    FEDERATION_ENABLED="$FEDERATION_ENABLED" \
+    --app construct-server
+fi
+
+if [ -n "$DEEP_LINK_BASE_URL" ]; then
+  flyctl secrets set \
+    DEEP_LINK_BASE_URL="$DEEP_LINK_BASE_URL" \
+    --app construct-server
+fi
+
+# ============================================================================
+# Message Gateway secrets (if you want to use Message Gateway service)
+# ============================================================================
+
+if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+  echo ""
+  echo "Setting up Message Gateway secrets..."
+  flyctl secrets set \
+    DATABASE_URL="$DATABASE_URL" \
+    REDIS_URL="$REDIS_URL" \
+    JWT_SECRET="$JWT_SECRET" \
+    JWT_ISSUER="$JWT_ISSUER" \
+    LOG_HASH_SALT="$LOG_HASH_SALT" \
+    ONLINE_CHANNEL="$ONLINE_CHANNEL" \
+    --app construct-message-gateway
+
+  # Kafka secrets for Message Gateway
+  if [ "$KAFKA_ENABLED" = "true" ]; then
+    flyctl secrets set \
+      KAFKA_ENABLED="$KAFKA_ENABLED" \
+      KAFKA_BROKERS="$KAFKA_BROKERS" \
+      KAFKA_TOPIC="$KAFKA_TOPIC" \
+      KAFKA_CONSUMER_GROUP="$KAFKA_CONSUMER_GROUP" \
+      KAFKA_SSL_ENABLED="$KAFKA_SSL_ENABLED" \
+      KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
+      KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
+      KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
+      KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
+      KAFKA_PRODUCER_LINGER_MS="$KAFKA_PRODUCER_LINGER_MS" \
+      KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
+      --app construct-message-gateway
+  fi
+fi
+
 echo ""
 echo "=== ✅ All secrets have been set! ==="
 echo ""
 echo "To verify:"
 echo "  flyctl secrets list --app construct-server"
 echo "  flyctl secrets list --app construct-delivery-worker"
+if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+  echo "  flyctl secrets list --app construct-message-gateway"
+fi
 echo ""
 echo "To deploy:"
 echo "  flyctl deploy --app construct-server"
 echo "  flyctl deploy --config fly.worker.toml --app construct-delivery-worker"
+if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+  echo "  flyctl deploy --config fly.gateway.toml --app construct-message-gateway"
+fi
