@@ -131,7 +131,7 @@ async fn http_handler(
     Ok(response)
 }
 
-pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener) {
+pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) {
     loop {
         let (stream, addr) = match listener.accept().await {
             Ok(s) => s,
@@ -146,36 +146,46 @@ pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
 
-            // Create service that handles both HTTP and WebSocket
-            let service = service_fn(move |req: Request<IncomingBody>| {
+            let service = service_fn(move |mut req: Request<IncomingBody>| {
                 let ctx = ctx.clone();
                 async move {
-                    // Check if this is a WebSocket upgrade request
-                    if req.headers().get("upgrade").and_then(|v| v.to_str().ok()) == Some("websocket") {
-                        // Handle WebSocket upgrade
-                        match hyper::upgrade::on(req).await {
-                            Ok(upgraded) => {
-                                // Wrap in TokioIo for compatibility
-                                let io = TokioIo::new(upgraded);
-                                let ws_stream = WebSocketStream::from_raw_socket(
-                                    io,
-                                    tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                    None,
-                                ).await;
-                                use handlers::WebSocketStreamType;
-                                handle_websocket(WebSocketStreamType::Upgraded(ws_stream), addr, ctx).await;
-                                // Return empty response (connection is upgraded)
-                                Ok::<Response<Full<Bytes>>, Infallible>(Response::new(Full::new(Bytes::new())))
+                    // Check for WebSocket upgrade
+                    if req.headers().get("upgrade")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v.eq_ignore_ascii_case("websocket"))
+                        .unwrap_or(false)
+                    {
+                        // Spawn WebSocket handler
+                        let ctx_clone = ctx.clone();
+                        tokio::spawn(async move {
+                            match hyper::upgrade::on(&mut req).await {
+                                Ok(upgraded) => {
+                                    let io = TokioIo::new(upgraded);
+                                    let ws_stream = WebSocketStream::from_raw_socket(
+                                        io,
+                                        tokio_tungstenite::tungstenite::protocol::Role::Server,
+                                        None,
+                                    ).await;
+                                    use handlers::WebSocketStreamType;
+                                    handle_websocket(WebSocketStreamType::Upgraded(ws_stream), addr, ctx_clone).await;
+                                }
+                                Err(e) => {
+                                    tracing::error!("WebSocket upgrade error: {}", e);
+                                }
                             }
-                            Err(e) => {
-                                tracing::error!("WebSocket upgrade error: {}", e);
-                                let mut res = Response::new(Full::new(Bytes::from("Upgrade failed")));
-                                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                Ok(res)
-                            }
-                        }
+                        });
+
+                        // Return 101 Switching Protocols
+                        Ok::<Response<Full<Bytes>>, Infallible>(
+                            Response::builder()
+                                .status(StatusCode::SWITCHING_PROTOCOLS)
+                                .header("Upgrade", "websocket")
+                                .header("Connection", "Upgrade")
+                                .body(Full::new(Bytes::new()))
+                                .unwrap()
+                        )
                     } else {
-                        // Handle regular HTTP request
+                        // Handle regular HTTP
                         http_handler(
                             req,
                             ctx.db_pool.clone(),
@@ -194,7 +204,7 @@ pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener
 
             if let Err(err) = http1::Builder::new()
                 .serve_connection(io, service)
-                .with_upgrades()  // Enable WebSocket upgrades
+                .with_upgrades()
                 .await
             {
                 tracing::error!("Connection error: {:?}", err);
@@ -459,7 +469,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         app_config.delivery_queue_prefix.clone(),
     );
 
-    let unified_server = run_websocket_server(app_context, listener);
+    let unified_server = run_unified_server(app_context, listener);
 
     tokio::select! {
         _ = unified_server => {
