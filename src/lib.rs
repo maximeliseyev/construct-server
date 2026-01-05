@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{Mutex, RwLock};
-use tokio_tungstenite::accept_async;
+use tokio_tungstenite::WebSocketStream;
 use tracing;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -131,63 +131,9 @@ async fn http_handler(
     Ok(response)
 }
 
-pub async fn run_http_server(
-    config: Config,
-    db_pool: Arc<DbPool>,
-    queue: Arc<Mutex<MessageQueue>>,
-    auth_manager: Arc<AuthManager>,
-    clients: Clients,
-    kafka_producer: Arc<MessageProducer>,
-    apns_client: Arc<apns::ApnsClient>,
-    token_encryption: Arc<apns::DeviceTokenEncryption>,
-    server_instance_id: String,
-) -> Result<()> {
-    let http_addr = format!("0.0.0.0:{}", config.health_port);
-    let listener = TcpListener::bind(&http_addr).await?;
-    tracing::info!("HTTP server listening on http://{}", http_addr);
-
-    let config = Arc::new(config);
-
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
-
-        let db_pool_clone = db_pool.clone();
-        let queue_clone = queue.clone();
-        let auth_manager_clone = auth_manager.clone();
-        let clients_clone = clients.clone();
-        let config_clone = config.clone();
-        let kafka_producer_clone = kafka_producer.clone();
-        let apns_client_clone = apns_client.clone();
-        let token_encryption_clone = token_encryption.clone();
-        let server_instance_id_clone = server_instance_id.clone();
-
-        tokio::task::spawn(async move {
-            let service = service_fn(move |req| {
-                http_handler(
-                    req,
-                    db_pool_clone.clone(),
-                    queue_clone.clone(),
-                    auth_manager_clone.clone(),
-                    clients_clone.clone(),
-                    config_clone.clone(),
-                    kafka_producer_clone.clone(),
-                    apns_client_clone.clone(),
-                    token_encryption_clone.clone(),
-                    server_instance_id_clone.clone(),
-                )
-            });
-
-            if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-                tracing::error!("Error serving HTTP connection: {:?}", err);
-            }
-        });
-    }
-}
-
 pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener) {
     loop {
-        let (socket, addr) = match listener.accept().await {
+        let (stream, addr) = match listener.accept().await {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to accept socket: {}", e);
@@ -198,8 +144,60 @@ pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener
         let ctx = app_context.clone();
 
         tokio::spawn(async move {
-            if let Ok(ws_stream) = accept_async(socket).await {
-                handle_websocket(ws_stream, addr, ctx).await;
+            let io = TokioIo::new(stream);
+
+            // Create service that handles both HTTP and WebSocket
+            let service = service_fn(move |req: Request<IncomingBody>| {
+                let ctx = ctx.clone();
+                async move {
+                    // Check if this is a WebSocket upgrade request
+                    if req.headers().get("upgrade").and_then(|v| v.to_str().ok()) == Some("websocket") {
+                        // Handle WebSocket upgrade
+                        match hyper::upgrade::on(req).await {
+                            Ok(upgraded) => {
+                                // Wrap in TokioIo for compatibility
+                                let io = TokioIo::new(upgraded);
+                                let ws_stream = WebSocketStream::from_raw_socket(
+                                    io,
+                                    tokio_tungstenite::tungstenite::protocol::Role::Server,
+                                    None,
+                                ).await;
+                                use handlers::WebSocketStreamType;
+                                handle_websocket(WebSocketStreamType::Upgraded(ws_stream), addr, ctx).await;
+                                // Return empty response (connection is upgraded)
+                                Ok::<Response<Full<Bytes>>, Infallible>(Response::new(Full::new(Bytes::new())))
+                            }
+                            Err(e) => {
+                                tracing::error!("WebSocket upgrade error: {}", e);
+                                let mut res = Response::new(Full::new(Bytes::from("Upgrade failed")));
+                                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                Ok(res)
+                            }
+                        }
+                    } else {
+                        // Handle regular HTTP request
+                        http_handler(
+                            req,
+                            ctx.db_pool.clone(),
+                            ctx.queue.clone(),
+                            ctx.auth_manager.clone(),
+                            ctx.clients.clone(),
+                            ctx.config.clone(),
+                            ctx.kafka_producer.clone(),
+                            ctx.apns_client.clone(),
+                            ctx.token_encryption.clone(),
+                            ctx.server_instance_id.clone(),
+                        ).await
+                    }
+                }
+            });
+
+            if let Err(err) = http1::Builder::new()
+                .serve_connection(io, service)
+                .with_upgrades()  // Enable WebSocket upgrades
+                .await
+            {
+                tracing::error!("Connection error: {:?}", err);
             }
         });
     }
@@ -461,28 +459,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         app_config.delivery_queue_prefix.clone(),
     );
 
-    let http_server_config = app_config.as_ref().clone();
-    let websocket_server = run_websocket_server(app_context, listener);
-    let http_server = run_http_server(
-        http_server_config,
-        db_pool.clone(),
-        queue.clone(),
-        auth_manager,
-        clients,
-        kafka_producer.clone(),
-        apns_client.clone(),
-        token_encryption.clone(),
-        server_instance_id.clone(),
-    );
+    let unified_server = run_websocket_server(app_context, listener);
 
     tokio::select! {
-        _ = websocket_server => {
-            tracing::info!("WebSocket server shut down.");
-        },
-        res = http_server => {
-            if let Err(e) = res {
-                tracing::error!("HTTP server failed: {}", e);
-            }
+        _ = unified_server => {
+            tracing::info!("Server shut down.");
         },
         _ = signal::ctrl_c() => {
             tracing::info!("Shutdown signal received. Shutting down...");
