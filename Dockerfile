@@ -7,6 +7,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    libsasl2-dev \
+    libsasl2-modules \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests
@@ -28,6 +30,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    libsasl2-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy both binaries from builder
