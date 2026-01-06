@@ -18,6 +18,7 @@ target/
 # Environment
 .env
 .env.local
+*.p8
 
 # IDE
 .vscode/
