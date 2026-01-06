@@ -402,6 +402,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     tracing::info!("Connecting to Redis at: {}", redis_url_safe);
 
+    // Log the database number for diagnostics
+    let redis_client_for_diag = redis::Client::open(app_config.redis_url.clone())?;
+    let db_num = redis_client_for_diag.get_connection_info().addr.db();
+    tracing::info!("Redis client configured for database: {}", db_num);
+
     let message_queue = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         MessageQueue::new(&app_config)
