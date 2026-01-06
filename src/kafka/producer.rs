@@ -1,20 +1,21 @@
 use anyhow::{Context, Result};
-use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use rdkafka::util::Timeout;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 
+use super::config::create_client_config;
 use super::metrics;
 use super::types::KafkaMessageEnvelope;
+use crate::config::KafkaConfig;
 
 /// Kafka message producer for reliable message delivery
 ///
 /// This producer is configured for:
 /// - At-least-once delivery guarantees
 /// - Idempotent writes (no duplicates within producer session)
-/// - Compression (zstd for encrypted payloads)
+/// - Compression (snappy)
 /// - Low latency (10ms linger)
 pub struct MessageProducer {
     producer: Arc<FutureProducer>,
@@ -23,61 +24,74 @@ pub struct MessageProducer {
 }
 
 impl MessageProducer {
-    /// Create a new Kafka producer
+    /// Create a new Kafka producer from the application configuration.
     ///
     /// # Arguments
-    /// * `brokers` - Comma-separated list of Kafka brokers (e.g., "kafka1:9092,kafka2:9092")
-    /// * `topic` - Kafka topic name (e.g., "construct-messages")
-    /// * `enabled` - Whether Kafka is enabled (false = no-op producer for testing)
+    /// * `config` - The Kafka configuration struct.
     ///
     /// # Configuration
-    /// - `acks=all`: Wait for all in-sync replicas to acknowledge
-    /// - `enable.idempotence=true`: Prevent duplicate writes
-    /// - `retries=2147483647`: Retry indefinitely on transient errors
-    /// - `compression.type=zstd`: Best compression for encrypted data
-    /// - `linger.ms=10`: Small batching window for low latency
-    pub fn new(brokers: &str, topic: String, enabled: bool) -> Result<Self> {
-        if !enabled {
+    /// - `acks=all`: Wait for all in-sync replicas to acknowledge.
+    /// - `enable.idempotence=true`: Prevent duplicate writes.
+    /// - `retries=2147483647`: Retry indefinitely on transient errors.
+    /// - `compression.type=snappy`: Optimized compression.
+    /// - `linger.ms=10`: Small batching window for low latency.
+    pub fn new(config: &KafkaConfig) -> Result<Self> {
+        if !config.enabled {
             info!("Kafka producer disabled (KAFKA_ENABLED=false)");
-            // Create a dummy producer (won't be used)
-            let producer = ClientConfig::new()
-                .set("bootstrap.servers", "localhost:9092")
+            // Create a dummy producer, which requires a minimal config.
+            let producer = create_client_config(config)?
                 .create()
                 .context("Failed to create disabled Kafka producer")?;
 
             return Ok(Self {
                 producer: Arc::new(producer),
-                topic,
+                topic: config.topic.clone(),
                 enabled: false,
             });
         }
 
-        info!("Initializing Kafka producer");
-        info!("Brokers: {}", brokers);
-        info!("Topic: {}", topic);
+        info!("Initializing Kafka producer...");
+        let mut client_config = create_client_config(config)?;
 
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
+        // Producer-specific settings
+        let producer: FutureProducer = client_config
             // Reliability settings
-            .set("acks", "all") // Wait for all in-sync replicas
-            .set("enable.idempotence", "true") // Exactly-once semantics within producer
-            .set("max.in.flight.requests.per.connection", "5")
-            .set("retries", "2147483647") // Retry indefinitely (i32::MAX)
-            // Performance settings
-            .set("compression.type", "zstd") // Best compression for encrypted data
-            .set("linger.ms", "10") // Small batch window for low latency
-            .set("batch.size", "16384") // 16KB batches
-            // Timeout settings
-            .set("request.timeout.ms", "30000") // 30s request timeout
-            .set("delivery.timeout.ms", "120000") // 2min overall delivery timeout
+            .set("acks", &config.producer_acks)
+            .set(
+                "enable.idempotence",
+                if config.producer_enable_idempotence {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .set(
+                "max.in.flight.requests.per.connection",
+                &config.producer_max_in_flight.to_string(),
+            )
+            .set("retries", &config.producer_retries.to_string())
+            .set("compression.type", &config.producer_compression)
+            .set("linger.ms", &config.producer_linger_ms.to_string())
+            .set("batch.size", &config.producer_batch_size.to_string())
+            .set(
+                "request.timeout.ms",
+                &config.producer_request_timeout_ms.to_string(),
+            )
+            .set(
+                "delivery.timeout.ms",
+                &config.producer_delivery_timeout_ms.to_string(),
+            )
             .create()
             .context("Failed to create Kafka producer")?;
 
-        info!("Kafka producer initialized successfully");
+        info!(
+            "Kafka producer initialized successfully for topic '{}'",
+            config.topic
+        );
 
         Ok(Self {
             producer: Arc::new(producer),
-            topic,
+            topic: config.topic.clone(),
             enabled: true,
         })
     }
@@ -94,10 +108,7 @@ impl MessageProducer {
     /// # Returns
     /// * `Ok((partition, offset))` - Successfully written to Kafka
     /// * `Err(anyhow::Error)` - Failed to write (should be logged/alerted)
-    pub async fn send_message(
-        &self,
-        envelope: &KafkaMessageEnvelope,
-    ) -> Result<(i32, i64)> {
+    pub async fn send_message(&self, envelope: &KafkaMessageEnvelope) -> Result<(i32, i64)> {
         // Skip if Kafka disabled (Phase 1 testing)
         if !self.enabled {
             return Ok((-1, -1)); // Dummy partition/offset
@@ -107,21 +118,23 @@ impl MessageProducer {
         envelope.validate().context("Invalid message envelope")?;
 
         // Serialize to JSON
-        let payload = serde_json::to_vec(envelope)
-            .context("Failed to serialize message envelope")?;
+        let payload =
+            serde_json::to_vec(envelope).context("Failed to serialize message envelope")?;
 
         // Partition key: recipient_id (ensures ordering per user/group)
         let key = envelope.recipient_id.as_bytes();
 
         // Create Kafka record
-        let record = FutureRecord::to(&self.topic)
-            .key(key)
-            .payload(&payload);
+        let record = FutureRecord::to(&self.topic).key(key).payload(&payload);
 
         // Send with timeout (2 seconds for async feedback)
         let start = std::time::Instant::now();
 
-        match self.producer.send(record, Timeout::After(Duration::from_secs(2))).await {
+        match self
+            .producer
+            .send(record, Timeout::After(Duration::from_secs(2)))
+            .await
+        {
             Ok((partition, offset)) => {
                 let latency = start.elapsed();
 
@@ -179,7 +192,8 @@ impl MessageProducer {
 
         info!("Flushing Kafka producer (timeout: {:?})", timeout);
 
-        self.producer.flush(Timeout::After(timeout))
+        self.producer
+            .flush(Timeout::After(timeout))
             .context("Failed to flush Kafka producer")?;
 
         info!("Kafka producer flushed successfully");
@@ -201,14 +215,30 @@ impl Clone for MessageProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::KafkaConfig;
 
     #[test]
     fn test_disabled_producer_creation() {
-        let producer = MessageProducer::new(
-            "localhost:9092",
-            "test-topic".to_string(),
-            false, // disabled
-        );
+        let config = KafkaConfig {
+            enabled: false,
+            brokers: "localhost:9092".to_string(),
+            topic: "test-topic".to_string(),
+            consumer_group: "test-group".to_string(),
+            ssl_enabled: false,
+            sasl_mechanism: None,
+            sasl_username: None,
+            sasl_password: None,
+            producer_compression: String::from("gzip"),
+            producer_acks: String::from("all"),
+            producer_linger_ms: 5,
+            producer_batch_size: 1024,
+            producer_max_in_flight: 10,
+            producer_retries: 3,
+            producer_request_timeout_ms: 10000,
+            producer_delivery_timeout_ms: 30000,
+            producer_enable_idempotence: true,
+        };
+        let producer = MessageProducer::new(&config);
 
         assert!(producer.is_ok());
         assert!(!producer.unwrap().is_enabled());
@@ -216,11 +246,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_producer_send() {
-        let producer = MessageProducer::new(
-            "localhost:9092",
-            "test-topic".to_string(),
-            false,
-        ).unwrap();
+        let config = KafkaConfig {
+            enabled: false,
+            brokers: "localhost:9092".to_string(),
+            topic: "test-topic".to_string(),
+            consumer_group: "test-group".to_string(),
+            ssl_enabled: false,
+            sasl_mechanism: None,
+            sasl_username: None,
+            sasl_password: None,
+            producer_compression: String::from("gzip"),
+            producer_acks: String::from("all"),
+            producer_linger_ms: 5,
+            producer_batch_size: 1024,
+            producer_max_in_flight: 10,
+            producer_retries: 3,
+            producer_request_timeout_ms: 10000,
+            producer_delivery_timeout_ms: 30000,
+            producer_enable_idempotence: true,
+        };
+        let producer = MessageProducer::new(&config).unwrap();
 
         let envelope = KafkaMessageEnvelope::new_direct_message(
             "msg-123".to_string(),

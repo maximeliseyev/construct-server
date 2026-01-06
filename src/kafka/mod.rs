@@ -7,6 +7,7 @@ pub mod types;
 pub mod producer;
 pub mod consumer;
 pub mod metrics;
+pub mod config;
 
 // Re-export commonly used types
 pub use types::{KafkaMessageEnvelope, MessageType};
