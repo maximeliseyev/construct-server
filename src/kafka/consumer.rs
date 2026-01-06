@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
-use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::Message;
 use std::time::Duration;
 use tracing::{error, info};
 
+use crate::config::KafkaConfig;
+use super::config::create_client_config;
 use super::types::KafkaMessageEnvelope;
 
 /// Kafka message consumer for delivery worker
@@ -20,27 +21,28 @@ pub struct MessageConsumer {
 }
 
 impl MessageConsumer {
-    /// Create a new Kafka consumer
+    /// Create a new Kafka consumer from the application configuration.
+    ///
+    /// The consumer will not be created if `config.enabled` is false.
     ///
     /// # Arguments
-    /// * `brokers` - Comma-separated list of Kafka brokers
-    /// * `topic` - Kafka topic to consume from
-    /// * `group_id` - Consumer group ID (e.g., "construct-delivery-workers")
+    /// * `config` - The Kafka configuration struct.
     ///
     /// # Configuration
-    /// - `enable.auto.commit=false`: Manual offset management
-    /// - `auto.offset.reset=earliest`: Read from beginning on first start
-    /// - `session.timeout.ms=30000`: 30s session timeout
-    /// - `heartbeat.interval.ms=3000`: 3s heartbeat interval
-    pub fn new(brokers: &str, topic: String, group_id: &str) -> Result<Self> {
-        info!("Initializing Kafka consumer");
-        info!("Brokers: {}", brokers);
-        info!("Topic: {}", topic);
-        info!("Consumer Group: {}", group_id);
+    /// - `enable.auto.commit=false`: Manual offset management.
+    /// - `auto.offset.reset=earliest`: Read from beginning on first start.
+    /// - `session.timeout.ms=30000`: 30s session timeout.
+    /// - `heartbeat.interval.ms=3000`: 3s heartbeat interval.
+    pub fn new(config: &KafkaConfig) -> Result<Self> {
+        if !config.enabled {
+            anyhow::bail!("Cannot create Kafka consumer when Kafka is disabled");
+        }
 
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("group.id", group_id)
+        info!("Initializing Kafka consumer...");
+        let mut client_config = create_client_config(config)?;
+
+        let consumer: StreamConsumer = client_config
+            .set("group.id", &config.consumer_group)
             // Offset management
             .set("enable.auto.commit", "false") // Manual commit after delivery
             .set("auto.offset.reset", "earliest") // Read from beginning
@@ -57,12 +59,18 @@ impl MessageConsumer {
 
         // Subscribe to topic
         consumer
-            .subscribe(&[&topic])
+            .subscribe(&[&config.topic])
             .context("Failed to subscribe to Kafka topic")?;
 
-        info!("Kafka consumer initialized successfully");
+        info!(
+            "Kafka consumer initialized for topic '{}' in group '{}'",
+            config.topic, config.consumer_group
+        );
 
-        Ok(Self { consumer, topic })
+        Ok(Self {
+            consumer,
+            topic: config.topic.clone(),
+        })
     }
 
     /// Poll for next message
@@ -72,7 +80,8 @@ impl MessageConsumer {
         match self.consumer.recv().await {
             Ok(message) => {
                 // Parse payload
-                let payload = message.payload()
+                let payload = message
+                    .payload()
                     .context("Message payload is empty")?;
 
                 let envelope: KafkaMessageEnvelope = serde_json::from_slice(payload)
@@ -109,16 +118,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_consumer_creation_fails_without_kafka() {
-        // This should fail if Kafka is not running
-        let result = MessageConsumer::new(
-            "localhost:9092",
-            "test-topic".to_string(),
-            "test-group",
-        );
+    fn test_consumer_creation_fails_when_disabled() {
+        let config = KafkaConfig {
+            enabled: false,
+            brokers: "localhost:9092".to_string(),
+            topic: "test-topic".to_string(),
+            consumer_group: "test-group".to_string(),
+            ssl_enabled: false,
+            sasl_mechanism: None,
+            sasl_username: None,
+            sasl_password: None,
+            producer_compression: "snappy".to_string(),
+            producer_acks: "all".to_string(),
+            producer_linger_ms: 0,
+            producer_batch_size: 16384,
+            producer_max_in_flight: 5,
+            producer_retries: 10,
+            producer_request_timeout_ms: 30000,
+            producer_delivery_timeout_ms: 60000,
+            producer_enable_idempotence: true,
+        };
 
-        // We can't test successful creation without running Kafka
-        // Just verify the function signature is correct
-        let _ = result;
+        let result = MessageConsumer::new(&config);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(
+                e.to_string(),
+                "Cannot create Kafka consumer when Kafka is disabled"
+            );
+        }
     }
 }

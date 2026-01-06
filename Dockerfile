@@ -1,18 +1,25 @@
 # Build stage
-FROM rust:1.90-slim as builder
+FROM rust:1.90-slim-bookworm as builder
 
 WORKDIR /app
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
     pkg-config \
     libssl-dev \
     libsasl2-dev \
     libsasl2-modules \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
+
+# Copy build script and proto files (needed for gRPC code generation)
+COPY build.rs ./
+COPY proto ./proto
 
 # Copy source
 COPY src ./src

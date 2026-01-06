@@ -1,9 +1,11 @@
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_server::{
+    apns::{ApnsClient, DeviceTokenEncryption},
     auth::AuthManager,
     config::Config,
     context::AppContext,
+    kafka::MessageProducer,
     message::{ClientMessage, ServerMessage},
     queue::MessageQueue,
 };
@@ -63,16 +65,31 @@ pub async fn spawn_app() -> TestApp {
     let auth_manager = Arc::new(AuthManager::new(&app_config));
     let clients = Arc::new(RwLock::new(HashMap::new()));
     let server_instance_id = Uuid::new_v4().to_string();
+
+    // Initialize Kafka producer (disabled for tests)
+    let kafka_producer = Arc::new(MessageProducer::new(&app_config.kafka).unwrap());
+
+    // Initialize APNs client (disabled for tests)
+    let apns_client = Arc::new(ApnsClient::new(app_config.apns.clone()).unwrap());
+
+    // Initialize device token encryption
+    let token_encryption = Arc::new(
+        DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key).unwrap()
+    );
+
     let app_context = AppContext::new(
         db_pool_arc.clone(),
         queue.clone(),
         auth_manager,
         clients,
         app_config.clone(),
+        kafka_producer,
+        apns_client,
+        token_encryption,
         server_instance_id,
     );
 
-    tokio::spawn(construct_server::run_websocket_server(
+    tokio::spawn(construct_server::run_unified_server(
         app_context,
         listener,
     ));
