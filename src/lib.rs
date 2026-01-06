@@ -9,22 +9,22 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{Mutex, RwLock};
-use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite;
 use tracing;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode};
+use hyper::{Request, Response, StatusCode, body::Incoming as IncomingBody};
 use hyper_util::rt::TokioIo;
 
 pub mod apns;
 pub mod auth;
 pub mod config;
 pub mod context;
-pub mod e2e;
 pub mod db;
+pub mod e2e;
 pub mod federation;
 pub mod handlers;
 pub mod health;
@@ -92,36 +92,96 @@ async fn http_handler(
 
         // API routes
         ("POST", "/keys/upload") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             let (parts, body) = req.into_parts();
             handlers::keys::handle_upload_keys(&ctx, &parts.headers, body).await
-        },
+        }
         ("GET", p) if p.starts_with("/keys/") => {
             let user_id = p.trim_start_matches("/keys/");
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             let (parts, _) = req.into_parts();
             handlers::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
-        },
+        }
         ("POST", "/messages/send") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             let (parts, body) = req.into_parts();
             handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
-        },
+        }
 
         // Federation routes
         ("GET", "/.well-known/konstruct") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             handlers::federation::well_known_konstruct(ctx).await
-        },
+        }
         ("GET", "/federation/health") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             handlers::federation::federation_health(ctx).await
-        },
+        }
         ("POST", "/federation/v1/messages") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, apns_client, token_encryption, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             let (_parts, body) = req.into_parts();
             handlers::federation::receive_federated_message_http(&ctx, body).await
-        },
+        }
 
         _ => {
             let mut not_found = Response::new(Full::new(Bytes::from("Not Found")));
@@ -150,65 +210,80 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
             let service = service_fn(move |mut req: Request<IncomingBody>| {
                 let ctx = ctx.clone();
                 async move {
-                                        if req.headers().get("upgrade")
-                                            .and_then(|v| v.to_str().ok())
-                                            .map(|v| v.eq_ignore_ascii_case("websocket"))
-                                            .unwrap_or(false)
-                                        {
-                                            // Manually implement the handshake response to avoid moving `req`.
-                                            // Extract the key, build the response, and then move `req` into the upgrade task.
-                                            let key = match req.headers().get(hyper::header::SEC_WEBSOCKET_KEY) {
-                                                Some(key) => key.clone(),
-                                                None => {
-                                                    let mut res = Response::new(Full::new(Bytes::from("Bad Request: Missing Sec-WebSocket-Key")));
-                                                    *res.status_mut() = StatusCode::BAD_REQUEST;
-                                                    return Ok(res);
-                                                }
-                                            };
-                    
-                                            let ctx_clone = ctx.clone();
-                                            tokio::spawn(async move {
-                                                match hyper::upgrade::on(&mut req).await {
-                                                    Ok(upgraded) => {
-                                                        let io = TokioIo::new(upgraded);
-                                                        let ws_stream = WebSocketStream::from_raw_socket(
-                                                            io,
-                                                            tungstenite::protocol::Role::Server,
-                                                            None,
-                                                        ).await;
-                                                        use handlers::WebSocketStreamType;
-                                                        handle_websocket(WebSocketStreamType::Upgraded(ws_stream), addr, ctx_clone).await;
-                                                    }
-                                                    Err(e) => {
-                                                        tracing::error!("WebSocket upgrade error: {}", e);
-                                                    }
-                                                }
-                                            });
-                    
-                                            // Build the response with the derived key.
-                                            let derived_key = tungstenite::handshake::derive_accept_key(key.as_bytes());
-                                            let mut res = Response::new(Full::new(Bytes::new()));
-                                            *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-                                            res.headers_mut().insert(hyper::header::UPGRADE, "websocket".parse().unwrap());
-                                            res.headers_mut().insert(hyper::header::CONNECTION, "Upgrade".parse().unwrap());
-                                            res.headers_mut().insert(hyper::header::SEC_WEBSOCKET_ACCEPT, derived_key.parse().unwrap());
-                                            Ok(res)
-                    
-                                        } else {
-                                            // Handle regular HTTP
-                                            http_handler(
-                                                req,
-                                                ctx.db_pool.clone(),
-                                                ctx.queue.clone(),
-                                                ctx.auth_manager.clone(),
-                                                ctx.clients.clone(),
-                                                ctx.config.clone(),
-                                                ctx.kafka_producer.clone(),
-                                                ctx.apns_client.clone(),
-                                                ctx.token_encryption.clone(),
-                                                ctx.server_instance_id.clone(),
-                                            ).await
-                                        }
+                    if req
+                        .headers()
+                        .get("upgrade")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v.eq_ignore_ascii_case("websocket"))
+                        .unwrap_or(false)
+                    {
+                        // Manually implement the handshake response to avoid moving `req`.
+                        // Extract the key, build the response, and then move `req` into the upgrade task.
+                        let key = match req.headers().get(hyper::header::SEC_WEBSOCKET_KEY) {
+                            Some(key) => key.clone(),
+                            None => {
+                                let mut res = Response::new(Full::new(Bytes::from(
+                                    "Bad Request: Missing Sec-WebSocket-Key",
+                                )));
+                                *res.status_mut() = StatusCode::BAD_REQUEST;
+                                return Ok(res);
+                            }
+                        };
+
+                        let ctx_clone = ctx.clone();
+                        tokio::spawn(async move {
+                            match hyper::upgrade::on(&mut req).await {
+                                Ok(upgraded) => {
+                                    let io = TokioIo::new(upgraded);
+                                    let ws_stream = WebSocketStream::from_raw_socket(
+                                        io,
+                                        tungstenite::protocol::Role::Server,
+                                        None,
+                                    )
+                                    .await;
+                                    use handlers::WebSocketStreamType;
+                                    handle_websocket(
+                                        WebSocketStreamType::Upgraded(ws_stream),
+                                        addr,
+                                        ctx_clone,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => {
+                                    tracing::error!("WebSocket upgrade error: {}", e);
+                                }
+                            }
+                        });
+
+                        // Build the response with the derived key.
+                        let derived_key = tungstenite::handshake::derive_accept_key(key.as_bytes());
+                        let mut res = Response::new(Full::new(Bytes::new()));
+                        *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+                        res.headers_mut()
+                            .insert(hyper::header::UPGRADE, "websocket".parse().unwrap());
+                        res.headers_mut()
+                            .insert(hyper::header::CONNECTION, "Upgrade".parse().unwrap());
+                        res.headers_mut().insert(
+                            hyper::header::SEC_WEBSOCKET_ACCEPT,
+                            derived_key.parse().unwrap(),
+                        );
+                        Ok(res)
+                    } else {
+                        // Handle regular HTTP
+                        http_handler(
+                            req,
+                            ctx.db_pool.clone(),
+                            ctx.queue.clone(),
+                            ctx.auth_manager.clone(),
+                            ctx.clients.clone(),
+                            ctx.config.clone(),
+                            ctx.kafka_producer.clone(),
+                            ctx.apns_client.clone(),
+                            ctx.token_encryption.clone(),
+                            ctx.server_instance_id.clone(),
+                        )
+                        .await
+                    }
                 }
             });
 
@@ -235,7 +310,10 @@ fn spawn_delivery_listener(
     let poll_interval = config.delivery_poll_interval_ms;
 
     tokio::spawn(async move {
-        tracing::info!("📬 Delivery listener started for instance: {}", server_instance_id);
+        tracing::info!(
+            "📬 Delivery listener started for instance: {}",
+            server_instance_id
+        );
 
         // Create a separate Redis client for Pub/Sub
         let redis_client = match redis::Client::open(redis_url.as_str()) {
@@ -303,14 +381,18 @@ fn spawn_delivery_listener(
                 continue;
             }
 
-            tracing::debug!(count = messages.len(), "Received messages from delivery queue");
+            tracing::debug!(
+                count = messages.len(),
+                "Received messages from delivery queue"
+            );
 
             // Forward messages to clients
             for message_bytes in messages {
                 // Try to parse as ChatMessage (old format) or as JSON (v3 format)
 
                 // First, try to deserialize as MessagePack (old format)
-                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes) {
+                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes)
+                {
                     // Old format: send to the recipient via WebSocket
                     let clients_guard = clients.read().await;
                     if let Some(tx) = clients_guard.get(&chat_msg.to) {
@@ -359,7 +441,9 @@ fn spawn_delivery_listener(
                             );
                         }
                     } else {
-                        tracing::error!("Failed to parse message as ChatMessage or EncryptedMessageV3");
+                        tracing::error!(
+                            "Failed to parse message as ChatMessage or EncryptedMessageV3"
+                        );
                     }
                 } else {
                     tracing::error!("Invalid message encoding (not UTF-8)");
@@ -396,21 +480,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to Redis
     let redis_url_safe = if let Some(at_pos) = app_config.redis_url.find('@') {
         let protocol_end = app_config.redis_url.find("://").map(|p| p + 3).unwrap_or(0);
-        format!("{}***{}", &app_config.redis_url[..protocol_end], &app_config.redis_url[at_pos..])
+        format!(
+            "{}***{}",
+            &app_config.redis_url[..protocol_end],
+            &app_config.redis_url[at_pos..]
+        )
     } else {
         app_config.redis_url.clone()
     };
     tracing::info!("Connecting to Redis at: {}", redis_url_safe);
 
-    // Log the database number for diagnostics
-    let redis_client_for_diag = redis::Client::open(app_config.redis_url.clone())?;
-    let db_num = redis_client_for_diag.get_connection_info().addr.db();
-    tracing::info!("Redis client configured for database: {}", db_num);
-
     let message_queue = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        MessageQueue::new(&app_config)
-    ).await.map_err(|_| anyhow::anyhow!("Redis connection timed out after 10 seconds"))??;
+        MessageQueue::new(&app_config),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Redis connection timed out after 10 seconds"))??;
 
     tracing::info!("Connected to Redis");
 
@@ -444,7 +529,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize device token encryption
     tracing::info!("Initializing device token encryption...");
-    let token_encryption = apns::DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key)?;
+    let token_encryption =
+        apns::DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key)?;
     let token_encryption = Arc::new(token_encryption);
     tracing::info!("Device token encryption initialized");
 
@@ -475,7 +561,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Spawn background task to listen for messages from delivery worker
-    spawn_delivery_listener(queue.clone(), clients.clone(), server_instance_id.clone(), app_config.clone());
+    spawn_delivery_listener(
+        queue.clone(),
+        clients.clone(),
+        server_instance_id.clone(),
+        app_config.clone(),
+    );
 
     // Spawn heartbeat task to register this server in Redis
     server_registry::spawn_server_heartbeat(
