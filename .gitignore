@@ -20,8 +20,12 @@ target/
 .env.local
 *.p8
 
+# APNs Keys
+*.p8
+
 # IDE
 .vscode/
+.claude/
 .idea/
 *.swp
 *.swo

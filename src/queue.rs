@@ -32,6 +32,7 @@ use sha2::{Digest, Sha256};
 use crate::config::Config;
 
 const SECONDS_PER_DAY: i64 = 86400;
+
 pub struct MessageQueue {
     client: redis::aio::ConnectionManager,
     /// TTL for queued messages in seconds (configured via message_ttl_days)
@@ -426,22 +427,68 @@ impl MessageQueue {
             r"
             local messages = redis.call('LRANGE', KEYS[1], 0, -1)
             if #messages > 0 then
-                redis.call('DEL', KEYS[1])
+                redis.call('LTRIM', KEYS[1], #messages, -1)
             end
             return messages
-            "
+            ",
         );
 
         let messages: Vec<Vec<u8>> = script.key(&key).invoke_async(&mut self.client).await?;
 
-        if !messages.is_empty() {
+        // Filter out the empty placeholder message left by `register_server_instance`
+        let filtered_messages: Vec<Vec<u8>> =
+            messages.into_iter().filter(|msg| !msg.is_empty()).collect();
+
+        if !filtered_messages.is_empty() {
             tracing::debug!(
                 server_instance_id = %server_instance_id,
-                count = messages.len(),
+                count = filtered_messages.len(),
                 "Polled delivery queue"
             );
         }
 
-        Ok(messages)
+        Ok(filtered_messages)
+    }
+
+    /// Register this server instance in Redis
+    /// Creates a delivery queue key with TTL to signal that this server is active
+    /// delivery-worker uses KEYS delivery_queue:* to discover active servers
+    pub async fn register_server_instance(&mut self, queue_key: &str) -> Result<()> {
+        tracing::debug!(queue_key = %queue_key, "Registering server instance");
+        // Create an empty list (if doesn't exist) and set TTL to 60 seconds
+        // The heartbeat task will refresh this every 30 seconds
+        let ttl_seconds = 60;
+
+        // Check if key exists and its type
+        let key_type: Option<String> = self.client.key_type(queue_key).await?;
+        tracing::debug!(queue_key = %queue_key, key_type = ?key_type, "Checked key type");
+
+        match key_type.as_deref() {
+            // Key is already a list, do nothing.
+            Some("list") => {
+                tracing::debug!(queue_key = %queue_key, "Key is a list, doing nothing");
+            }
+            // Key doesn't exist (redis 'TYPE' returns 'none'), create it with a placeholder.
+            Some("none") | None => {
+                tracing::debug!(queue_key = %queue_key, "Key does not exist, creating it");
+                self.client.rpush::<_, _, ()>(queue_key, b"").await?;
+            }
+            // Key exists but has the wrong type, so delete and recreate it.
+            Some(other_type) => {
+                tracing::warn!(
+                    queue_key = %queue_key,
+                    key_type = %other_type,
+                    "Delivery queue key has wrong type, deleting and recreating as list"
+                );
+                self.client.del::<_, ()>(queue_key).await?;
+                self.client.rpush::<_, _, ()>(queue_key, b"").await?;
+            }
+        }
+
+        // Set/renew TTL
+        self.client.expire::<_, ()>(queue_key, ttl_seconds).await?;
+        tracing::debug!(queue_key = %queue_key, ttl = ttl_seconds, "Set TTL for key");
+
+        Ok(())
     }
 }
