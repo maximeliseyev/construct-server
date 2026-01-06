@@ -9,27 +9,36 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{Mutex, RwLock};
-use tokio_tungstenite::accept_async;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite;
 use tracing;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{body::Incoming as IncomingBody, Request, Response, StatusCode};
+use hyper::{Request, Response, StatusCode, body::Incoming as IncomingBody};
 use hyper_util::rt::TokioIo;
 
+pub mod apns;
 pub mod auth;
 pub mod config;
 pub mod context;
-pub mod e2e;
 pub mod db;
+pub mod e2e;
+pub mod federation;
 pub mod handlers;
 pub mod health;
 pub mod kafka;
 pub mod message;
+pub mod message_gateway;
 pub mod metrics;
 pub mod queue;
+pub mod server_registry;
+pub mod user_id;
 pub mod utils;
+
+// Re-export delivery_worker modules for use in bin/delivery_worker.rs
+pub mod delivery_worker;
 
 use auth::AuthManager;
 use config::Config;
@@ -49,6 +58,8 @@ async fn http_handler(
     clients: Clients,
     config: Arc<Config>,
     kafka_producer: Arc<MessageProducer>,
+    apns_client: Arc<apns::ApnsClient>,
+    token_encryption: Arc<apns::DeviceTokenEncryption>,
     server_instance_id: String,
 ) -> HttpResult {
     let path = req.uri().path().to_string();
@@ -81,21 +92,96 @@ async fn http_handler(
 
         // API routes
         ("POST", "/keys/upload") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             let (parts, body) = req.into_parts();
             handlers::keys::handle_upload_keys(&ctx, &parts.headers, body).await
-        },
+        }
         ("GET", p) if p.starts_with("/keys/") => {
             let user_id = p.trim_start_matches("/keys/");
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             let (parts, _) = req.into_parts();
             handlers::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
-        },
+        }
         ("POST", "/messages/send") => {
-            let ctx = AppContext::new(db_pool, queue, auth_manager, clients, config, kafka_producer, server_instance_id);
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
             let (parts, body) = req.into_parts();
             handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
-        },
+        }
+
+        // Federation routes
+        ("GET", "/.well-known/konstruct") => {
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
+            handlers::federation::well_known_konstruct(ctx).await
+        }
+        ("GET", "/federation/health") => {
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
+            handlers::federation::federation_health(ctx).await
+        }
+        ("POST", "/federation/v1/messages") => {
+            let ctx = AppContext::new(
+                db_pool,
+                queue,
+                auth_manager,
+                clients,
+                config,
+                kafka_producer,
+                apns_client,
+                token_encryption,
+                server_instance_id,
+            );
+            let (_parts, body) = req.into_parts();
+            handlers::federation::receive_federated_message_http(&ctx, body).await
+        }
 
         _ => {
             let mut not_found = Response::new(Full::new(Bytes::from("Not Found")));
@@ -106,57 +192,9 @@ async fn http_handler(
     Ok(response)
 }
 
-pub async fn run_http_server(
-    config: Config,
-    db_pool: Arc<DbPool>,
-    queue: Arc<Mutex<MessageQueue>>,
-    auth_manager: Arc<AuthManager>,
-    clients: Clients,
-    kafka_producer: Arc<MessageProducer>,
-    server_instance_id: String,
-) -> Result<()> {
-    let http_addr = format!("0.0.0.0:{}", config.health_port);
-    let listener = TcpListener::bind(&http_addr).await?;
-    tracing::info!("HTTP server listening on http://{}", http_addr);
-
-    let config = Arc::new(config);
-
+pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) {
     loop {
-        let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
-
-        let db_pool_clone = db_pool.clone();
-        let queue_clone = queue.clone();
-        let auth_manager_clone = auth_manager.clone();
-        let clients_clone = clients.clone();
-        let config_clone = config.clone();
-        let kafka_producer_clone = kafka_producer.clone();
-        let server_instance_id_clone = server_instance_id.clone();
-
-        tokio::task::spawn(async move {
-            let service = service_fn(move |req| {
-                http_handler(
-                    req,
-                    db_pool_clone.clone(),
-                    queue_clone.clone(),
-                    auth_manager_clone.clone(),
-                    clients_clone.clone(),
-                    config_clone.clone(),
-                    kafka_producer_clone.clone(),
-                    server_instance_id_clone.clone(),
-                )
-            });
-
-            if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-                tracing::error!("Error serving HTTP connection: {:?}", err);
-            }
-        });
-    }
-}
-
-pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener) {
-    loop {
-        let (socket, addr) = match listener.accept().await {
+        let (stream, addr) = match listener.accept().await {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to accept socket: {}", e);
@@ -167,8 +205,94 @@ pub async fn run_websocket_server(app_context: AppContext, listener: TcpListener
         let ctx = app_context.clone();
 
         tokio::spawn(async move {
-            if let Ok(ws_stream) = accept_async(socket).await {
-                handle_websocket(ws_stream, addr, ctx).await;
+            let io = TokioIo::new(stream);
+
+            let service = service_fn(move |mut req: Request<IncomingBody>| {
+                let ctx = ctx.clone();
+                async move {
+                    if req
+                        .headers()
+                        .get("upgrade")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v.eq_ignore_ascii_case("websocket"))
+                        .unwrap_or(false)
+                    {
+                        // Manually implement the handshake response to avoid moving `req`.
+                        // Extract the key, build the response, and then move `req` into the upgrade task.
+                        let key = match req.headers().get(hyper::header::SEC_WEBSOCKET_KEY) {
+                            Some(key) => key.clone(),
+                            None => {
+                                let mut res = Response::new(Full::new(Bytes::from(
+                                    "Bad Request: Missing Sec-WebSocket-Key",
+                                )));
+                                *res.status_mut() = StatusCode::BAD_REQUEST;
+                                return Ok(res);
+                            }
+                        };
+
+                        let ctx_clone = ctx.clone();
+                        tokio::spawn(async move {
+                            match hyper::upgrade::on(&mut req).await {
+                                Ok(upgraded) => {
+                                    let io = TokioIo::new(upgraded);
+                                    let ws_stream = WebSocketStream::from_raw_socket(
+                                        io,
+                                        tungstenite::protocol::Role::Server,
+                                        None,
+                                    )
+                                    .await;
+                                    use handlers::WebSocketStreamType;
+                                    handle_websocket(
+                                        WebSocketStreamType::Upgraded(ws_stream),
+                                        addr,
+                                        ctx_clone,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => {
+                                    tracing::error!("WebSocket upgrade error: {}", e);
+                                }
+                            }
+                        });
+
+                        // Build the response with the derived key.
+                        let derived_key = tungstenite::handshake::derive_accept_key(key.as_bytes());
+                        let mut res = Response::new(Full::new(Bytes::new()));
+                        *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+                        res.headers_mut()
+                            .insert(hyper::header::UPGRADE, "websocket".parse().unwrap());
+                        res.headers_mut()
+                            .insert(hyper::header::CONNECTION, "Upgrade".parse().unwrap());
+                        res.headers_mut().insert(
+                            hyper::header::SEC_WEBSOCKET_ACCEPT,
+                            derived_key.parse().unwrap(),
+                        );
+                        Ok(res)
+                    } else {
+                        // Handle regular HTTP
+                        http_handler(
+                            req,
+                            ctx.db_pool.clone(),
+                            ctx.queue.clone(),
+                            ctx.auth_manager.clone(),
+                            ctx.clients.clone(),
+                            ctx.config.clone(),
+                            ctx.kafka_producer.clone(),
+                            ctx.apns_client.clone(),
+                            ctx.token_encryption.clone(),
+                            ctx.server_instance_id.clone(),
+                        )
+                        .await
+                    }
+                }
+            });
+
+            if let Err(err) = http1::Builder::new()
+                .serve_connection(io, service)
+                .with_upgrades()
+                .await
+            {
+                tracing::error!("Connection error: {:?}", err);
             }
         });
     }
@@ -186,7 +310,10 @@ fn spawn_delivery_listener(
     let poll_interval = config.delivery_poll_interval_ms;
 
     tokio::spawn(async move {
-        tracing::info!("📬 Delivery listener started for instance: {}", server_instance_id);
+        tracing::info!(
+            "📬 Delivery listener started for instance: {}",
+            server_instance_id
+        );
 
         // Create a separate Redis client for Pub/Sub
         let redis_client = match redis::Client::open(redis_url.as_str()) {
@@ -254,14 +381,18 @@ fn spawn_delivery_listener(
                 continue;
             }
 
-            tracing::debug!(count = messages.len(), "Received messages from delivery queue");
+            tracing::debug!(
+                count = messages.len(),
+                "Received messages from delivery queue"
+            );
 
             // Forward messages to clients
             for message_bytes in messages {
                 // Try to parse as ChatMessage (old format) or as JSON (v3 format)
 
                 // First, try to deserialize as MessagePack (old format)
-                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes) {
+                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes)
+                {
                     // Old format: send to the recipient via WebSocket
                     let clients_guard = clients.read().await;
                     if let Some(tx) = clients_guard.get(&chat_msg.to) {
@@ -310,7 +441,9 @@ fn spawn_delivery_listener(
                             );
                         }
                     } else {
-                        tracing::error!("Failed to parse message as ChatMessage or EncryptedMessageV3");
+                        tracing::error!(
+                            "Failed to parse message as ChatMessage or EncryptedMessageV3"
+                        );
                     }
                 } else {
                     tracing::error!("Invalid message encoding (not UTF-8)");
@@ -347,7 +480,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to Redis
     let redis_url_safe = if let Some(at_pos) = app_config.redis_url.find('@') {
         let protocol_end = app_config.redis_url.find("://").map(|p| p + 3).unwrap_or(0);
-        format!("{}***{}", &app_config.redis_url[..protocol_end], &app_config.redis_url[at_pos..])
+        format!(
+            "{}***{}",
+            &app_config.redis_url[..protocol_end],
+            &app_config.redis_url[at_pos..]
+        )
     } else {
         app_config.redis_url.clone()
     };
@@ -355,8 +492,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let message_queue = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        MessageQueue::new(&app_config)
-    ).await.map_err(|_| anyhow::anyhow!("Redis connection timed out after 10 seconds"))??;
+        MessageQueue::new(&app_config),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Redis connection timed out after 10 seconds"))??;
 
     tracing::info!("Connected to Redis");
 
@@ -364,11 +503,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize Kafka producer (Phase 1: Foundation)
     tracing::info!("Initializing Kafka producer...");
-    let kafka_producer = MessageProducer::new(
-        &app_config.kafka.brokers,
-        app_config.kafka.topic.clone(),
-        app_config.kafka.enabled,
-    )?;
+    let kafka_producer = MessageProducer::new(&app_config.kafka)?;
     tracing::info!(
         enabled = app_config.kafka.enabled,
         brokers = %app_config.kafka.brokers,
@@ -376,6 +511,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "Kafka producer initialized"
     );
     let kafka_producer = Arc::new(kafka_producer);
+
+    // Initialize APNs client
+    tracing::info!("Initializing APNs client...");
+    let apns_client = apns::ApnsClient::new(app_config.apns.clone())?;
+    if app_config.apns.enabled {
+        apns_client.initialize().await?;
+        tracing::info!(
+            environment = ?app_config.apns.environment,
+            key_id = %app_config.apns.key_id,
+            "APNs client initialized successfully"
+        );
+    } else {
+        tracing::info!("APNs is disabled");
+    }
+    let apns_client = Arc::new(apns_client);
+
+    // Initialize device token encryption
+    tracing::info!("Initializing device token encryption...");
+    let token_encryption =
+        apns::DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key)?;
+    let token_encryption = Arc::new(token_encryption);
+    tracing::info!("Device token encryption initialized");
 
     // Create auth manager
     let auth_manager = Arc::new(AuthManager::new(&app_config));
@@ -398,32 +555,31 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         clients.clone(),
         app_config.clone(),
         kafka_producer.clone(),
+        apns_client.clone(),
+        token_encryption.clone(),
         server_instance_id.clone(),
     );
 
     // Spawn background task to listen for messages from delivery worker
-    spawn_delivery_listener(queue.clone(), clients.clone(), server_instance_id.clone(), app_config.clone());
-
-    let http_server_config = app_config.as_ref().clone();
-    let websocket_server = run_websocket_server(app_context, listener);
-    let http_server = run_http_server(
-        http_server_config,
-        db_pool.clone(),
+    spawn_delivery_listener(
         queue.clone(),
-        auth_manager,
-        clients,
-        kafka_producer.clone(),
+        clients.clone(),
         server_instance_id.clone(),
+        app_config.clone(),
     );
 
+    // Spawn heartbeat task to register this server in Redis
+    server_registry::spawn_server_heartbeat(
+        queue.clone(),
+        server_instance_id.clone(),
+        app_config.delivery_queue_prefix.clone(),
+    );
+
+    let unified_server = run_unified_server(app_context, listener);
+
     tokio::select! {
-        _ = websocket_server => {
-            tracing::info!("WebSocket server shut down.");
-        },
-        res = http_server => {
-            if let Err(e) = res {
-                tracing::error!("HTTP server failed: {}", e);
-            }
+        _ = unified_server => {
+            tracing::info!("Server shut down.");
         },
         _ = signal::ctrl_c() => {
             tracing::info!("Shutdown signal received. Shutting down...");

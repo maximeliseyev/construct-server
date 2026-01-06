@@ -1,5 +1,8 @@
 mod auth;
 mod connection;
+// pub mod deeplinks;  // TODO: Requires axum and qrcode dependencies
+pub mod device_tokens;
+pub mod federation;
 mod key_rotation;
 pub mod keys;
 pub mod messages;
@@ -9,7 +12,8 @@ mod ws_messages;
 use crate::context::AppContext;
 use crate::message::ClientMessage;
 use crate::metrics;
-use connection::{ConnectionHandler, WebSocketStreamType};
+use connection::ConnectionHandler;
+pub use connection::WebSocketStreamType;
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
@@ -105,6 +109,37 @@ pub async fn handle_websocket(
                                     &ctx,
                                     data.user_id,
                                     data.update,  // Now native UploadableKeyBundle
+                                )
+                                .await;
+                            }
+
+                            Ok(ClientMessage::RegisterDeviceToken(data)) => {
+                                device_tokens::handle_register_device_token(
+                                    &mut handler,
+                                    &ctx,
+                                    data.device_token,
+                                    data.device_name,
+                                    data.notification_filter,
+                                )
+                                .await;
+                            }
+
+                            Ok(ClientMessage::UnregisterDeviceToken(data)) => {
+                                device_tokens::handle_unregister_device_token(
+                                    &mut handler,
+                                    &ctx,
+                                    data.device_token,
+                                )
+                                .await;
+                            }
+
+                            Ok(ClientMessage::UpdateDeviceTokenPreferences(data)) => {
+                                device_tokens::handle_update_device_token_preferences(
+                                    &mut handler,
+                                    &ctx,
+                                    data.device_token,
+                                    data.notification_filter,
+                                    data.enabled,
                                 )
                                 .await;
                             }
