@@ -83,6 +83,9 @@ async fn main() -> Result<()> {
     let client =
         redis::Client::open(config.redis_url.as_str()).context("Failed to create Redis client")?;
 
+    let db_num = client.get_connection_info().addr.db();
+    info!("Redis client configured for database: {}", db_num);
+
     let redis_conn = client
         .get_multiplexed_async_connection()
         .await
@@ -306,6 +309,12 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     )
     .await
     .context("Failed to fetch delivery queue keys after retries")?;
+
+    debug!(
+        "Redis SCAN for '{}*' returned {} keys.",
+        state.config.delivery_queue_prefix,
+        delivery_keys.len()
+    );
 
     if delivery_keys.is_empty() {
         // Return error to prevent Kafka offset commit - message will be retried
