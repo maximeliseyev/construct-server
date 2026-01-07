@@ -14,6 +14,8 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
         jwt_secret: "test_secret_that_is_long_enough_for_hs256".to_string(),
         port: 8080,
         health_port: 8081,
+        heartbeat_interval_secs: 60 as i64,
+        server_registry_ttl_secs: 120 as i64,
         message_ttl_days: 7,
         session_ttl_days: 30,
         refresh_token_ttl_days: 90,
@@ -68,23 +70,29 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             team_id: "".to_string(),
             bundle_id: "".to_string(),
             topic: "".to_string(),
-            device_token_encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            device_token_encryption_key:
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
         },
         instance_domain: "test.local".to_string(),
         federation_base_domain: "test.local".to_string(),
         federation_enabled: false,
         deep_link_base_url: "".to_string(),
     };
-    
+
     // Allow overriding redis_url from environment for CI/different setups
     if let Ok(redis_url) = env::var("REDIS_URL") {
         config.redis_url = redis_url;
     }
 
-    let message_queue = MessageQueue::new(&config).await.expect("Failed to create MessageQueue");
+    let message_queue = MessageQueue::new(&config)
+        .await
+        .expect("Failed to create MessageQueue");
 
-    let redis_client = redis::Client::open(config.redis_url.as_str()).expect("Failed to create Redis client");
-    let redis_conn = redis_client.get_connection().expect("Failed to get Redis connection");
+    let redis_client =
+        redis::Client::open(config.redis_url.as_str()).expect("Failed to create Redis client");
+    let redis_conn = redis_client
+        .get_connection()
+        .expect("Failed to get Redis connection");
 
     (message_queue, redis_conn)
 }
@@ -97,30 +105,56 @@ async fn test_register_server_instance_logic() {
 
     // 1. Test creation of a new, non-existent key
     message_queue
-        .register_server_instance(&queue_key)
+        .register_server_instance(&queue_key, 60 as i64)
         .await
         .expect("register_server_instance failed on creation");
 
-    let key_type: String = redis_conn.key_type(&queue_key).expect("Redis TYPE command failed");
+    let key_type: String = redis_conn
+        .key_type(&queue_key)
+        .expect("Redis TYPE command failed");
     assert_eq!(key_type, "list", "The key should be created as a list");
 
-    let llen: i64 = redis_conn.llen(&queue_key).expect("Redis LLEN command failed");
+    let llen: i64 = redis_conn
+        .llen(&queue_key)
+        .expect("Redis LLEN command failed");
     assert_eq!(llen, 1, "The list should contain one placeholder element");
 
+    let ttl: i64 = redis_conn
+        .ttl(&queue_key)
+        .expect("Redis TTL command failed");
+    assert!(
+        ttl > 0 && ttl <= 60,
+        "The key should have a TTL set within the expected range"
+    );
+
     // 2. Test correction of a key with the wrong type
-    let _: () = redis_conn.set(&queue_key, "this is not a list").expect("Redis SET command failed");
-    
-    let key_type_before: String = redis_conn.key_type(&queue_key).expect("Redis TYPE command failed");
-    assert_eq!(key_type_before, "string", "The key should be a string before correction");
+    let _: () = redis_conn
+        .set(&queue_key, "this is not a list")
+        .expect("Redis SET command failed");
+
+    let key_type_before: String = redis_conn
+        .key_type(&queue_key)
+        .expect("Redis TYPE command failed");
+    assert_eq!(
+        key_type_before, "string",
+        "The key should be a string before correction"
+    );
 
     message_queue
-        .register_server_instance(&queue_key)
+        .register_server_instance(&queue_key, 60 as i64)
         .await
         .expect("register_server_instance failed on correction");
 
-    let key_type_after: String = redis_conn.key_type(&queue_key).expect("Redis TYPE command failed");
-    assert_eq!(key_type_after, "list", "The key should be corrected to a list");
+    let key_type_after: String = redis_conn
+        .key_type(&queue_key)
+        .expect("Redis TYPE command failed");
+    assert_eq!(
+        key_type_after, "list",
+        "The key should be corrected to a list"
+    );
 
     // 3. Clean up the key from Redis
-    let _: () = redis_conn.del(&queue_key).expect("Redis DEL command failed");
+    let _: () = redis_conn
+        .del(&queue_key)
+        .expect("Redis DEL command failed");
 }

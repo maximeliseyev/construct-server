@@ -2,6 +2,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use futures_util::stream::StreamExt;
 use http_body_util::Full;
+use redis::AsyncCommands;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -311,9 +312,25 @@ fn spawn_delivery_listener(
 
     tokio::spawn(async move {
         tracing::info!(
-            "📬 Delivery listener started for instance: {}",
+            "Delivery listener started for instance: {}",
             server_instance_id
         );
+
+        // Create a separate Redis client for the dead-letter queue
+        let mut dlq_conn: Option<redis::aio::MultiplexedConnection> =
+            match redis::Client::open(redis_url.as_str()) {
+                Ok(client) => match client.get_multiplexed_async_connection().await {
+                    Ok(conn) => Some(conn),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to get Redis connection for DLQ");
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to create Redis client for DLQ");
+                    None
+                }
+            };
 
         // Create a separate Redis client for Pub/Sub
         let redis_client = match redis::Client::open(redis_url.as_str()) {
@@ -442,11 +459,21 @@ fn spawn_delivery_listener(
                         }
                     } else {
                         tracing::error!(
-                            "Failed to parse message as ChatMessage or EncryptedMessageV3"
+                            "Failed to parse message as ChatMessage or EncryptedMessageV3. Moving to dead-letter queue."
                         );
+                        if let Some(conn) = &mut dlq_conn {
+                            let _: Result<(), _> =
+                                conn.lpush("dead_letter_queue", &message_bytes).await;
+                        }
                     }
                 } else {
-                    tracing::error!("Invalid message encoding (not UTF-8)");
+                    tracing::error!(
+                        "Invalid message encoding (not UTF-8). Moving to dead-letter queue."
+                    );
+                    if let Some(conn) = &mut dlq_conn {
+                        let _: Result<(), _> =
+                            conn.lpush("dead_letter_queue", &message_bytes).await;
+                    }
                 }
             }
         }
@@ -570,6 +597,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn heartbeat task to register this server in Redis
     server_registry::spawn_server_heartbeat(
+        app_config.clone(),
         queue.clone(),
         server_instance_id.clone(),
         app_config.delivery_queue_prefix.clone(),

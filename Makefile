@@ -1,4 +1,4 @@
-.PHONY: help build run-server run-worker test check clean docker-up docker-down deploy-server deploy-worker logs
+.PHONY: help build run-server run-worker test check clean docker-up docker-down deploy-server deploy-worker logs run
 
 # Default target
 help:
@@ -6,6 +6,7 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make build          - Build both binaries in release mode"
+	@echo "  make run            - Start all services with docker-compose"
 	@echo "  make run-server     - Run main server locally"
 	@echo "  make run-worker     - Run delivery worker locally"
 	@echo "  make test           - Run all tests"
@@ -49,27 +50,29 @@ clean:
 	cargo clean
 
 # Docker commands
+run: docker-up
+
 docker-up:
-	docker-compose up -d
+	docker-compose -f ops/docker-compose.yml up -d
 
 docker-down:
-	docker-compose down
+	docker-compose -f ops/docker-compose.yml down
 
 docker-logs:
-	docker-compose logs -f
+	docker-compose -f ops/docker-compose.yml logs -f
 
 docker-build:
-	docker-compose build
+	docker-compose -f ops/docker-compose.yml build
 
 docker-rebuild:
-	docker-compose up -d --build
+	docker-compose -f ops/docker-compose.yml up -d --build
 
 # Fly.io deployment
 deploy-server:
-	fly deploy
+	fly deploy --config ops/fly.toml
 
 deploy-worker:
-	fly deploy --config fly.worker.toml
+	fly deploy --config ops/fly.worker.toml
 
 deploy-all: deploy-server deploy-worker
 
@@ -85,7 +88,7 @@ db-migrate:
 
 # Development databases (via docker-compose)
 db-up:
-	docker-compose up postgres redis -d
+	docker-compose -f ops/docker-compose.yml up postgres redis -d
 
 db-down:
-	docker-compose down postgres redis
+	docker-compose -f ops/docker-compose.yml down

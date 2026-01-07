@@ -427,7 +427,7 @@ impl MessageQueue {
             r"
             local messages = redis.call('LRANGE', KEYS[1], 0, -1)
             if #messages > 0 then
-                redis.call('LTRIM', KEYS[1], #messages, -1)
+                redis.call('LTRIM', KEYS[1], 1, 0)
             end
             return messages
             ",
@@ -453,11 +453,14 @@ impl MessageQueue {
     /// Register this server instance in Redis
     /// Creates a delivery queue key with TTL to signal that this server is active
     /// delivery-worker uses KEYS delivery_queue:* to discover active servers
-    pub async fn register_server_instance(&mut self, queue_key: &str) -> Result<()> {
+    pub async fn register_server_instance(
+        &mut self,
+        queue_key: &str,
+        ttl_seconds: i64,
+    ) -> Result<()> {
         tracing::debug!(queue_key = %queue_key, "Registering server instance");
-        // Create an empty list (if doesn't exist) and set TTL to 60 seconds
-        // The heartbeat task will refresh this every 30 seconds
-        let ttl_seconds = 60;
+        // Create an empty list (if doesn't exist) and set TTL
+        // The heartbeat task will refresh this periodically
 
         // Check if key exists and its type
         let key_type: Option<String> = self.client.key_type(queue_key).await?;
