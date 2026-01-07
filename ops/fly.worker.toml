@@ -12,7 +12,7 @@ app = 'construct-delivery-worker'
 primary_region = 'ams'
 
 [build]
-  # Uses same Dockerfile but overrides CMD to run delivery-worker
+  dockerfile = "Dockerfile"
 
 [processes]
   app = "delivery-worker"
