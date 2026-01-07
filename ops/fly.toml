@@ -9,8 +9,7 @@ app = 'construct-server'
 primary_region = 'ams'
 
 [build]
-  # Uses default Dockerfile which builds both binaries
-  # This service runs construct-server by default (CMD in Dockerfile)
+  dockerfile = "Dockerfile"
 
 [http_service]
   internal_port = 8080
