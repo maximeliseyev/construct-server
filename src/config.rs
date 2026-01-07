@@ -106,6 +106,8 @@ pub struct Config {
     pub jwt_secret: String,
     pub port: u16,
     pub health_port: u16,
+    pub heartbeat_interval_secs: i64,
+    pub server_registry_ttl_secs: i64,
     pub message_ttl_days: i64,
     pub session_ttl_days: i64,
     pub refresh_token_ttl_days: i64,
@@ -158,6 +160,14 @@ impl Config {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8081),
+            heartbeat_interval_secs: std::env::var("HEARTBEAT_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(90),
+            server_registry_ttl_secs: std::env::var("SERVER_REGISTRY_TTL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(270),
             message_ttl_days: std::env::var("MESSAGE_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
@@ -180,7 +190,7 @@ impl Config {
             delivery_poll_interval_ms: std::env::var("DELIVERY_POLL_INTERVAL_MS")
                 .ok()
                 .and_then(|d| d.parse().ok())
-                .unwrap_or(1000),
+                .unwrap_or(10000),
             rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
             logging: LoggingConfig {
                 enable_message_metadata: std::env::var("LOG_MESSAGE_METADATA")

@@ -9,6 +9,7 @@
 //
 // ============================================================================
 
+use crate::config::Config;
 use crate::queue::MessageQueue;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -16,12 +17,13 @@ use tokio::time::{Duration, interval};
 
 /// Start heartbeat task that registers this server instance in Redis
 pub fn spawn_server_heartbeat(
+    config: Arc<Config>,
     queue: Arc<Mutex<MessageQueue>>,
     server_instance_id: String,
     delivery_queue_prefix: String,
 ) {
     tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(30));
+        let mut ticker = interval(Duration::from_secs(config.heartbeat_interval_secs as u64));
 
         loop {
             ticker.tick().await;
@@ -32,7 +34,10 @@ pub fn spawn_server_heartbeat(
             // This signals to delivery-worker that this server is alive
             let mut queue_guard = queue.lock().await;
 
-            match queue_guard.register_server_instance(&queue_key).await {
+            match queue_guard
+                .register_server_instance(&queue_key, config.server_registry_ttl_secs)
+                .await
+            {
                 Ok(()) => {
                     tracing::debug!(
                         server_instance_id = %server_instance_id,
