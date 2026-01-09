@@ -21,6 +21,7 @@
 
 use anyhow::{Context, Result};
 use construct_server::config::Config;
+use construct_server::kafka::types::DeliveryAckEvent;
 use construct_server::kafka::{KafkaMessageEnvelope, MessageConsumer};
 use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -111,7 +112,7 @@ async fn main() -> Result<()> {
 
 /// Kafka-based delivery worker (Phase 3+)
 async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
-    // Initialize Kafka consumer
+    // Initialize message consumer
     let consumer =
         MessageConsumer::new(&state.config.kafka).context("Failed to initialize Kafka consumer")?;
 
@@ -120,6 +121,14 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
         "Polling messages from Kafka topic: {}",
         state.config.kafka.topic
     );
+
+    // Spawn ACK consumer in background (Solution 1D)
+    let state_clone = state.clone();
+    let _ack_consumer_handle = tokio::spawn(async move {
+        if let Err(e) = run_ack_consumer_loop(state_clone).await {
+            error!(error = %e, "ACK consumer loop failed");
+        }
+    });
 
     // Main Kafka consumer loop
     loop {
@@ -425,6 +434,246 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     );
 
     Ok(())
+}
+
+/// Process a delivery ACK event from Kafka (Solution 1D - Privacy-First)
+///
+/// Flow:
+/// 1. Read DeliveryAckEvent from Kafka (contains only hashed IDs)
+/// 2. Look up sender_id from Redis using message_hash → ephemeral mapping
+/// 3. Forward "delivered" ACK to sender's delivery queue
+/// 4. Delete Redis mapping (one-time use)
+///
+/// **SECURITY**: This function handles NO plaintext IDs in Kafka logs.
+/// Only ephemeral Redis mappings can link message_hash to sender_id.
+async fn process_delivery_ack_event(state: &WorkerState, event: &DeliveryAckEvent) -> Result<()> {
+    let message_hash = &event.message_hash;
+
+    debug!(
+        message_hash = %message_hash,
+        "Processing delivery ACK event"
+    );
+
+    // 1. Validate event structure (security check)
+    event.validate().context("Invalid delivery ACK event")?;
+
+    // 2. Deduplication check: have we already processed this ACK?
+    let dedup_key = format!("processed_ack:{}", event.message_id);
+
+    let exists_result: i64 = execute_redis_with_retry(state, "check_ack_deduplication", |conn| {
+        let key = dedup_key.clone();
+        Box::pin(async move { redis::cmd("EXISTS").arg(&key).query_async(conn).await })
+    })
+    .await
+    .context("Failed to check ACK deduplication after retries")?;
+
+    let already_processed = exists_result > 0;
+
+    if already_processed {
+        info!(
+            message_id = %event.message_id,
+            "ACK already processed (deduplication)"
+        );
+        return Ok(()); // Return success to commit offset
+    }
+
+    // 3. Look up sender_id from Redis ephemeral mapping
+    let mapping_key = format!("delivery_ack:{}", message_hash);
+
+    let mapping_json: Option<String> =
+        execute_redis_with_retry(state, "fetch_ack_mapping", |conn| {
+            let key = mapping_key.clone();
+            Box::pin(async move { redis::cmd("GET").arg(&key).query_async(conn).await })
+        })
+        .await
+        .context("Failed to fetch ACK mapping after retries")?;
+
+    // Verify mapping exists (we don't need sender_id for broadcast approach)
+    if mapping_json.is_none() {
+        // Mapping expired or never created - ACK too old or invalid
+        debug!(
+            message_hash = %message_hash,
+            "No ACK mapping found (expired or invalid)"
+        );
+        return Ok(()); // Return success to commit offset
+    }
+
+    // 4. Forward "delivered" ACK to sender's delivery queue
+    // We broadcast to all delivery queues (same as message delivery)
+    let delivery_keys: Vec<String> =
+        execute_redis_with_retry(state, "fetch_delivery_queues_for_ack", |conn| {
+            let prefix = state.config.delivery_queue_prefix.clone();
+            Box::pin(async move {
+                let mut keys = Vec::new();
+                let mut cursor: u64 = 0;
+                let pattern = format!("{}*", prefix);
+
+                loop {
+                    let (new_cursor, mut found_keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                        .arg(cursor)
+                        .arg("MATCH")
+                        .arg(&pattern)
+                        .arg("COUNT")
+                        .arg(100)
+                        .query_async(conn)
+                        .await?;
+
+                    keys.append(&mut found_keys);
+
+                    if new_cursor == 0 {
+                        break;
+                    }
+                    cursor = new_cursor;
+                }
+
+                Ok::<Vec<String>, redis::RedisError>(keys)
+            })
+        })
+        .await
+        .context("Failed to fetch delivery queues after retries")?;
+
+    if delivery_keys.is_empty() {
+        debug!("No delivery queues available for ACK delivery");
+        return Ok(()); // No servers online, ACK will be lost (acceptable)
+    }
+
+    // Construct ACK message
+    let ack_message = serde_json::json!({
+        "type": "ack",
+        "messageId": event.message_id,
+        "status": "delivered",
+    });
+    let ack_json = serde_json::to_string(&ack_message)?;
+
+    // Try to deliver ACK to ALL delivery queues
+    // (The server will filter out connections that don't match sender_id)
+    for delivery_key in &delivery_keys {
+        let result =
+            execute_redis_with_retry(state, "forward_ack_to_queue", |conn| {
+                let key = delivery_key.clone();
+                let json = ack_json.clone();
+                Box::pin(async move {
+                    let count: i64 = redis::cmd("LPUSH").arg(&key).arg(&json).query_async(conn).await?;
+                    Ok::<i64, redis::RedisError>(count)
+                })
+            })
+            .await;
+
+        if let Err(e) = result {
+            warn!(
+                error = %e,
+                delivery_key = %delivery_key,
+                "Failed to forward ACK to delivery queue"
+            );
+        }
+    }
+
+    // 5. Delete Redis mapping (one-time use)
+    let _: i64 = execute_redis_with_retry(state, "delete_ack_mapping", |conn| {
+        let key = mapping_key.clone();
+        Box::pin(async move { redis::cmd("DEL").arg(&key).query_async(conn).await })
+    })
+    .await
+    .context("Failed to delete ACK mapping after retries")?;
+
+    // 6. Mark ACK as processed (7-day TTL to prevent reprocessing)
+    let ttl_seconds = state.config.message_ttl_days * 24 * 60 * 60;
+    let _: String = execute_redis_with_retry(state, "mark_ack_processed", |conn| {
+        let key = dedup_key.clone();
+        let ttl = ttl_seconds;
+        Box::pin(async move {
+            redis::cmd("SETEX")
+                .arg(&key)
+                .arg(ttl)
+                .arg("1")
+                .query_async(conn)
+                .await
+        })
+    })
+    .await
+    .context("Failed to mark ACK as processed after retries")?;
+
+    // SECURITY: Log ONLY hashes, NEVER plaintext IDs
+    info!(
+        message_hash = %message_hash,
+        sender_id_hash = %event.sender_id_hash,
+        "Delivery ACK processed successfully"
+    );
+
+    Ok(())
+}
+
+/// ACK consumer loop - consumes delivery ACK events from Kafka (Solution 1D)
+///
+/// This loop runs in a separate task parallel to the main message consumer.
+/// It reads from `{topic}-delivery-ack` topic and processes ACK events.
+async fn run_ack_consumer_loop(state: Arc<WorkerState>) -> Result<()> {
+    info!("Starting ACK consumer loop (Solution 1D - Privacy-First)");
+
+    // Create a custom Kafka config for the ACK topic
+    let mut ack_config = state.config.kafka.clone();
+    ack_config.topic = format!("{}-delivery-ack", ack_config.topic);
+    ack_config.consumer_group = format!("{}-ack", ack_config.consumer_group);
+
+    // Initialize Kafka consumer for ACK events
+    let consumer =
+        MessageConsumer::new(&ack_config).context("Failed to initialize ACK consumer")?;
+
+    info!("ACK consumer initialized successfully");
+    info!("Polling ACK events from Kafka topic: {}", ack_config.topic);
+
+    // Main ACK consumer loop
+    loop {
+        // Poll for ACK events (timeout: 1 second)
+        let raw_message = match consumer.poll_raw(std::time::Duration::from_secs(1)).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                continue;
+            }
+            Err(e) => {
+                error!(error = %e, "ACK consumer error");
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+
+        // Deserialize DeliveryAckEvent
+        let event: DeliveryAckEvent = match serde_json::from_slice(&raw_message) {
+            Ok(e) => e,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "Failed to deserialize DeliveryAckEvent"
+                );
+                // Commit offset to skip malformed message
+                if let Err(commit_err) = consumer.commit() {
+                    error!(error = %commit_err, "Failed to commit offset after deserialization error");
+                }
+                continue;
+            }
+        };
+
+        // Process ACK event
+        if let Err(e) = process_delivery_ack_event(&state, &event).await {
+            error!(
+                error = %e,
+                message_hash = %event.message_hash,
+                "Failed to process delivery ACK event"
+            );
+            // Do NOT commit offset on error - message will be redelivered
+            continue;
+        }
+
+        // Commit offset after successful processing
+        if let Err(e) = consumer.commit() {
+            error!(
+                error = %e,
+                message_hash = %event.message_hash,
+                "Failed to commit ACK offset"
+            );
+        }
+    }
 }
 
 /// Legacy Redis-only mode (Phase 1-2, for rollback)

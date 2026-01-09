@@ -1,11 +1,21 @@
 # fly.gateway.toml - Message Gateway Service configuration
 #
-# This is the message processing service that handles:
-# - Message validation and rate limiting
+# This is a stateless message processing service that handles:
+# - Message validation (structure, signatures, E2E envelope)
+# - Rate limiting and anti-spam
+# - Deduplication (prevents duplicate messages)
+# - Anti-spoofing checks (sender verification)
 # - Kafka message production
-# - Future: Federation routing
+# - Future: Federation routing (local vs remote instances)
 #
-# Deploy with: fly deploy --config fly.gateway.toml --app construct-message-gateway
+# Architecture:
+# - Stateless gRPC service (can scale horizontally)
+# - Validates BEFORE writing to Kafka (security-first)
+# - Redis for rate limiting and deduplication state
+# - PostgreSQL for persistent deduplication (optional)
+#
+# Deploy with: make deploy-gateway
+# Or: fly deploy --config ops/fly.gateway.toml --app construct-message-gateway
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 
@@ -13,7 +23,7 @@ app = 'construct-message-gateway'
 primary_region = 'ams'
 
 [build]
-  # Uses same Dockerfile but overrides CMD to run message-gateway binary
+  dockerfile = "ops/Dockerfile"
 
 [processes]
   app = "message-gateway"
@@ -25,13 +35,25 @@ primary_region = 'ams'
   # Rust logging level
   RUST_LOG = "info,construct_server=debug"
 
+  # Rate limiting
+  MAX_MESSAGES_PER_HOUR = "1000"
+  MAX_MESSAGES_PER_MINUTE = "60"
+
+  # Deduplication window (hours)
+  DEDUPLICATION_WINDOW_HOURS = "24"
+
+  # Redis prefixes (needed for config parsing)
+  ONLINE_CHANNEL = "user_online_notifications:"
+  DELIVERY_QUEUE_PREFIX = "delivery_queue:"
+  OFFLINE_QUEUE_PREFIX = "offline:"
+
 # gRPC service configuration
 [[services]]
   internal_port = 8080
   protocol = "tcp"
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [[services.ports]]
     port = 443
@@ -41,7 +63,7 @@ primary_region = 'ams'
     port = 80
     handlers = ["http"]
 
-  # Health check via gRPC HealthCheck RPC
+  # Health check via gRPC reflection or health check endpoint
   [[services.tcp_checks]]
     interval = "15s"
     timeout = "2s"
@@ -50,37 +72,42 @@ primary_region = 'ams'
 # VM configuration - stateless processing service
 [[vm]]
   memory = '512mb'
-  cpus = 2
-  memory_mb = 512
+  cpus = 1
 
-# Deployment strategy
+# Deployment strategy - rolling updates
 [deploy]
   strategy = "rolling"
+  max_unavailable = 1
 
 # Auto-scaling based on gRPC request rate
 [autoscaling]
   min_instances = 1
   max_instances = 10
 
-  # Scale based on CPU and connections
+  # Scale based on CPU and concurrent requests
   [[autoscaling.metrics]]
     type = "cpu"
     target = 70
 
   [[autoscaling.metrics]]
     type = "concurrency"
-    target = 100
+    target = 100  # gRPC requests
 
-# Secrets to set via: flyctl secrets set --app construct-message-gateway
-# - DATABASE_URL (not used by gateway, but required by Config::from_env)
-# - REDIS_URL (for rate limiting and deduplication)
-# - JWT_SECRET (not used by gateway, but required by Config::from_env)
-# - LOG_HASH_SALT (for logging)
-# - ONLINE_CHANNEL (not used by gateway, but required by Config::from_env)
+# Secrets to set via: make secrets-gateway
+# Or: bash ops/setup-fly-secrets.sh
+# Required secrets:
+# - DATABASE_URL (PostgreSQL - for deduplication)
+# - REDIS_URL (Upstash Redis - for rate limiting)
+# - JWT_SECRET (required by Config::from_env)
+# - JWT_ISSUER (required by Config::from_env)
+# - LOG_HASH_SALT (for hashing user IDs in logs)
 # - KAFKA_ENABLED=true
-# - KAFKA_BROKERS
+# - KAFKA_BROKERS (Confluent Cloud)
 # - KAFKA_TOPIC
-# - KAFKA_SSL_ENABLED
-# - KAFKA_SASL_MECHANISM
+# - KAFKA_SSL_ENABLED=true
+# - KAFKA_SASL_MECHANISM=PLAIN
 # - KAFKA_SASL_USERNAME
 # - KAFKA_SASL_PASSWORD
+# - KAFKA_PRODUCER_COMPRESSION=snappy
+# - KAFKA_PRODUCER_LINGER_MS=5
+# - KAFKA_PRODUCER_ACKS=all

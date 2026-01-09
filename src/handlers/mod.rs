@@ -103,6 +103,10 @@ pub async fn handle_websocket(
                                 ws_messages::handle_send_message(&mut handler, &ctx, msg).await;
                             }
 
+                            Ok(ClientMessage::AcknowledgeMessage(ack_data)) => {
+                                ws_messages::handle_acknowledge_message(&mut handler, &ctx, ack_data).await;
+                            }
+
                             Ok(ClientMessage::RotatePrekey(data)) => {
                                 key_rotation::handle_rotate_prekey(
                                     &mut handler,

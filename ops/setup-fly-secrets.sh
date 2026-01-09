@@ -5,7 +5,7 @@
 set -e
 
 # Check if .env exists
-if [ ! -f .env ]; then
+if [ ! -f .env.deploy ]; then
   echo "Error: .env file not found"
   exit 1
 fi
@@ -28,6 +28,8 @@ flyctl secrets set \
   JWT_ISSUER="$JWT_ISSUER" \
   LOG_HASH_SALT="$LOG_HASH_SALT" \
   ONLINE_CHANNEL="$ONLINE_CHANNEL" \
+  DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
+  OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
   --app construct-server
 
 echo ""
@@ -39,6 +41,8 @@ flyctl secrets set \
   JWT_ISSUER="$JWT_ISSUER" \
   LOG_HASH_SALT="$LOG_HASH_SALT" \
   ONLINE_CHANNEL="$ONLINE_CHANNEL" \
+  DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
+  OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
   --app construct-delivery-worker
 
 # ============================================================================
@@ -138,6 +142,31 @@ if [ -n "$DEEP_LINK_BASE_URL" ]; then
   flyctl secrets set \
     DEEP_LINK_BASE_URL="$DEEP_LINK_BASE_URL" \
     --app construct-server
+fi
+
+# ============================================================================
+# Delivery ACK secrets (if enabled)
+# ============================================================================
+
+if [ -n "$DELIVERY_ACK_MODE" ] && [ "$DELIVERY_ACK_MODE" != "disabled" ]; then
+  echo ""
+  echo "Setting up Delivery ACK secrets for construct-server..."
+  flyctl secrets set \
+    DELIVERY_ACK_MODE="$DELIVERY_ACK_MODE" \
+    DELIVERY_SECRET_KEY="$DELIVERY_SECRET_KEY" \
+    DELIVERY_EXPIRY_DAYS="$DELIVERY_EXPIRY_DAYS" \
+    DELIVERY_CLEANUP_INTERVAL_SECS="$DELIVERY_CLEANUP_INTERVAL_SECS" \
+    DELIVERY_ACK_ENABLE_BATCHING="$DELIVERY_ACK_ENABLE_BATCHING" \
+    DELIVERY_ACK_BATCH_BUFFER_SECS="$DELIVERY_ACK_BATCH_BUFFER_SECS" \
+    --app construct-server
+
+  echo ""
+  echo "Setting up Delivery ACK secrets for construct-delivery-worker..."
+  flyctl secrets set \
+    DELIVERY_ACK_MODE="$DELIVERY_ACK_MODE" \
+    DELIVERY_SECRET_KEY="$DELIVERY_SECRET_KEY" \
+    DELIVERY_EXPIRY_DAYS="$DELIVERY_EXPIRY_DAYS" \
+    --app construct-delivery-worker
 fi
 
 # ============================================================================

@@ -316,6 +316,20 @@ pub async fn handle_send_message(
                         .send_error("DELIVERY_FAILED", "Failed to deliver message")
                         .await;
                 } else {
+                    // Record pending delivery for ACK tracking
+                    if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
+                        if let Err(e) = delivery_ack_manager
+                            .record_pending_delivery(&msg.id, &msg.from)
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                message_id = %msg.id,
+                                "Failed to record pending delivery"
+                            );
+                        }
+                    }
+
                     let ack = ServerMessage::Ack(crate::message::AckData {
                         message_id: msg.id.clone(),
                         status: "queued".to_string(),
@@ -330,6 +344,20 @@ pub async fn handle_send_message(
         let mut queue = ctx.queue.lock().await;
         match queue.enqueue_message(&msg.to, &msg).await {
             Ok(_) => {
+                // Record pending delivery for ACK tracking
+                if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
+                    if let Err(e) = delivery_ack_manager
+                        .record_pending_delivery(&msg.id, &msg.from)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            message_id = %msg.id,
+                            "Failed to record pending delivery"
+                        );
+                    }
+                }
+
                 let ack = ServerMessage::Ack(crate::message::AckData {
                     message_id: msg.id.clone(),
                     status: "queued".to_string(),
@@ -463,5 +491,122 @@ async fn get_username_for_push(ctx: &AppContext, user_id: &str) -> Result<String
     Ok(result
         .and_then(|row| row.try_get("username").ok())
         .unwrap_or_else(|| "Someone".to_string()))
+}
+
+/// Handles message delivery acknowledgment from recipient
+///
+/// When a recipient confirms they received a message, this handler:
+/// 1. Validates the message_id format
+/// 2. Looks up the original sender (if delivery ACK is enabled)
+/// 3. Sends "delivered" ACK back to the sender
+pub async fn handle_acknowledge_message(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    ack_data: crate::message::AcknowledgeMessageData,
+) {
+    // Validate user is authenticated
+    let recipient_id = match handler.user_id() {
+        Some(id) => id.clone(),
+        None => {
+            tracing::error!("Unauthenticated user attempted to acknowledge message");
+            handler
+                .send_error("AUTH_REQUIRED", "Authentication is required")
+                .await;
+            return;
+        }
+    };
+
+    // Validate message ID format (should be UUID)
+    if uuid::Uuid::parse_str(&ack_data.message_id).is_err() {
+        tracing::warn!(
+            recipient_id = %recipient_id,
+            message_id = %ack_data.message_id,
+            "Invalid message ID format in acknowledgment"
+        );
+        handler
+            .send_error("INVALID_MESSAGE_ID", "Message ID must be a valid UUID")
+            .await;
+        return;
+    }
+
+    // Only process "delivered" status
+    if ack_data.status != "delivered" {
+        tracing::debug!(
+            recipient_id = %recipient_id,
+            message_id = %ack_data.message_id,
+            status = %ack_data.status,
+            "Ignoring non-delivered ACK status"
+        );
+        return;
+    }
+
+    tracing::debug!(
+        recipient_id = %recipient_id,
+        message_id = %ack_data.message_id,
+        "Received delivery acknowledgment"
+    );
+
+    // Process acknowledgment if delivery ACK system is enabled
+    let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager else {
+        tracing::debug!(
+            message_id = %ack_data.message_id,
+            "Delivery ACK system not enabled, ignoring acknowledgment"
+        );
+        return;
+    };
+
+    // Look up the original sender
+    let sender_id = match delivery_ack_manager
+        .process_acknowledgment(&ack_data.message_id)
+        .await
+    {
+        Ok(Some(sender_id)) => sender_id,
+        Ok(None) => {
+            tracing::debug!(
+                message_id = %ack_data.message_id,
+                "No pending delivery found (already acknowledged or expired)"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                message_id = %ack_data.message_id,
+                "Failed to process delivery acknowledgment"
+            );
+            return;
+        }
+    };
+
+    // Send "delivered" ACK to the original sender
+    let clients_guard = ctx.clients.read().await;
+    if let Some(sender_tx) = clients_guard.get(&sender_id) {
+        let delivered_ack = crate::message::ServerMessage::Ack(crate::message::AckData {
+            message_id: ack_data.message_id.clone(),
+            status: "delivered".to_string(),
+        });
+
+        if let Err(e) = sender_tx.send(delivered_ack) {
+            tracing::warn!(
+                error = %e,
+                sender_id = %sender_id,
+                message_id = %ack_data.message_id,
+                "Failed to send delivery ACK to sender (channel closed)"
+            );
+        } else {
+            tracing::info!(
+                sender_id = %sender_id,
+                recipient_id = %recipient_id,
+                message_id = %ack_data.message_id,
+                "Delivered ACK sent to sender"
+            );
+        }
+    } else {
+        tracing::debug!(
+            sender_id = %sender_id,
+            message_id = %ack_data.message_id,
+            "Sender not online, delivery ACK not sent (will be delivered when sender reconnects if implemented)"
+        );
+    }
 }
 
