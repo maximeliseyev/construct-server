@@ -75,25 +75,36 @@ impl MessageQueue {
             delivery_queue_prefix: config.delivery_queue_prefix.clone(),
         })
     }
+    /// @deprecated Phase 5+: Use Kafka for message persistence instead of Redis queues
+    /// This method is kept for backward compatibility with legacy flows
+    #[deprecated(since = "0.5.0", note = "Use Kafka for message persistence (Phase 5+)")]
+    #[allow(dead_code)]
     pub async fn enqueue_message(&mut self, user_id: &str, message: &ChatMessage) -> Result<()> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = rmp_serde::encode::to_vec_named(message)?;
         let _: () = self.client.lpush(&key, message_bytes).await?;
         let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
-        tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message");
+        tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message (DEPRECATED - use Kafka)");
         Ok(())
     }
 
-    /// Enqueues a raw JSON message (for API v3)
-    /// This stores the message as JSON bytes in Redis
+    /// @deprecated Phase 5+: Use Kafka for message persistence instead of Redis queues
+    /// This method is kept for backward compatibility with legacy flows
+    #[deprecated(since = "0.5.0", note = "Use Kafka for message persistence (Phase 5+)")]
+    #[allow(dead_code)]
     pub async fn enqueue_message_raw(&mut self, user_id: &str, message_json: &str) -> Result<()> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = message_json.as_bytes();
         let _: () = self.client.lpush(&key, message_bytes).await?;
         let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
-        tracing::info!(user_id = %user_id, "Queued message (v3)");
+        tracing::info!(user_id = %user_id, "Queued message v3 (DEPRECATED - use Kafka)");
         Ok(())
     }
+
+    /// @deprecated Phase 5+: Use Kafka consumer for message delivery
+    /// This method is kept for backward compatibility with legacy flows
+    #[deprecated(since = "0.5.0", note = "Use Kafka consumer for message delivery (Phase 5+)")]
+    #[allow(dead_code)]
     pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let messages: Vec<Vec<u8>> = self.client.lrange(&key, 0, -1).await?;
@@ -121,7 +132,7 @@ impl MessageQueue {
             total_messages,
             parsed_messages,
             dropped_messages,
-            "Dequeued messages"
+            "Dequeued messages (DEPRECATED - use Kafka)"
         );
         Ok(result)
     }

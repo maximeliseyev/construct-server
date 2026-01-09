@@ -240,23 +240,29 @@ pub async fn handle_send_message(
     }
 
     // ========================================================================
-    // LEGACY PATH (Phase 1)
-    // Direct processing when Message Gateway is not configured
+    // LEGACY PATH (when Message Gateway is not configured)
+    // Direct processing with Kafka as source of truth (Phase 5+)
     // ========================================================================
 
-    // PHASE 2: Kafka Dual-Write
-    // Write to Kafka BEFORE Redis (source of truth)
+    // PHASE 5: Kafka is the ONLY source of truth
+    // If Kafka write fails, message is NOT persisted - return error to sender
     let envelope = KafkaMessageEnvelope::from(&msg);
     if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
-        tracing::warn!(
+        // Phase 5: Kafka failure is a HARD ERROR
+        // Message is NOT persisted anywhere - must reject
+        tracing::error!(
             error = %e,
             message_id = %msg.id,
             kafka_enabled = ctx.kafka_producer.is_enabled(),
-            "Kafka write failed (dual-write phase, continuing with Redis)"
+            "Kafka write FAILED - message NOT persisted"
         );
-        // In Phase 2 (dual-write), we continue with Redis even if Kafka fails
-        // In Phase 5 (cutover), this would be a hard error
-    } else if ctx.kafka_producer.is_enabled() {
+        handler
+            .send_error("KAFKA_FAILURE", "Message could not be persisted. Please retry.")
+            .await;
+        return;
+    }
+
+    if ctx.kafka_producer.is_enabled() {
         tracing::debug!(
             message_id = %msg.id,
             "Message persisted to Kafka"
@@ -293,57 +299,24 @@ pub async fn handle_send_message(
                 }
             }
             Err(e) => {
+                // Phase 5: Message already persisted to Kafka (line 250)
+                // delivery_worker will read from Kafka when recipient comes online
                 if ctx.config.logging.enable_message_metadata {
-                    tracing::warn!(
+                    tracing::debug!(
                         error = %e,
                         message_id = %msg.id,
                         from = %msg.from,
                         to = %msg.to,
-                        "Failed to deliver to online recipient, queueing message"
+                        "Direct delivery failed, message persisted to Kafka for later delivery"
                     );
                 } else {
-                    tracing::warn!(
+                    tracing::debug!(
                         error = %e,
                         message_id = %msg.id,
-                        "Failed to deliver to online recipient, queueing message"
+                        "Direct delivery failed, message persisted to Kafka for later delivery"
                     );
                 }
 
-                let mut queue = ctx.queue.lock().await;
-                if let Err(qe) = queue.enqueue_message(&msg.to, &msg).await {
-                    tracing::error!(error = %qe, "Failed to queue message after delivery failure");
-                    handler
-                        .send_error("DELIVERY_FAILED", "Failed to deliver message")
-                        .await;
-                } else {
-                    // Record pending delivery for ACK tracking
-                    if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
-                        if let Err(e) = delivery_ack_manager
-                            .record_pending_delivery(&msg.id, &msg.from)
-                            .await
-                        {
-                            tracing::warn!(
-                                error = %e,
-                                message_id = %msg.id,
-                                "Failed to record pending delivery"
-                            );
-                        }
-                    }
-
-                    let ack = ServerMessage::Ack(crate::message::AckData {
-                        message_id: msg.id.clone(),
-                        status: "queued".to_string(),
-                    });
-                    if handler.send_msgpack(&ack).await.is_err() {
-                        return;
-                    }
-                }
-            }
-        }
-    } else {
-        let mut queue = ctx.queue.lock().await;
-        match queue.enqueue_message(&msg.to, &msg).await {
-            Ok(_) => {
                 // Record pending delivery for ACK tracking
                 if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
                     if let Err(e) = delivery_ack_manager
@@ -365,29 +338,41 @@ pub async fn handle_send_message(
                 if handler.send_msgpack(&ack).await.is_err() {
                     return;
                 }
-
-                if ctx.config.logging.enable_message_metadata {
-                    tracing::debug!(
-                        message_id = %msg.id,
-                        from = %msg.from,
-                        to = %msg.to,
-                        content_len = msg.content.len(),
-                        "Message queued for offline recipient"
-                    );
-                } else {
-                    tracing::debug!(message_id = %msg.id, "Message queued for offline recipient");
-                }
-
-                // Send push notification to offline recipient
-                send_push_notification_for_message(ctx, &msg).await;
-            }
-            Err(e) => {
-                tracing::error!(error = %e, message_id = %msg.id, "Error queuing message");
-                handler
-                    .send_error("QUEUE_FAILED", "Failed to queue message")
-                    .await;
             }
         }
+    } else {
+        // Phase 5: Recipient offline - message already persisted to Kafka (line 250)
+        // delivery_worker will read from Kafka when recipient comes online
+        tracing::debug!(
+            message_id = %msg.id,
+            recipient = %msg.to,
+            "Recipient offline, message persisted to Kafka for later delivery"
+        );
+
+        // Record pending delivery for ACK tracking
+        if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
+            if let Err(e) = delivery_ack_manager
+                .record_pending_delivery(&msg.id, &msg.from)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    message_id = %msg.id,
+                    "Failed to record pending delivery"
+                );
+            }
+        }
+
+        let ack = ServerMessage::Ack(crate::message::AckData {
+            message_id: msg.id.clone(),
+            status: "queued".to_string(),
+        });
+        if handler.send_msgpack(&ack).await.is_err() {
+            return;
+        }
+
+        // Send push notification to offline recipient
+        send_push_notification_for_message(ctx, &msg).await;
     }
 }
 
@@ -399,17 +384,20 @@ async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage)
         return;
     }
 
+    // SECURITY: Hash user IDs for privacy in push notification logs
+    let salt = &ctx.config.logging.hash_salt;
+
     // Get device tokens for recipient
     let device_tokens = match device_tokens::get_user_device_tokens(ctx, &msg.to).await {
         Ok(tokens) => tokens,
         Err(e) => {
-            tracing::warn!(error = %e, recipient_id = %msg.to, "Failed to fetch device tokens for push notification");
+            tracing::warn!(error = %e, recipient_hash = %crate::utils::log_safe_id(&msg.to, salt), "Failed to fetch device tokens for push notification");
             return;
         }
     };
 
     if device_tokens.is_empty() {
-        tracing::debug!(recipient_id = %msg.to, "No device tokens registered for recipient");
+        tracing::debug!(recipient_hash = %crate::utils::log_safe_id(&msg.to, salt), "No device tokens registered for recipient");
         return;
     }
 
@@ -417,7 +405,7 @@ async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage)
     let sender_username = match get_username_for_push(ctx, &msg.from).await {
         Ok(username) => username,
         Err(e) => {
-            tracing::warn!(error = %e, sender_id = %msg.from, "Failed to get sender username for push");
+            tracing::warn!(error = %e, sender_hash = %crate::utils::log_safe_id(&msg.from, salt), "Failed to get sender username for push");
             "Someone".to_string() // Fallback
         }
     };
@@ -455,15 +443,15 @@ async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage)
         if let Err(e) = notification_result {
             tracing::warn!(
                 error = %e,
-                recipient_id = %msg.to,
-                device_token = &device.device_token[..8],
+                recipient_hash = %crate::utils::log_safe_id(&msg.to, salt),
+                device_token_prefix = &device.device_token[..8.min(device.device_token.len())],
                 filter = %device.notification_filter,
                 "Failed to send push notification"
             );
         } else {
             tracing::debug!(
-                recipient_id = %msg.to,
-                device_token = &device.device_token[..8],
+                recipient_hash = %crate::utils::log_safe_id(&msg.to, salt),
+                device_token_prefix = &device.device_token[..8.min(device.device_token.len())],
                 filter = %device.notification_filter,
                 "Push notification sent successfully"
             );
@@ -516,10 +504,13 @@ pub async fn handle_acknowledge_message(
         }
     };
 
+    // SECURITY: Hash user IDs for privacy
+    let salt = &ctx.config.logging.hash_salt;
+
     // Validate message ID format (should be UUID)
     if uuid::Uuid::parse_str(&ack_data.message_id).is_err() {
         tracing::warn!(
-            recipient_id = %recipient_id,
+            recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
             message_id = %ack_data.message_id,
             "Invalid message ID format in acknowledgment"
         );
@@ -532,7 +523,7 @@ pub async fn handle_acknowledge_message(
     // Only process "delivered" status
     if ack_data.status != "delivered" {
         tracing::debug!(
-            recipient_id = %recipient_id,
+            recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
             message_id = %ack_data.message_id,
             status = %ack_data.status,
             "Ignoring non-delivered ACK status"
@@ -541,7 +532,7 @@ pub async fn handle_acknowledge_message(
     }
 
     tracing::debug!(
-        recipient_id = %recipient_id,
+        recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
         message_id = %ack_data.message_id,
         "Received delivery acknowledgment"
     );
@@ -589,23 +580,23 @@ pub async fn handle_acknowledge_message(
         if let Err(e) = sender_tx.send(delivered_ack) {
             tracing::warn!(
                 error = %e,
-                sender_id = %sender_id,
+                sender_hash = %crate::utils::log_safe_id(&sender_id, salt),
                 message_id = %ack_data.message_id,
                 "Failed to send delivery ACK to sender (channel closed)"
             );
         } else {
             tracing::info!(
-                sender_id = %sender_id,
-                recipient_id = %recipient_id,
+                sender_hash = %crate::utils::log_safe_id(&sender_id, salt),
+                recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
                 message_id = %ack_data.message_id,
                 "Delivered ACK sent to sender"
             );
         }
     } else {
         tracing::debug!(
-            sender_id = %sender_id,
+            sender_hash = %crate::utils::log_safe_id(&sender_id, salt),
             message_id = %ack_data.message_id,
-            "Sender not online, delivery ACK not sent (will be delivered when sender reconnects if implemented)"
+            "Sender not online, delivery ACK not sent"
         );
     }
 }

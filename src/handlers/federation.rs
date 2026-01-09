@@ -16,8 +16,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use crate::{
     context::AppContext,
+    kafka::KafkaMessageEnvelope,
     message::ChatMessage,
     user_id::UserId,
+    utils::log_safe_id,
 };
 
 fn json_response(status: StatusCode, body: serde_json::Value) -> hyper::Response<Full<Bytes>> {
@@ -125,10 +127,12 @@ pub async fn receive_federated_message_http(
         }
     };
 
+    // SECURITY: Hash user IDs for privacy in logs
+    let salt = &ctx.config.logging.hash_salt;
     tracing::info!(
         message_id = %req.message_id,
-        from = %req.from,
-        to = %req.to,
+        from_hash = %log_safe_id(&req.from, salt),
+        to_hash = %log_safe_id(&req.to, salt),
         "Received federated message from remote server"
     );
 
@@ -136,13 +140,13 @@ pub async fn receive_federated_message_http(
     let sender = match UserId::parse(&req.from) {
         Ok(id) => id,
         Err(e) => {
-            tracing::warn!(error = %e, from = %req.from, "Invalid sender user ID");
+            tracing::warn!(error = %e, from_hash = %log_safe_id(&req.from, salt), "Invalid sender user ID");
             return json_response(StatusCode::BAD_REQUEST, json!({"error": "Invalid sender ID"}));
         }
     };
 
     if !sender.is_federated() {
-        tracing::warn!(from = %req.from, "Sender must be federated (must have @domain)");
+        tracing::warn!(from_hash = %log_safe_id(&req.from, salt), "Sender must be federated (must have @domain)");
         return json_response(StatusCode::BAD_REQUEST, json!({"error": "Sender must be federated"}));
     }
 
@@ -150,7 +154,7 @@ pub async fn receive_federated_message_http(
     let recipient = match UserId::parse(&req.to) {
         Ok(id) => id,
         Err(e) => {
-            tracing::warn!(error = %e, to = %req.to, "Invalid recipient user ID");
+            tracing::warn!(error = %e, to_hash = %log_safe_id(&req.to, salt), "Invalid recipient user ID");
             return json_response(StatusCode::BAD_REQUEST, json!({"error": "Invalid recipient ID"}));
         }
     };
@@ -185,8 +189,27 @@ pub async fn receive_federated_message_http(
         return json_response(StatusCode::BAD_REQUEST, json!({"error": "Invalid message structure"}));
     }
 
-    // 7. Route to local delivery
-    // Try to deliver directly to online recipient
+    // 7. Phase 5: Write to Kafka first (source of truth)
+    let envelope = KafkaMessageEnvelope::from(&chat_message);
+    if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
+        tracing::error!(
+            error = %e,
+            message_id = %req.message_id,
+            kafka_enabled = ctx.kafka_producer.is_enabled(),
+            "Kafka write FAILED - federated message NOT persisted"
+        );
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": "Failed to persist message"})
+        );
+    }
+
+    tracing::debug!(
+        message_id = %req.message_id,
+        "Federated message persisted to Kafka"
+    );
+
+    // 8. Route to local delivery - try to deliver directly to online recipient
     let recipient_uuid = recipient.uuid();
     let recipient_tx = {
         let clients_read = ctx.clients.read().await;
@@ -197,10 +220,11 @@ pub async fn receive_federated_message_http(
         // Recipient is online - deliver directly
         match tx.send(crate::message::ServerMessage::Message(chat_message.clone())) {
             Ok(_) => {
+                // SECURITY: Hash user IDs for privacy
                 tracing::info!(
                     message_id = %req.message_id,
-                    from = %req.from,
-                    to = %req.to,
+                    from_hash = %log_safe_id(&req.from, salt),
+                    to_hash = %log_safe_id(&req.to, salt),
                     "Federated message delivered to online recipient"
                 );
 
@@ -213,45 +237,30 @@ pub async fn receive_federated_message_http(
                 );
             }
             Err(e) => {
-                tracing::warn!(
+                tracing::debug!(
                     error = %e,
                     message_id = %req.message_id,
-                    "Failed to deliver to online recipient, will queue"
+                    "Direct delivery failed, message persisted to Kafka for later delivery"
                 );
             }
         }
     }
 
-    // 8. Recipient offline - queue for later delivery
-    let mut queue = ctx.queue.lock().await;
-    match queue.enqueue_message(&recipient_uuid.to_string(), &chat_message).await {
-        Ok(_) => {
-            tracing::info!(
-                message_id = %req.message_id,
-                from = %req.from,
-                to = %req.to,
-                "Federated message queued for offline recipient"
-            );
+    // 9. Recipient offline - message already persisted to Kafka
+    // delivery_worker will read from Kafka when recipient comes online
+    // SECURITY: Hash user IDs for privacy
+    tracing::info!(
+        message_id = %req.message_id,
+        from_hash = %log_safe_id(&req.from, salt),
+        to_hash = %log_safe_id(&req.to, salt),
+        "Federated message queued in Kafka for offline recipient"
+    );
 
-            json_response(
-                StatusCode::OK,
-                json!(FederatedMessageResponse {
-                    status: "queued".to_string(),
-                    message_id: req.message_id,
-                })
-            )
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                message_id = %req.message_id,
-                "Failed to queue federated message"
-            );
-
-            json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({"error": "Failed to queue message"})
-            )
-        }
-    }
+    json_response(
+        StatusCode::OK,
+        json!(FederatedMessageResponse {
+            status: "queued".to_string(),
+            message_id: req.message_id,
+        })
+    )
 }
