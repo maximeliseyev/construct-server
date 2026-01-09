@@ -25,6 +25,7 @@ pub mod auth;
 pub mod config;
 pub mod context;
 pub mod db;
+pub mod delivery_ack;
 pub mod e2e;
 pub mod federation;
 pub mod handlers;
@@ -561,6 +562,43 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let token_encryption = Arc::new(token_encryption);
     tracing::info!("Device token encryption initialized");
 
+    // Initialize Delivery ACK system (optional, based on env vars)
+    let delivery_ack_manager = match delivery_ack::DeliveryAckConfig::from_env() {
+        Ok(ack_config) => {
+            tracing::info!("Initializing Delivery ACK system...");
+            let storage = Arc::new(delivery_ack::PostgresDeliveryStorage::new(
+                (*db_pool).clone(),
+            ));
+            let manager = Arc::new(delivery_ack::DeliveryAckManager::new(
+                storage.clone(),
+                ack_config.clone(),
+            ));
+
+            // Spawn cleanup task
+            let cleanup_task = delivery_ack::DeliveryCleanupTask::new(
+                storage,
+                std::time::Duration::from_secs(ack_config.cleanup_interval_secs),
+            );
+            tokio::spawn(async move {
+                cleanup_task.run().await;
+            });
+
+            tracing::info!(
+                expiry_days = ack_config.expiry_days,
+                cleanup_interval_secs = ack_config.cleanup_interval_secs,
+                "Delivery ACK system initialized"
+            );
+            Some(manager)
+        }
+        Err(e) => {
+            tracing::info!(
+                error = %e,
+                "Delivery ACK system disabled (DELIVERY_SECRET_KEY not set)"
+            );
+            None
+        }
+    };
+
     // Create auth manager
     let auth_manager = Arc::new(AuthManager::new(&app_config));
 
@@ -575,7 +613,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Server instance ID: {}", server_instance_id);
 
     // Create application context
-    let app_context = AppContext::new(
+    let mut app_context = AppContext::new(
         db_pool.clone(),
         queue.clone(),
         auth_manager.clone(),
@@ -586,6 +624,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         token_encryption.clone(),
         server_instance_id.clone(),
     );
+
+    // Add delivery ACK manager if initialized
+    if let Some(manager) = delivery_ack_manager {
+        app_context = app_context.with_delivery_ack_manager(manager);
+    }
 
     // Spawn background task to listen for messages from delivery worker
     spawn_delivery_listener(

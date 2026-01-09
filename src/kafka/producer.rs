@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 use super::config::create_client_config;
 use super::metrics;
-use super::types::KafkaMessageEnvelope;
+use super::types::{DeliveryAckEvent, KafkaMessageEnvelope};
 use crate::config::KafkaConfig;
 
 /// Kafka message producer for reliable message delivery
@@ -179,6 +179,93 @@ impl MessageProducer {
     /// Get topic name
     pub fn topic(&self) -> &str {
         &self.topic
+    }
+
+    /// Send a delivery ACK event to Kafka (Solution 1D - Privacy-First)
+    ///
+    /// **SECURITY**: This method sends DeliveryAckEvent with ONLY hashed IDs.
+    /// - message_hash: HMAC-SHA256(message_id)
+    /// - sender_id_hash: HMAC-SHA256(sender_id)
+    /// - recipient_id_hash: HMAC-SHA256(recipient_id)
+    ///
+    /// Kafka logs contain NO plaintext user IDs, preventing correlation attacks.
+    ///
+    /// # Arguments
+    /// * `event` - DeliveryAckEvent with pre-hashed IDs
+    ///
+    /// # Returns
+    /// * `Ok((partition, offset))` - Successfully written to Kafka
+    /// * `Err(anyhow::Error)` - Failed to write
+    pub async fn send_delivery_ack(&self, event: &DeliveryAckEvent) -> Result<(i32, i64)> {
+        // Skip if Kafka disabled
+        if !self.enabled {
+            return Ok((-1, -1)); // Dummy partition/offset
+        }
+
+        // Validate event before sending (checks hash lengths, etc.)
+        event.validate().context("Invalid delivery ACK event")?;
+
+        // Serialize to JSON
+        let payload = serde_json::to_vec(event)
+            .context("Failed to serialize delivery ACK event")?;
+
+        // Partition key: message_hash (ensures same partition for retries)
+        // NOTE: Using message_hash (not user ID hash) for partitioning
+        // This distributes load evenly and prevents hot partitions
+        let key = event.message_hash.as_bytes();
+
+        // Topic for delivery ACKs (separate from messages for ACL isolation)
+        let ack_topic = format!("{}-delivery-ack", self.topic);
+
+        // Create Kafka record
+        let record = FutureRecord::to(&ack_topic)
+            .key(key)
+            .payload(&payload);
+
+        // Send with timeout
+        let start = std::time::Instant::now();
+
+        match self
+            .producer
+            .send(record, Timeout::After(Duration::from_secs(2)))
+            .await
+        {
+            Ok((partition, offset)) => {
+                let latency = start.elapsed();
+
+                // Update metrics
+                metrics::KAFKA_PRODUCE_SUCCESS.inc();
+                metrics::KAFKA_PRODUCE_LATENCY.observe(latency.as_secs_f64());
+
+                // SECURITY: Log ONLY hashes, NEVER plaintext IDs
+                info!(
+                    partition = partition,
+                    offset = offset,
+                    message_hash = %event.message_hash,
+                    latency_ms = latency.as_millis(),
+                    "Delivery ACK event persisted to Kafka"
+                );
+
+                Ok((partition, offset))
+            }
+            Err((kafka_err, _)) => {
+                let latency = start.elapsed();
+
+                // Update metrics
+                metrics::KAFKA_PRODUCE_FAILURE.inc();
+
+                // SECURITY: Log ONLY hash, NEVER plaintext message_id
+                error!(
+                    error = %kafka_err,
+                    message_hash = %event.message_hash,
+                    topic = %ack_topic,
+                    latency_ms = latency.as_millis(),
+                    "Failed to send delivery ACK event to Kafka"
+                );
+
+                Err(anyhow::anyhow!("Kafka delivery ACK send failed: {}", kafka_err))
+            }
+        }
     }
 
     /// Flush pending messages (for graceful shutdown)

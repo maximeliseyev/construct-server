@@ -148,6 +148,17 @@ pub struct ChangePasswordData {
     pub new_password_confirm: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcknowledgeMessageData {
+    /// Message ID being acknowledged
+    pub message_id: String,
+
+    /// Acknowledgment status
+    /// Expected: "delivered"
+    pub status: String,
+}
+
 // ============================================================================
 // ClientMessage Enum - Internally Tagged Format
 // ============================================================================
@@ -161,6 +172,7 @@ pub enum ClientMessage {
     Connect(ConnectData),
     GetPublicKey(GetPublicKeyData),
     SendMessage(ChatMessage),
+    AcknowledgeMessage(AcknowledgeMessageData),
     RotatePrekey(RotatePrekeyData),
     ChangePassword(ChangePasswordData),
     Logout(LogoutData),

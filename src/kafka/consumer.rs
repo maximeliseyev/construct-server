@@ -96,6 +96,27 @@ impl MessageConsumer {
         }
     }
 
+    /// Poll for next message (raw bytes)
+    ///
+    /// Returns raw payload bytes without deserialization.
+    /// Useful for consuming messages with different schemas (e.g., DeliveryAckEvent).
+    pub async fn poll_raw(&self, _timeout: Duration) -> Result<Option<Vec<u8>>> {
+        match self.consumer.recv().await {
+            Ok(message) => {
+                // Get raw payload
+                let payload = message
+                    .payload()
+                    .context("Message payload is empty")?;
+
+                Ok(Some(payload.to_vec()))
+            }
+            Err(e) => {
+                error!(error = %e, "Kafka consumer error");
+                Err(anyhow::anyhow!("Consumer error: {}", e))
+            }
+        }
+    }
+
     /// Commit current offset (after successful delivery)
     ///
     /// This tells Kafka "I've successfully processed all messages up to this point".

@@ -2,6 +2,7 @@ use crate::apns::{ApnsClient, DeviceTokenEncryption};
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
+use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::handlers::session::Clients;
 use crate::kafka::MessageProducer;
 use crate::message_gateway::MessageGatewayClient;
@@ -30,6 +31,10 @@ pub struct AppContext {
     /// When None: process messages locally (legacy mode)
     /// When Some: forward to Message Gateway service via gRPC
     pub gateway_client: Option<Arc<Mutex<MessageGatewayClient>>>,
+    /// Delivery ACK manager for privacy-preserving message delivery confirmations
+    /// When None: delivery ACK system is disabled
+    /// When Some: track and route delivery acknowledgments
+    pub delivery_ack_manager: Option<Arc<DeliveryAckManager<PostgresDeliveryStorage>>>,
 }
 
 impl AppContext {
@@ -57,6 +62,7 @@ impl AppContext {
             token_encryption,
             server_instance_id,
             gateway_client: None, // Legacy mode by default
+            delivery_ack_manager: None, // Disabled by default
         }
     }
 
@@ -85,6 +91,16 @@ impl AppContext {
             token_encryption,
             server_instance_id,
             gateway_client: Some(gateway_client),
+            delivery_ack_manager: None, // Disabled by default
         }
+    }
+
+    /// Set delivery ACK manager (builder pattern)
+    pub fn with_delivery_ack_manager(
+        mut self,
+        manager: Arc<DeliveryAckManager<PostgresDeliveryStorage>>,
+    ) -> Self {
+        self.delivery_ack_manager = Some(manager);
+        self
     }
 }

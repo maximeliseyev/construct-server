@@ -1,7 +1,13 @@
-# fly.toml app configuration file for Construct Messenger (Main Server)
+# fly.toml app configuration file for Construct Server (WebSocket Gateway)
 #
-# This is the main application server that handles WebSocket connections,
-# HTTP API, and database interactions.
+# This is the main application server that handles:
+# - WebSocket connections for real-time messaging
+# - HTTP REST API for key management, authentication
+# - Database interactions (PostgreSQL)
+# - Kafka producer (dual-write mode, Phase 2-4)
+#
+# Deploy with: make deploy-server
+# Or: fly deploy --config ops/fly.toml --app construct-server
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 
@@ -9,16 +15,96 @@ app = 'construct-server'
 primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "ops/Dockerfile"
+
+[env]
+  # Rust logging (debug level for our app, info for dependencies)
+  RUST_LOG = "info,construct_server=debug"
+
+  # Server configuration
+  PORT = "8080"
+  HEALTH_PORT = "8081"
+
+  # Message TTL
+  MESSAGE_TTL_DAYS = "7"
+  SESSION_TTL_DAYS = "30"
+  REFRESH_TOKEN_TTL_DAYS = "90"
+
+  # Rate limiting
+  MAX_MESSAGES_PER_HOUR = "1000"
+  MAX_CONNECTIONS_PER_USER = "5"
+
+  # Delivery worker config
+  DELIVERY_POLL_INTERVAL_MS = "10000"
+  HEARTBEAT_INTERVAL_SECS = "90"
+  SERVER_REGISTRY_TTL_SECS = "270"
+
+  # Redis prefixes
+  ONLINE_CHANNEL = "user_online_notifications:"
+  DELIVERY_QUEUE_PREFIX = "delivery_queue:"
+  OFFLINE_QUEUE_PREFIX = "offline:"
 
 [http_service]
   internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
+  # Health check endpoint
+  [http_service.checks]
+    [http_service.checks.health]
+      type = "http"
+      interval = "10s"
+      timeout = "2s"
+      grace_period = "5s"
+      method = "get"
+      path = "/health"
+
+# VM configuration - WebSocket server needs more resources
 [[vm]]
-  memory = '512mb'
+  memory = '1gb'
   cpus = 2
-  memory_mb = 512
+
+# Deployment strategy - rolling updates to maintain availability
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+
+# Auto-scaling based on WebSocket connections
+[autoscaling]
+  min_instances = 1
+  max_instances = 10
+
+  [[autoscaling.metrics]]
+    type = "concurrency"
+    target = 500  # Scale when >500 concurrent connections
+
+  [[autoscaling.metrics]]
+    type = "cpu"
+    target = 75
+
+# Secrets to set via: make secrets-server
+# Or: bash ops/setup-fly-secrets.sh
+# Required secrets:
+# - DATABASE_URL (Supabase PostgreSQL)
+# - REDIS_URL (Upstash Redis)
+# - JWT_SECRET
+# - JWT_ISSUER
+# - LOG_HASH_SALT
+# - KAFKA_ENABLED=true
+# - KAFKA_BROKERS (Confluent Cloud)
+# - KAFKA_TOPIC
+# - KAFKA_CONSUMER_GROUP
+# - KAFKA_SSL_ENABLED=true
+# - KAFKA_SASL_MECHANISM=PLAIN
+# - KAFKA_SASL_USERNAME
+# - KAFKA_SASL_PASSWORD
+# - KAFKA_PRODUCER_COMPRESSION=snappy
+# - KAFKA_PRODUCER_LINGER_MS=5
+# - KAFKA_PRODUCER_ACKS=all
+# - DELIVERY_ACK_MODE=kafka
+# - DELIVERY_SECRET_KEY
+# - INSTANCE_DOMAIN
+# - FEDERATION_BASE_DOMAIN
+# - APNS_DEVICE_TOKEN_ENCRYPTION_KEY

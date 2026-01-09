@@ -1,10 +1,22 @@
 # fly.worker.toml app configuration file for Construct Delivery Worker
 #
-# This is a background worker that processes offline message delivery.
-# It listens to Redis Pub/Sub for user online notifications and moves messages
-# from offline queues to the appropriate server instance delivery queues.
+# This is a background worker that processes message delivery:
+# - Kafka consumer: Reads messages from construct-messages topic
+# - Redis Pub/Sub: Listens for user online notifications
+# - Offline message delivery: Moves messages from Kafka to online users
+# - Delivery ACK processing: Consumes delivery ACK events from Kafka
 #
-# Deploy with: fly deploy --config fly.worker.toml
+# Architecture (Phase 2-4):
+# - Dual-read mode: Reads from BOTH Kafka and Redis offline queues
+# - Kafka consumer group: cnstrct-dlvr-wrkrs (horizontal scaling)
+# - Partitioned by user_id for load balancing
+#
+# Architecture (Phase 5+):
+# - Kafka-only mode: Single source of truth
+# - Kafka offset rewind for offline message delivery
+#
+# Deploy with: make deploy-worker
+# Or: fly deploy --config ops/fly.worker.toml --app construct-delivery-worker
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 
@@ -12,18 +24,65 @@ app = 'construct-delivery-worker'
 primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "ops/Dockerfile"
 
 [processes]
   app = "delivery-worker"
 
+[env]
+  # Rust logging level
+  RUST_LOG = "info,construct_server=debug"
+
+  # Delivery worker config
+  DELIVERY_POLL_INTERVAL_MS = "10000"
+  HEARTBEAT_INTERVAL_SECS = "90"
+  SERVER_REGISTRY_TTL_SECS = "270"
+
+  # Redis prefixes
+  ONLINE_CHANNEL = "user_online_notifications:"
+  DELIVERY_QUEUE_PREFIX = "delivery_queue:"
+  OFFLINE_QUEUE_PREFIX = "offline:"
+
+  # Message TTL
+  MESSAGE_TTL_DAYS = "7"
+
 # No HTTP service for worker (it's a background process)
+# Workers communicate via Redis Pub/Sub and Kafka
 
 [[vm]]
-  memory = '256mb'
+  memory = '512mb'
   cpus = 1
-  memory_mb = 256
 
-# Worker should always be running (not auto-stop like main server)
+# Worker should always be running (not auto-stop)
 [deploy]
   strategy = "rolling"
+  max_unavailable = 1
+
+# Auto-scaling based on Kafka consumer lag
+[autoscaling]
+  min_instances = 2
+  max_instances = 10
+
+  # Scale based on CPU (when processing heavy load)
+  [[autoscaling.metrics]]
+    type = "cpu"
+    target = 70
+
+# Secrets to set via: make secrets-worker
+# Or: bash ops/setup-fly-secrets.sh
+# Required secrets:
+# - DATABASE_URL (PostgreSQL - for user lookup)
+# - REDIS_URL (Upstash Redis - for Pub/Sub, server registry)
+# - JWT_SECRET (required by Config::from_env)
+# - JWT_ISSUER (required by Config::from_env)
+# - LOG_HASH_SALT (for hashing user IDs in logs)
+# - KAFKA_ENABLED=true
+# - KAFKA_BROKERS (Confluent Cloud)
+# - KAFKA_TOPIC
+# - KAFKA_CONSUMER_GROUP=cnstrct-dlvr-wrkrs
+# - KAFKA_SSL_ENABLED=true
+# - KAFKA_SASL_MECHANISM=PLAIN
+# - KAFKA_SASL_USERNAME
+# - KAFKA_SASL_PASSWORD
+# - DELIVERY_ACK_MODE=kafka
+# - DELIVERY_SECRET_KEY
