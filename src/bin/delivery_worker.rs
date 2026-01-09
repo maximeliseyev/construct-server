@@ -23,10 +23,18 @@ use anyhow::{Context, Result};
 use construct_server::config::Config;
 use construct_server::kafka::types::DeliveryAckEvent;
 use construct_server::kafka::{KafkaMessageEnvelope, MessageConsumer};
+use construct_server::message::ChatMessage;
+use construct_server::metrics::{
+    SHADOW_READ_DISCREPANCIES, SHADOW_READ_KAFKA_ONLY, SHADOW_READ_MATCHES,
+    SHADOW_READ_PROCESSED, SHADOW_READ_REDIS_ONLY,
+};
+use construct_server::utils::log_safe_id;
 use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -47,6 +55,11 @@ struct WorkerState {
     redis_client: Arc<redis::Client>,
     /// Counter for consecutive "no delivery queues" errors (for periodic summary logging)
     no_queues_count: Arc<RwLock<u64>>,
+    /// Phase 4: Shadow-read mode enabled
+    /// When true, compares Kafka messages with Redis offline queues for validation
+    shadow_read_enabled: bool,
+    /// Track message IDs processed from Kafka (for reverse-check in Phase 4.3)
+    processed_message_ids: Arc<RwLock<HashSet<String>>>,
 }
 
 #[tokio::main]
@@ -93,11 +106,23 @@ async fn main() -> Result<()> {
 
     let redis_conn = Arc::new(RwLock::new(redis_conn));
 
+    // Phase 4: Shadow-read mode (compare Kafka vs Redis)
+    let shadow_read_enabled = std::env::var("SHADOW_READ_ENABLED")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse()
+        .unwrap_or(false);
+
+    if shadow_read_enabled {
+        info!("🔍 Shadow-read mode ENABLED - will compare Kafka vs Redis offline queues");
+    }
+
     let state = Arc::new(WorkerState {
         config: config.clone(),
         redis_conn: redis_conn.clone(),
         redis_client: Arc::new(client),
         no_queues_count: Arc::new(RwLock::new(0)),
+        shadow_read_enabled,
+        processed_message_ids: Arc::new(RwLock::new(HashSet::new())),
     });
 
     // Choose delivery mode based on KAFKA_ENABLED
@@ -130,6 +155,15 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
         }
     });
 
+    // Phase 4.3: Spawn reverse-check scanner (if shadow-read enabled)
+    if state.shadow_read_enabled {
+        let state_clone = state.clone();
+        let _reverse_check_handle = tokio::spawn(async move {
+            run_redis_reverse_check_scanner(state_clone).await;
+        });
+        info!("Started Redis reverse-check scanner (Phase 4.3)");
+    }
+
     // Main Kafka consumer loop
     loop {
         match consumer.poll(std::time::Duration::from_secs(1)).await {
@@ -138,10 +172,12 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
                     // Log unexpected errors (no delivery queues are already logged in process_kafka_message)
                     let error_msg = e.to_string();
                     if !error_msg.contains("No delivery queues available") {
+                        // SECURITY: Hash recipient_id for privacy
+                        let salt = &state.config.logging.hash_salt;
                         error!(
                             error = %e,
                             message_id = %envelope.message_id,
-                            recipient_id = %envelope.recipient_id,
+                            recipient_hash = %log_safe_id(&envelope.recipient_id, salt),
                             "Failed to process Kafka message"
                         );
                     }
@@ -250,9 +286,11 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     let message_id = &envelope.message_id;
     let recipient_id = &envelope.recipient_id;
 
+    // SECURITY: Even in debug logs, hash recipient_id for privacy
+    let salt = &state.config.logging.hash_salt;
     debug!(
         message_id = %message_id,
-        recipient_id = %recipient_id,
+        recipient_hash = %log_safe_id(recipient_id, salt),
         "Processing Kafka message"
     );
 
@@ -333,19 +371,20 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         drop(count);
 
         // Log detailed warning every 100 messages, or for the first occurrence
+        // SECURITY: Hash recipient_id for privacy
+        let salt = &state.config.logging.hash_salt;
         if current_count == 1 || current_count % 100 == 0 {
             warn!(
                 message_id = %message_id,
-                recipient_id = %recipient_id,
-                delivery_queue_prefix = %state.config.delivery_queue_prefix,
+                recipient_hash = %log_safe_id(recipient_id, salt),
                 consecutive_failures = current_count,
-                "No delivery queues available - no server instances running. Messages are being held in Kafka and will be retried when servers come online."
+                "No delivery queues available - messages held in Kafka until servers come online"
             );
         } else {
             // Use debug level for subsequent messages to reduce log spam
             debug!(
                 message_id = %message_id,
-                recipient_id = %recipient_id,
+                recipient_hash = %log_safe_id(recipient_id, salt),
                 consecutive_failures = current_count,
                 "No delivery queues available (message will retry)"
             );
@@ -426,14 +465,333 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     .await
     .context("Failed to mark message as processed after retries")?;
 
+    // SECURITY: Hash recipient_id for privacy in production logs
+    let salt = &state.config.logging.hash_salt;
     info!(
         message_id = %message_id,
-        recipient_id = %recipient_id,
-        delivery_queue = %delivery_key,
-        "Message forwarded from Kafka to delivery queue"
+        recipient_hash = %log_safe_id(recipient_id, salt),
+        "Message forwarded to delivery queue"
     );
 
+    // Phase 4: Shadow-read comparison (if enabled)
+    if state.shadow_read_enabled {
+        shadow_read_compare(state, envelope).await;
+    }
+
     Ok(())
+}
+
+// ============================================================================
+// Phase 4: Shadow-Read Mode (Kafka vs Redis Comparison)
+// ============================================================================
+
+/// Compare a Kafka message with Redis offline queue for validation
+///
+/// This function is called after successfully processing a Kafka message.
+/// It reads the Redis offline queue for the same recipient and compares.
+///
+/// Metrics tracked:
+/// - SHADOW_READ_MATCHES: Message found in both Kafka and Redis (fields match)
+/// - SHADOW_READ_DISCREPANCIES: Message found in both but fields differ
+/// - SHADOW_READ_KAFKA_ONLY: Message in Kafka but not in Redis
+async fn shadow_read_compare(state: &WorkerState, envelope: &KafkaMessageEnvelope) {
+    let message_id = &envelope.message_id;
+    let recipient_id = &envelope.recipient_id;
+
+    SHADOW_READ_PROCESSED.inc();
+
+    // Track this message_id as processed from Kafka (for reverse-check)
+    {
+        let mut processed = state.processed_message_ids.write().await;
+        processed.insert(message_id.clone());
+        // Limit memory usage - keep only last 10000 message IDs
+        if processed.len() > 10000 {
+            // Remove arbitrary element (HashSet doesn't have pop_front)
+            if let Some(old_id) = processed.iter().next().cloned() {
+                processed.remove(&old_id);
+            }
+        }
+    }
+
+    // Read Redis offline queue for this recipient
+    let redis_key = format!("{}{}", state.config.offline_queue_prefix, recipient_id);
+
+    let redis_messages: Vec<Vec<u8>> = match execute_redis_with_retry(
+        state,
+        "shadow_read_redis_queue",
+        |conn| {
+            let key = redis_key.clone();
+            Box::pin(async move {
+                redis::cmd("LRANGE")
+                    .arg(&key)
+                    .arg(0)
+                    .arg(-1)
+                    .query_async(conn)
+                    .await
+            })
+        },
+    )
+    .await
+    {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            // SECURITY: Hash recipient_id for privacy
+            let salt = &state.config.logging.hash_salt;
+            warn!(
+                error = %e,
+                message_id = %message_id,
+                recipient_hash = %log_safe_id(recipient_id, salt),
+                "Shadow-read: Failed to fetch Redis offline queue"
+            );
+            return;
+        }
+    };
+
+    // Deserialize Redis messages and find matching message_id
+    let mut found_match = false;
+    for msg_bytes in &redis_messages {
+        match rmp_serde::from_slice::<ChatMessage>(msg_bytes) {
+            Ok(redis_msg) => {
+                if redis_msg.id == *message_id {
+                    // Found matching message - compare fields
+                    found_match = true;
+
+                    let fields_match = compare_kafka_redis_message(envelope, &redis_msg);
+                    if fields_match {
+                        SHADOW_READ_MATCHES.inc();
+                        debug!(
+                            message_id = %message_id,
+                            "Shadow-read: MATCH - Kafka and Redis messages are identical"
+                        );
+                    } else {
+                        SHADOW_READ_DISCREPANCIES.inc();
+                        // SECURITY: Hash user IDs to prevent PII leakage in logs
+                        let salt = &state.config.logging.hash_salt;
+                        warn!(
+                            message_id = %message_id,
+                            kafka_sender_hash = %log_safe_id(&envelope.sender_id, salt),
+                            redis_sender_hash = %log_safe_id(&redis_msg.from, salt),
+                            kafka_recipient_hash = %log_safe_id(&envelope.recipient_id, salt),
+                            redis_recipient_hash = %log_safe_id(&redis_msg.to, salt),
+                            kafka_content_len = envelope.encrypted_payload.len(),
+                            redis_content_len = redis_msg.content.len(),
+                            "Shadow-read: DISCREPANCY - Kafka and Redis messages differ!"
+                        );
+                    }
+                    break;
+                }
+            }
+            Err(e) => {
+                // Try JSON deserialization (API v3 format)
+                if let Ok(json_msg) = serde_json::from_slice::<serde_json::Value>(msg_bytes) {
+                    if let Some(msg_id) = json_msg.get("id").and_then(|v| v.as_str()) {
+                        if msg_id == message_id {
+                            found_match = true;
+                            // For JSON format, just log as match (can't fully compare)
+                            SHADOW_READ_MATCHES.inc();
+                            debug!(
+                                message_id = %message_id,
+                                "Shadow-read: MATCH (JSON format) - message found in Redis"
+                            );
+                            break;
+                        }
+                    }
+                } else {
+                    debug!(
+                        error = %e,
+                        "Shadow-read: Failed to deserialize Redis message (skipping)"
+                    );
+                }
+            }
+        }
+    }
+
+    if !found_match {
+        // Message in Kafka but not in Redis - this is EXPECTED in Phase 4
+        // because Kafka messages may arrive faster than Redis writes
+        SHADOW_READ_KAFKA_ONLY.inc();
+        // SECURITY: Hash recipient_id for privacy
+        let salt = &state.config.logging.hash_salt;
+        debug!(
+            message_id = %message_id,
+            recipient_hash = %log_safe_id(recipient_id, salt),
+            redis_queue_size = redis_messages.len(),
+            "Shadow-read: Message in Kafka but not in Redis offline queue"
+        );
+    }
+}
+
+/// Compare Kafka envelope fields with Redis ChatMessage
+fn compare_kafka_redis_message(kafka: &KafkaMessageEnvelope, redis: &ChatMessage) -> bool {
+    // Compare core fields
+    let id_match = kafka.message_id == redis.id;
+    let sender_match = kafka.sender_id == redis.from;
+    let recipient_match = kafka.recipient_id == redis.to;
+    let content_match = kafka.encrypted_payload == redis.content;
+
+    // Compare message_number (Kafka stores as Option<u32>)
+    let msg_num_match = kafka.message_number == Some(redis.message_number);
+
+    // Compare ephemeral_public_key (Kafka stores as base64-encoded Option<String>)
+    let epk_match = if let Some(ref kafka_epk_b64) = kafka.ephemeral_public_key {
+        match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, kafka_epk_b64) {
+            Ok(kafka_epk_bytes) => kafka_epk_bytes == redis.ephemeral_public_key,
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+
+    id_match && sender_match && recipient_match && content_match && msg_num_match && epk_match
+}
+
+/// Phase 4.3: Reverse-check scanner
+///
+/// Periodically scans Redis offline queues and checks if messages
+/// were seen in Kafka consumer. This detects messages that exist
+/// in Redis but were NOT processed from Kafka (potential data loss).
+///
+/// Runs every 5 minutes in shadow-read mode.
+async fn run_redis_reverse_check_scanner(state: Arc<WorkerState>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(300)); // Every 5 minutes
+
+    info!("Redis reverse-check scanner started (interval: 5 minutes)");
+
+    loop {
+        interval.tick().await;
+
+        debug!("Running Redis reverse-check scan...");
+
+        // Scan all offline queue keys (pattern: queue:*)
+        let queue_keys: Vec<String> = match scan_redis_keys(&state, &state.config.offline_queue_prefix).await {
+            Ok(keys) => keys,
+            Err(e) => {
+                warn!(error = %e, "Reverse-check: Failed to scan Redis keys");
+                continue;
+            }
+        };
+
+        if queue_keys.is_empty() {
+            debug!("Reverse-check: No offline queues found");
+            continue;
+        }
+
+        let processed_ids = state.processed_message_ids.read().await;
+        let mut redis_only_count = 0u64;
+        let mut total_messages = 0u64;
+
+        for key in &queue_keys {
+            // Extract user_id from key
+            let _user_id = key.strip_prefix(&state.config.offline_queue_prefix).unwrap_or(key);
+
+            // Read messages from this queue
+            let messages: Vec<Vec<u8>> = match execute_redis_with_retry(
+                &state,
+                "reverse_check_read_queue",
+                |conn| {
+                    let k = key.clone();
+                    Box::pin(async move {
+                        redis::cmd("LRANGE")
+                            .arg(&k)
+                            .arg(0)
+                            .arg(-1)
+                            .query_async(conn)
+                            .await
+                    })
+                },
+            )
+            .await
+            {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    warn!(error = %e, key = %key, "Reverse-check: Failed to read queue");
+                    continue;
+                }
+            };
+
+            for msg_bytes in &messages {
+                total_messages += 1;
+
+                // Try to extract message_id
+                let msg_id = extract_message_id_from_bytes(msg_bytes);
+
+                if let Some(id) = msg_id {
+                    if !processed_ids.contains(&id) {
+                        // Message in Redis but not processed from Kafka
+                        redis_only_count += 1;
+                        SHADOW_READ_REDIS_ONLY.inc();
+
+                        // SECURITY: Hash user_id from queue_key to prevent PII leakage
+                        let user_id = key.strip_prefix(&state.config.offline_queue_prefix).unwrap_or("unknown");
+                        let salt = &state.config.logging.hash_salt;
+                        warn!(
+                            message_id = %id,
+                            user_id_hash = %log_safe_id(user_id, salt),
+                            "Reverse-check: Message in Redis but NOT processed from Kafka"
+                        );
+                    }
+                }
+            }
+        }
+
+        drop(processed_ids);
+
+        info!(
+            queues_scanned = queue_keys.len(),
+            total_messages = total_messages,
+            redis_only = redis_only_count,
+            "Reverse-check scan completed"
+        );
+    }
+}
+
+/// Scan Redis keys matching a prefix pattern using SCAN (production-safe)
+async fn scan_redis_keys(state: &WorkerState, prefix: &str) -> Result<Vec<String>> {
+    execute_redis_with_retry(state, "scan_redis_keys", |conn| {
+        let pattern = format!("{}*", prefix);
+        Box::pin(async move {
+            let mut keys = Vec::new();
+            let mut cursor: u64 = 0;
+
+            loop {
+                let (new_cursor, mut found_keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                    .arg(cursor)
+                    .arg("MATCH")
+                    .arg(&pattern)
+                    .arg("COUNT")
+                    .arg(100)
+                    .query_async(conn)
+                    .await?;
+
+                keys.append(&mut found_keys);
+
+                if new_cursor == 0 {
+                    break;
+                }
+                cursor = new_cursor;
+            }
+
+            Ok(keys)
+        })
+    })
+    .await
+}
+
+/// Extract message_id from raw message bytes (MessagePack or JSON)
+fn extract_message_id_from_bytes(msg_bytes: &[u8]) -> Option<String> {
+    // Try MessagePack first
+    if let Ok(msg) = rmp_serde::from_slice::<ChatMessage>(msg_bytes) {
+        return Some(msg.id);
+    }
+
+    // Try JSON
+    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(msg_bytes) {
+        if let Some(id) = json_val.get("id").and_then(|v| v.as_str()) {
+            return Some(id.to_string());
+        }
+    }
+
+    None
 }
 
 /// Process a delivery ACK event from Kafka (Solution 1D - Privacy-First)
@@ -736,8 +1094,10 @@ async fn run_redis_only_mode(config: Arc<Config>) -> Result<()> {
             }
         };
 
+        // SECURITY: Hash user_id for privacy
+        let salt = &config.logging.hash_salt;
         info!(
-            user_id = %notification.user_id,
+            user_hash = %log_safe_id(&notification.user_id, salt),
             server_instance_id = %notification.server_instance_id,
             "User came online, processing offline messages"
         );
@@ -753,7 +1113,7 @@ async fn run_redis_only_mode(config: Arc<Config>) -> Result<()> {
         {
             error!(
                 error = %e,
-                user_id = %notification.user_id,
+                user_hash = %log_safe_id(&notification.user_id, salt),
                 "Failed to process offline messages"
             );
         }
@@ -797,19 +1157,18 @@ async fn process_offline_messages_redis_only(
         .invoke_async(conn)
         .await?;
 
+    // SECURITY: Hash user_id for privacy
+    let salt = &config.logging.hash_salt;
     if moved_count > 0 {
         info!(
-            user_id = %user_id,
+            user_hash = %log_safe_id(user_id, salt),
             count = moved_count,
             server_instance_id = %server_instance_id,
-            queue_key = %queue_key,
-            delivery_key = %delivery_key,
             "Moved offline messages to delivery queue"
         );
     } else {
-        info!(
-            user_id = %user_id,
-            queue_key = %queue_key,
+        debug!(
+            user_hash = %log_safe_id(user_id, salt),
             "No offline messages to deliver"
         );
     }

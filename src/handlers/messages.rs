@@ -1,10 +1,12 @@
 use crate::context::AppContext;
 use crate::e2e::{EncryptedMessageV3, ServerCryptoValidator};
+use crate::kafka::types::{KafkaMessageEnvelope, MessageType};
 use crate::utils::log_safe_id;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming as IncomingBody, HeaderMap, Response, StatusCode};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// POST /messages/send
@@ -39,10 +41,12 @@ pub async fn handle_send_message(
     };
 
     // 4. Validate the message
+    // SECURITY: Hash sender_id for privacy in logs
+    let salt = &ctx.config.logging.hash_salt;
     if let Err(e) = ServerCryptoValidator::validate_encrypted_message_v3(&message) {
         tracing::warn!(
             error = %e,
-            sender_id = %sender_id,
+            sender_hash = %log_safe_id(&sender_id.to_string(), salt),
             "Message validation failed"
         );
         return error_response(StatusCode::BAD_REQUEST, &e.to_string());
@@ -61,56 +65,80 @@ pub async fn handle_send_message(
         return error_response(StatusCode::BAD_REQUEST, "Cannot send message to self");
     }
 
-    // 7. Serialize message to JSON for storage in Redis
-    let message_json = match serde_json::to_string(&message) {
-        Ok(json) => json,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to serialize message");
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to process message",
-            );
-        }
+    // 7. Create Kafka envelope for message (Phase 5+)
+    let message_id = Uuid::new_v4().to_string();
+
+    // Calculate content hash for deduplication
+    let mut hasher = Sha256::new();
+    hasher.update(message_id.as_bytes());
+    hasher.update(message.ciphertext.as_bytes());
+    let content_hash = format!("{:x}", hasher.finalize());
+
+    let envelope = KafkaMessageEnvelope {
+        message_id: message_id.clone(),
+        sender_id: sender_id.to_string(),
+        recipient_id: recipient_id.to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+        message_type: MessageType::DirectMessage,
+        // REST API v3 doesn't provide ephemeral key - use placeholder
+        ephemeral_public_key: None,
+        message_number: None,
+        mls_payload: None,
+        group_id: None,
+        encrypted_payload: message.ciphertext.clone(),
+        content_hash,
+        suite_id: message.suite_id as u8, // Convert u16 to u8 (valid range 0-255)
+        origin_server: None,
+        federated: false,
+        server_signature: None,
     };
 
-    // 8. Queue message in Redis for recipient
-    let mut queue = ctx.queue.lock().await;
-    if let Err(e) = queue
-        .enqueue_message_raw(&message.recipient_id, &message_json)
-        .await
-    {
+    // 8. Write to Kafka (Phase 5: source of truth)
+    if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
+        // SECURITY: Use hashed IDs in error logs
         tracing::error!(
             error = %e,
-            sender_id = %sender_id,
-            recipient_id = %recipient_id,
-            "Failed to queue message"
+            message_id = %message_id,
+            sender_hash = %log_safe_id(&sender_id.to_string(), salt),
+            recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+            kafka_enabled = ctx.kafka_producer.is_enabled(),
+            "Kafka write FAILED - message NOT persisted (REST API v3)"
         );
-        drop(queue);
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue message");
     }
-    drop(queue);
+
+    tracing::debug!(
+        message_id = %message_id,
+        "Message persisted to Kafka (REST API v3)"
+    );
 
     // 9. Log the operation (with privacy in mind)
     if ctx.config.logging.enable_user_identifiers {
         tracing::info!(
+            message_id = %message_id,
             sender_id = %sender_id,
             recipient_id = %recipient_id,
             suite_id = message.suite_id,
-            "Message queued (v3)"
+            "Message accepted (REST API v3, Kafka)"
         );
     } else {
         tracing::info!(
+            message_id = %message_id,
             sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
             recipient_hash = %log_safe_id(&recipient_id.to_string(), &ctx.config.logging.hash_salt),
             suite_id = message.suite_id,
-            "Message queued (v3)"
+            "Message accepted (REST API v3, Kafka)"
         );
     }
 
     // 10. Return success (202 Accepted - message is queued for delivery)
     json_response(
         StatusCode::ACCEPTED,
-        json!({"status": "accepted", "message": "Message queued for delivery"}),
+        json!({
+            "status": "accepted",
+            "message_id": message_id,
+            "message": "Message queued for delivery"
+        }),
     )
 }
 

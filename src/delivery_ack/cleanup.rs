@@ -73,8 +73,7 @@ impl<S: DeliveryPendingStorage> DeliveryCleanupTask<S> {
                         #[cfg(feature = "metrics")]
                         {
                             use crate::metrics;
-                            metrics::DELIVERY_PENDING_EXPIRED_TOTAL
-                                .inc_by(deleted_count as f64);
+                            metrics::DELIVERY_PENDING_EXPIRED_TOTAL.inc_by(deleted_count as f64);
                         }
                     } else {
                         tracing::debug!("No expired delivery pending records to clean up");
@@ -91,10 +90,7 @@ impl<S: DeliveryPendingStorage> DeliveryCleanupTask<S> {
             // Log current pending count for monitoring
             match self.storage.count().await {
                 Ok(count) => {
-                    tracing::debug!(
-                        pending_count = count,
-                        "Current delivery pending records"
-                    );
+                    tracing::debug!(pending_count = count, "Current delivery pending records");
 
                     // Update metrics if available
                     #[cfg(feature = "metrics")]
@@ -134,11 +130,17 @@ mod tests {
 
     #[async_trait]
     impl DeliveryPendingStorage for MockStorage {
-        async fn save(&self, _record: &crate::delivery_ack::models::DeliveryPending) -> anyhow::Result<()> {
+        async fn save(
+            &self,
+            _record: &crate::delivery_ack::models::DeliveryPending,
+        ) -> anyhow::Result<()> {
             Ok(())
         }
 
-        async fn find_by_hash(&self, _message_hash: &str) -> anyhow::Result<Option<crate::delivery_ack::models::DeliveryPending>> {
+        async fn find_by_hash(
+            &self,
+            _message_hash: &str,
+        ) -> anyhow::Result<Option<crate::delivery_ack::models::DeliveryPending>> {
             Ok(None)
         }
 
@@ -163,10 +165,7 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_task_runs() {
         let storage = Arc::new(MockStorage::new());
-        let task = DeliveryCleanupTask::new(
-            storage.clone(),
-            Duration::from_millis(100),
-        );
+        let task = DeliveryCleanupTask::new(storage.clone(), Duration::from_millis(100));
 
         // Run task for a short time
         let handle = tokio::spawn(async move {
