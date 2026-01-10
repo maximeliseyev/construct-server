@@ -11,7 +11,9 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
     let mut config = Config {
         database_url: "".to_string(), // Not needed for this test
         redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-        jwt_secret: "test_secret_that_is_long_enough_for_hs256".to_string(),
+        // SECURITY: Use a strong test secret that passes entropy validation
+        // This must be at least 32 chars with good entropy (not all same char, no simple patterns, >= 8 unique chars)
+        jwt_secret: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0".to_string(),
         port: 8080,
         health_port: 8081,
         heartbeat_interval_secs: 60 as i64,
@@ -73,6 +75,42 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             device_token_encryption_key:
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
         },
+        federation: construct_server::config::FederationConfig {
+            enabled: false,
+            instance_domain: "test.local".to_string(),
+            base_domain: "test.local".to_string(),
+            signing_key_seed: None,
+        },
+        db: construct_server::config::DbConfig {
+            max_connections: 10,
+            acquire_timeout_secs: 30,
+            idle_timeout_secs: 600,
+        },
+        deeplinks: construct_server::config::DeepLinksConfig {
+            apple_team_id: "".to_string(),
+            android_package_name: "".to_string(),
+            android_cert_fingerprint: "".to_string(),
+        },
+        worker: construct_server::config::WorkerConfig {
+            shadow_read_enabled: false,
+        },
+        redis_key_prefixes: construct_server::config::RedisKeyPrefixes {
+            processed_msg: "processed_msg:".to_string(),
+            user: "user:".to_string(),
+            session: "session:".to_string(),
+            user_sessions: "user_sessions:".to_string(),
+            msg_hash: "msg_hash:".to_string(),
+            rate: "rate:".to_string(),
+            blocked: "blocked:".to_string(),
+            key_bundle: "key_bundle:".to_string(),
+            connections: "connections:".to_string(),
+        },
+        redis_channels: construct_server::config::RedisChannels {
+            dead_letter_queue: "dead_letter_queue".to_string(),
+            delivery_message: "delivery_message:{}".to_string(),
+            delivery_notification: "delivery_notification:{}".to_string(),
+        },
+        // Legacy aliases
         instance_domain: "test.local".to_string(),
         federation_base_domain: "test.local".to_string(),
         federation_enabled: false,
