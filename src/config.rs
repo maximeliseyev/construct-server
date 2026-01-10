@@ -188,6 +188,8 @@ pub struct FederationConfig {
     /// Server signing key seed (base64-encoded 32 bytes for Ed25519)
     /// Generate with: openssl rand -base64 32
     pub signing_key_seed: Option<String>,
+    /// mTLS configuration for S2S federation
+    pub mtls: crate::federation::MtlsConfig,
 }
 
 /// APNs environment
@@ -216,7 +218,15 @@ impl std::str::FromStr for ApnsEnvironment {
 pub struct Config {
     pub database_url: String,
     pub redis_url: String,
+    /// JWT secret (for HS256 - legacy, kept for backward compatibility)
+    /// If JWT_PRIVATE_KEY is set, RS256 will be used instead
     pub jwt_secret: String,
+    /// RSA private key for JWT signing (RS256)
+    /// Path to PEM file or PEM string in environment variable
+    pub jwt_private_key: Option<String>,
+    /// RSA public key for JWT verification (RS256)
+    /// Path to PEM file or PEM string in environment variable
+    pub jwt_public_key: Option<String>,
     pub port: u16,
     pub health_port: u16,
     pub heartbeat_interval_secs: i64,
@@ -266,15 +276,78 @@ impl Config {
             database_url: std::env::var("DATABASE_URL")?,
             redis_url: std::env::var("REDIS_URL")?,
             jwt_secret: {
-                let secret = std::env::var("JWT_SECRET")?;
-                if secret.len() < 32 {
-                    anyhow::bail!("JWT_SECRET must be at least 32 characters long");
-                }
-                // SECURITY: Validate secret strength (entropy, patterns)
-                if let Err(e) = crate::utils::validate_secret_strength(&secret, 32) {
-                    anyhow::bail!("JWT_SECRET is too weak: {}. Please use a random secret generated with: openssl rand -base64 32", e);
-                }
+                // Check if RSA keys are provided (RS256 mode)
+                let has_rsa_keys = std::env::var("JWT_PRIVATE_KEY").is_ok() && std::env::var("JWT_PUBLIC_KEY").is_ok();
+                
+                let secret = if has_rsa_keys {
+                    // JWT_SECRET is optional when using RS256 (for backward compatibility with old tokens)
+                    std::env::var("JWT_SECRET").unwrap_or_default()
+                } else {
+                    // JWT_SECRET is required when using HS256 (legacy mode)
+                    let secret = std::env::var("JWT_SECRET")?;
+                    if secret.len() < 32 {
+                        anyhow::bail!("JWT_SECRET must be at least 32 characters long, or use JWT_PRIVATE_KEY/JWT_PUBLIC_KEY for RS256");
+                    }
+                    // SECURITY: Validate secret strength (entropy, patterns)
+                    if let Err(e) = crate::utils::validate_secret_strength(&secret, 32) {
+                        anyhow::bail!("JWT_SECRET is too weak: {}. Please use a random secret generated with: openssl rand -base64 32, or use JWT_PRIVATE_KEY/JWT_PUBLIC_KEY for RS256", e);
+                    }
+                    secret
+                };
+                
                 secret
+            },
+            jwt_private_key: {
+                // Try to load from file path first, then from environment variable directly (PEM string)
+                std::env::var("JWT_PRIVATE_KEY").ok().map(|key| {
+                    // If it looks like a file path (contains path separators), try to read it
+                    if key.contains(std::path::MAIN_SEPARATOR) || key.starts_with("-----BEGIN") {
+                        if key.starts_with("-----BEGIN") {
+                            // PEM string in environment variable
+                            key
+                        } else {
+                            // File path - read the file
+                            std::fs::read_to_string(&key)
+                                .unwrap_or_else(|e| {
+                                    tracing::warn!(
+                                        error = %e,
+                                        path = %key,
+                                        "Failed to read JWT_PRIVATE_KEY from file, using as-is"
+                                    );
+                                    key
+                                })
+                        }
+                    } else {
+                        // Assume it's a PEM string in environment variable
+                        key
+                    }
+                })
+            },
+            jwt_public_key: {
+                // Try to load from file path first, then from environment variable directly (PEM string)
+                std::env::var("JWT_PUBLIC_KEY").ok().map(|key| {
+                    // If it looks like a file path (contains path separators), try to read it
+                    if key.contains(std::path::MAIN_SEPARATOR) || key.starts_with("-----BEGIN") {
+                        if key.starts_with("-----BEGIN") {
+                            // PEM string in environment variable
+                            key
+                        } else {
+                            // File path - read the file
+                            std::fs::read_to_string(&key)
+                                .unwrap_or_else(|e| {
+                                    tracing::warn!(
+                                        error = %e,
+                                        path = %key,
+                                        "Failed to read JWT_PUBLIC_KEY from file, using as-is"
+                                    );
+                                    key
+                                })
+                        }
+                    } else {
+                        // Assume it's a PEM string in environment variable
+                        key
+                    }
+                })
             },
             port: std::env::var("PORT")
                 .ok()
@@ -521,6 +594,41 @@ impl Config {
                     base_domain,
                     enabled,
                     signing_key_seed,
+                    mtls: {
+                        // Parse pinned certificates from environment variable
+                        // Format: "domain1:fingerprint1,domain2:fingerprint2"
+                        let pinned_certs = std::env::var("FEDERATION_PINNED_CERTS")
+                            .ok()
+                            .map(|certs_str| {
+                                let mut pinned = std::collections::HashMap::new();
+                                for entry in certs_str.split(',') {
+                                    let parts: Vec<&str> = entry.split(':').collect();
+                                    if parts.len() == 2 {
+                                        let domain = parts[0].trim().to_string();
+                                        let fingerprint = parts[1].trim().to_string();
+                                        if !domain.is_empty() && !fingerprint.is_empty() {
+                                            pinned.insert(domain, fingerprint);
+                                        }
+                                    }
+                                }
+                                pinned
+                            })
+                            .unwrap_or_default();
+
+                        crate::federation::MtlsConfig {
+                            required: std::env::var("FEDERATION_MTLS_REQUIRED")
+                                .unwrap_or_else(|_| "false".to_string())
+                                .parse()
+                                .unwrap_or(false),
+                            client_cert_path: std::env::var("FEDERATION_CLIENT_CERT_PATH").ok(),
+                            client_key_path: std::env::var("FEDERATION_CLIENT_KEY_PATH").ok(),
+                            verify_server_cert: std::env::var("FEDERATION_VERIFY_SERVER_CERT")
+                                .unwrap_or_else(|_| "true".to_string())
+                                .parse()
+                                .unwrap_or(true),
+                            pinned_certs,
+                        }
+                    },
                 }
             },
 

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures_util::stream::StreamExt;
 use http_body_util::Full;
@@ -721,7 +721,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create auth manager
-    let auth_manager = Arc::new(AuthManager::new(&app_config));
+    let auth_manager = Arc::new(
+        AuthManager::new(&app_config)
+            .context("Failed to initialize AuthManager - check JWT configuration (JWT_SECRET or JWT_PRIVATE_KEY/JWT_PUBLIC_KEY)")?
+    );
 
     // WebSocket listener
     let listener = TcpListener::bind(&bind_address).await?;

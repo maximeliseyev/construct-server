@@ -9,10 +9,11 @@
 // ============================================================================
 
 use crate::federation::{FederationClient, ServerSigner};
+use crate::federation::mtls::MtlsConfig;
 use crate::kafka::MessageProducer;
 use crate::message::ChatMessage;
 use crate::user_id::UserId;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 
 pub struct MessageRouter {
@@ -68,6 +69,35 @@ impl MessageRouter {
             local_domain,
             federation_enabled,
         }
+    }
+
+    /// Create a new message router with mTLS configuration and certificate pinning
+    pub fn new_with_mtls(
+        kafka_producer: MessageProducer,
+        local_domain: String,
+        federation_enabled: bool,
+        server_signer: Option<Arc<ServerSigner>>,
+        mtls_config: Arc<MtlsConfig>,
+    ) -> Result<Self> {
+        let federation_client = if federation_enabled {
+            Some(
+                FederationClient::new_with_mtls(
+                    server_signer,
+                    local_domain.clone(),
+                    mtls_config,
+                )
+                .context("Failed to create FederationClient with mTLS configuration")?
+            )
+        } else {
+            None
+        };
+
+        Ok(Self {
+            kafka_producer,
+            federation_client,
+            local_domain,
+            federation_enabled,
+        })
     }
 
     /// Route message to destination
