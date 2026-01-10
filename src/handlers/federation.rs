@@ -27,10 +27,18 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> hyper::Response
     let body_str = serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string());
     let mut response = hyper::Response::new(Full::new(Bytes::from(body_str)));
     *response.status_mut() = status;
-    response.headers_mut().insert(
-        "Content-Type",
-        "application/json".parse().unwrap()
-    );
+    
+    // SECURITY: Handle header parsing errors gracefully
+    match "application/json".parse() {
+        Ok(content_type) => {
+            response.headers_mut().insert("Content-Type", content_type);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to parse Content-Type header (this should never happen)");
+            // This should never happen, but if it does, we continue without the header
+        }
+    }
+    
     response
 }
 
@@ -170,12 +178,28 @@ pub async fn receive_federated_message_http(
     }
 
     // 3.5 Verify server signature (if provided)
-    // In production, signatures should be required. For now, log warnings for unsigned messages.
+    // SECURITY: In production, signatures MUST be required
     if let (Some(origin_server), Some(payload_hash), Some(signature)) = (
         &req.origin_server,
         &req.payload_hash,
         &req.server_signature,
     ) {
+        // SECURITY: Validate that origin_server matches sender's domain
+        // Prevent envelope tampering by ensuring origin_server matches the sender's federated domain
+        let sender_domain = sender.domain().unwrap_or_default();
+        if *origin_server != sender_domain {
+            tracing::warn!(
+                message_id = %req.message_id,
+                origin_server = %origin_server,
+                sender_domain = %sender_domain,
+                "origin_server mismatch: envelope claims different origin than sender's domain"
+            );
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": "origin_server does not match sender's domain"}),
+            );
+        }
+
         // Reconstruct envelope for verification
         let envelope = FederatedEnvelope {
             message_id: req.message_id.clone(),

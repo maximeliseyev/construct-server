@@ -5,7 +5,7 @@ use crate::e2e::BundleData;
 use crate::handlers::connection::ConnectionHandler;
 use crate::handlers::session::establish_session;
 use crate::message::ServerMessage;
-use crate::utils::{log_safe_id, validate_password_strength};
+use crate::utils::{log_safe_id, validate_password_strength, validate_username};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use uuid::Uuid;
 
@@ -36,6 +36,13 @@ pub async fn handle_register(
     password: String,
     key_bundle: UploadableKeyBundle,
 ) {
+    // SECURITY: Validate username format and length first
+    if let Err(error_msg) = validate_username(&username) {
+        tracing::warn!("Registration rejected: invalid username format");
+        handler.send_error("INVALID_USERNAME", &error_msg).await;
+        return;
+    }
+
     // Validate password strength before proceeding
     if let Err(error_msg) = validate_password_strength(&password) {
         tracing::warn!("Registration rejected: weak password");
@@ -97,14 +104,11 @@ pub async fn handle_register(
                 return;
             }
 
-            if ctx.config.logging.enable_user_identifiers {
-                tracing::info!(username = %user.username, "User registered");
-            } else {
-                tracing::info!(
-                    user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
-                    "User registered"
-                );
-            }
+            // SECURITY: Always use hashed identifiers in logs, never log plain username
+            tracing::info!(
+                user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
+                "User registered successfully"
+            );
 
             match ctx.auth_manager.create_token(&user.id) {
                 Ok((token, jti, expires)) => {
@@ -129,11 +133,12 @@ pub async fn handle_register(
             }
         }
         Err(e) => {
-            if ctx.config.logging.enable_user_identifiers {
-                tracing::error!(error = %e, username = %username, "Registration failed");
-            } else {
-                tracing::error!(error = %e, "Registration failed");
-            }
+            // SECURITY: Always use hashed username in logs, never log plain username
+            tracing::error!(
+                error = %e,
+                user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
+                "Registration failed"
+            );
             handler.send_error("REGISTRATION_FAILED", "An error occurred during registration. The username might be taken or the input is invalid.").await;
         }
     }
@@ -160,8 +165,9 @@ pub async fn handle_login(
 
     let max_attempts = ctx.config.security.max_failed_login_attempts;
     if failed_attempts > max_attempts {
+        // SECURITY: Always use hashed username in logs
         tracing::warn!(
-            username = %username,
+            user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
             attempts = failed_attempts,
             limit = max_attempts,
             "Login rate limit exceeded"
@@ -184,17 +190,11 @@ pub async fn handle_login(
                     tracing::warn!(error = %e, "Failed to reset login counter");
                 }
                 drop(queue);
-                if ctx.config.logging.enable_user_identifiers {
-                    tracing::info!(
-                        username = %user.username,
-                        "User logged in"
-                    );
-                } else {
-                    tracing::info!(
-                        user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
-                        "User logged in"
-                    );
-                }
+                // SECURITY: Always use hashed identifiers in logs
+                tracing::info!(
+                    user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
+                    "User logged in successfully"
+                );
 
                 match ctx.auth_manager.create_token(&user.id) {
                     Ok((token, jti, expires)) => {
@@ -225,22 +225,22 @@ pub async fn handle_login(
                     }
                 }
             } else {
-                if ctx.config.logging.enable_user_identifiers {
-                    tracing::warn!(username = %username, "Invalid password");
-                } else {
-                    tracing::warn!("Invalid password attempt");
-                }
+            // SECURITY: Always use hashed username in logs, never log plain username
+            tracing::warn!(
+                user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
+                "Invalid password attempt"
+            );
                 handler
                     .send_error("INVALID_CREDENTIALS", "Invalid credentials")
                     .await;
             }
         }
         Ok(None) => {
-            if ctx.config.logging.enable_user_identifiers {
-                tracing::warn!(username = %username, "User not found");
-            } else {
-                tracing::warn!("User not found attempt");
-            }
+            // SECURITY: Always use hashed username in logs
+            tracing::warn!(
+                user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
+                "User not found during login attempt"
+            );
             handler
                 .send_error("INVALID_CREDENTIALS", "Invalid credentials")
                 .await;
@@ -378,8 +378,9 @@ pub async fn handle_change_password(
 
     let max_changes = ctx.config.security.max_password_changes_per_day;
     if change_count > max_changes {
+        // SECURITY: Always use hashed user_id in logs
         tracing::warn!(
-            user_id = %user_id,
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
             count = change_count,
             limit = max_changes,
             "Password change rate limit exceeded"
@@ -415,14 +416,11 @@ pub async fn handle_change_password(
     match db::verify_password(&user, &old_password).await {
         Ok(true) => {}
         Ok(false) => {
-            if ctx.config.logging.enable_user_identifiers {
-                tracing::warn!(user_id = %user_id, "Invalid old password during password change");
-            } else {
-                tracing::warn!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
-                    "Invalid old password during password change"
-                );
-            }
+            // SECURITY: Always use hashed user_id in logs
+            tracing::warn!(
+                user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                "Invalid old password during password change"
+            );
             handler
                 .send_error("INVALID_PASSWORD", "Old password is incorrect")
                 .await;
@@ -468,22 +466,41 @@ pub async fn handle_change_password(
 
     // 8. Update password in database
     if let Err(e) = db::update_user_password(&ctx.db_pool, &user_id, &new_password).await {
-        tracing::error!(error = %e, user_id = %user_id, "Failed to update password");
+        tracing::error!(
+            error = %e,
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            "Failed to update password"
+        );
         handler
             .send_error("SERVER_ERROR", "Failed to update password")
             .await;
         return;
     }
 
-    // 9. Log success
-    if ctx.config.logging.enable_user_identifiers {
-        tracing::info!(user_id = %user_id, username = %user.username, "Password changed successfully");
+    // 8.5. SECURITY: Revoke all existing sessions after password change
+    // This prevents any previously compromised tokens from being used
+    let mut queue = ctx.queue.lock().await;
+    if let Err(e) = queue.revoke_all_sessions(&user_id.to_string()).await {
+        tracing::warn!(
+            error = %e,
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            "Failed to revoke all sessions after password change (non-critical)"
+        );
+        // Continue anyway - password was changed successfully
     } else {
         tracing::info!(
             user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
-            "Password changed successfully"
+            "All sessions revoked after password change"
         );
     }
+    drop(queue);
+
+    // 9. Log success
+    // SECURITY: Always use hashed identifiers in logs
+    tracing::info!(
+        user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+        "Password changed successfully"
+    );
 
     // 10. Send success response
     if handler
@@ -508,7 +525,11 @@ pub async fn handle_logout(
         
         // Phase 5: Untrack user online status
         if let Err(e) = queue_lock.untrack_user_online(&claims.sub).await {
-            tracing::warn!(error = %e, user_id = %claims.sub, "Failed to untrack user online status on logout");
+            tracing::warn!(
+                error = %e,
+                user_hash = %log_safe_id(&claims.sub, &ctx.config.logging.hash_salt),
+                "Failed to untrack user online status on logout"
+            );
         }
         drop(queue_lock);
 
@@ -571,14 +592,11 @@ pub async fn handle_delete_account(
     match db::verify_password(&user, &password).await {
         Ok(true) => {}
         Ok(false) => {
-            if ctx.config.logging.enable_user_identifiers {
-                tracing::warn!(user_id = %user_id, "Invalid password during account deletion");
-            } else {
-                tracing::warn!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
-                    "Invalid password during account deletion"
-                );
-            }
+            // SECURITY: Always use hashed user_id in logs
+            tracing::warn!(
+                user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                "Invalid password during account deletion"
+            );
             handler
                 .send_error("INVALID_PASSWORD", "Password is incorrect")
                 .await;
@@ -596,7 +614,11 @@ pub async fn handle_delete_account(
     // 5. Revoke all sessions for this user
     let mut queue_lock = ctx.queue.lock().await;
     if let Err(e) = queue_lock.revoke_all_sessions(&user_id.to_string()).await {
-        tracing::warn!(error = %e, user_id = %user_id, "Failed to revoke all sessions");
+        tracing::warn!(
+            error = %e,
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            "Failed to revoke all sessions"
+        );
     }
     drop(queue_lock);
 
@@ -614,7 +636,11 @@ pub async fn handle_delete_account(
     // 7. Phase 5: Untrack user online status
     let mut queue_lock = ctx.queue.lock().await;
     if let Err(e) = queue_lock.untrack_user_online(&user_id.to_string()).await {
-        tracing::warn!(error = %e, user_id = %user_id, "Failed to untrack user online status");
+        tracing::warn!(
+            error = %e,
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            "Failed to untrack user online status"
+        );
     }
     drop(queue_lock);
     
@@ -623,7 +649,11 @@ pub async fn handle_delete_account(
 
     // 8. Delete user account from database (cascade will handle related records)
     if let Err(e) = db::delete_user_account(&ctx.db_pool, &user_id).await {
-        tracing::error!(error = %e, user_id = %user_id, "Failed to delete user account");
+        tracing::error!(
+            error = %e,
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            "Failed to delete user account"
+        );
         handler
             .send_error("SERVER_ERROR", "Failed to delete account")
             .await;
@@ -631,14 +661,11 @@ pub async fn handle_delete_account(
     }
 
     // 9. Log success
-    if ctx.config.logging.enable_user_identifiers {
-        tracing::info!(user_id = %user_id, username = %user.username, "Account deleted successfully");
-    } else {
-        tracing::info!(
-            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
-            "Account deleted successfully"
-        );
-    }
+    // SECURITY: Always use hashed identifiers in logs
+    tracing::info!(
+        user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+        "Account deleted successfully"
+    );
 
     // 10. Send success response
     if handler

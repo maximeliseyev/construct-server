@@ -72,7 +72,10 @@ impl FederationTrustStore {
 
     /// Add a trusted certificate fingerprint for a domain
     pub fn trust_fingerprint(&self, domain: &str, fingerprint: &str) {
-        let mut store = self.trusted_fingerprints.write().unwrap();
+        let mut store = self.trusted_fingerprints.write().unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Failed to acquire write lock on trust store");
+            panic!("Failed to acquire write lock on trust store: {}", e);
+        });
         store.insert(
             domain.to_string(),
             TrustedCert {
@@ -85,7 +88,13 @@ impl FederationTrustStore {
 
     /// Check if a certificate fingerprint is trusted for a domain
     pub fn is_trusted(&self, domain: &str, fingerprint: &str) -> bool {
-        let store = self.trusted_fingerprints.read().unwrap();
+        let store = match self.trusted_fingerprints.read() {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to acquire read lock on trust store");
+                return false; // Fail closed - don't trust if we can't check
+            }
+        };
         if let Some(trusted) = store.get(domain) {
             trusted.fingerprint == fingerprint
         } else {
@@ -95,7 +104,13 @@ impl FederationTrustStore {
 
     /// Get the trusted fingerprint for a domain (if any)
     pub fn get_trusted_fingerprint(&self, domain: &str) -> Option<String> {
-        let store = self.trusted_fingerprints.read().unwrap();
+        let store = match self.trusted_fingerprints.read() {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to acquire read lock on trust store");
+                return None;
+            }
+        };
         store.get(domain).map(|t| t.fingerprint.clone())
     }
 
@@ -104,7 +119,13 @@ impl FederationTrustStore {
     /// Returns true if the certificate is now trusted, false if it conflicts
     /// with an existing pinned certificate
     pub fn trust_on_first_use(&self, domain: &str, fingerprint: &str) -> bool {
-        let mut store = self.trusted_fingerprints.write().unwrap();
+        let mut store = match self.trusted_fingerprints.write() {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to acquire write lock on trust store");
+                return false; // Fail closed - don't trust if we can't update
+            }
+        };
 
         if let Some(existing) = store.get(domain) {
             // Already have a pinned cert - check if it matches

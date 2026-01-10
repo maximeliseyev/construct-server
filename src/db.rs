@@ -16,28 +16,15 @@ pub struct User {
     pub password_hash: String,
 }
 
-pub async fn create_pool(database_url: &str) -> Result<DbPool> {
-    let max_connections = std::env::var("DB_MAX_CONNECTIONS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
-    
-    let acquire_timeout_secs = std::env::var("DB_ACQUIRE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(30);
-    
-    let idle_timeout_secs = std::env::var("DB_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(600);
-    
+use crate::config::DbConfig;
+
+pub async fn create_pool(database_url: &str, db_config: &DbConfig) -> Result<DbPool> {
     // sqlx 0.8 API - используем доступные методы
     // connect_timeout недоступен в 0.8, используем acquire_timeout и idle_timeout
     let pool = PgPoolOptions::new()
-        .max_connections(max_connections)
-        .acquire_timeout(std::time::Duration::from_secs(acquire_timeout_secs))
-        .idle_timeout(Some(std::time::Duration::from_secs(idle_timeout_secs)))
+        .max_connections(db_config.max_connections)
+        .acquire_timeout(std::time::Duration::from_secs(db_config.acquire_timeout_secs))
+        .idle_timeout(Some(std::time::Duration::from_secs(db_config.idle_timeout_secs)))
         .test_before_acquire(true) // Test connections before returning from pool
         .connect(database_url)
         .await?;

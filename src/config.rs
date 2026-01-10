@@ -1,10 +1,107 @@
 use anyhow::Result;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+// ============================================================================
+// Configuration Constants
+// ============================================================================
+
+// Default port values
+const DEFAULT_PORT: u16 = 8080;
+const DEFAULT_HEALTH_PORT: u16 = 8081;
+
+// Default time intervals (in seconds)
+const DEFAULT_HEARTBEAT_INTERVAL_SECS: i64 = 90;
+const DEFAULT_SERVER_REGISTRY_TTL_SECS: i64 = 270;
+
+// Default TTL values (in days)
+const DEFAULT_MESSAGE_TTL_DAYS: i64 = 7;
+const DEFAULT_SESSION_TTL_DAYS: i64 = 30;
+const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 90;
+
+// Default polling interval (in milliseconds)
+const DEFAULT_DELIVERY_POLL_INTERVAL_MS: u64 = 10000;
+
+// Time conversion constants
+pub const SECONDS_PER_MINUTE: i64 = 60;
+pub const SECONDS_PER_HOUR: i64 = 3600;
+pub const SECONDS_PER_DAY: i64 = 86400;
+
+// Message size limits (in bytes)
+pub const MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024; // 1 MB
+pub const MAX_REQUEST_BODY_SIZE: usize = 2 * 1024 * 1024; // 2 MB (includes JSON overhead)
+
+// ============================================================================
+// Configuration Structures
+// ============================================================================
 
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
     pub enable_message_metadata: bool,
     pub enable_user_identifiers: bool,
     pub hash_salt: String,
+}
+
+/// Database connection pool configuration
+#[derive(Clone, Debug)]
+pub struct DbConfig {
+    /// Maximum number of connections in the pool
+    pub max_connections: u32,
+    /// Timeout for acquiring a connection from the pool (seconds)
+    pub acquire_timeout_secs: u64,
+    /// Timeout for idle connections before they are closed (seconds)
+    pub idle_timeout_secs: u64,
+}
+
+/// Deep links configuration for Universal Links (iOS) and App Links (Android)
+#[derive(Clone, Debug)]
+pub struct DeepLinksConfig {
+    /// Apple Team ID for Universal Links
+    pub apple_team_id: String,
+    /// Android package name (e.g., "com.konstruct.messenger")
+    pub android_package_name: String,
+    /// Android certificate SHA-256 fingerprint for App Links verification
+    pub android_cert_fingerprint: String,
+}
+
+/// Delivery worker specific configuration
+#[derive(Clone, Debug)]
+pub struct WorkerConfig {
+    /// Enable shadow-read mode (compare Kafka vs Redis for validation)
+    pub shadow_read_enabled: bool,
+}
+
+/// Redis key prefixes configuration
+#[derive(Clone, Debug)]
+pub struct RedisKeyPrefixes {
+    /// Prefix for processed message deduplication keys: "processed_msg:{message_id}"
+    pub processed_msg: String,
+    /// Prefix for user-related keys: "user:{user_id}:..."
+    pub user: String,
+    /// Prefix for session keys: "session:{jti}"
+    pub session: String,
+    /// Prefix for user sessions set: "user_sessions:{user_id}"
+    pub user_sessions: String,
+    /// Prefix for message hash replay protection: "msg_hash:{hash}"
+    pub msg_hash: String,
+    /// Prefix for rate limiting keys: "rate:{type}:{id}"
+    pub rate: String,
+    /// Prefix for blocked users: "blocked:{user_id}"
+    pub blocked: String,
+    /// Prefix for key bundle cache: "key_bundle:{user_id}"
+    pub key_bundle: String,
+    /// Prefix for connection tracking: "connections:{user_id}"
+    pub connections: String,
+}
+
+/// Redis channel names configuration
+#[derive(Clone, Debug)]
+pub struct RedisChannels {
+    /// Dead letter queue channel name
+    pub dead_letter_queue: String,
+    /// Delivery message channel template: "delivery_message:{server_instance_id}"
+    pub delivery_message: String,
+    /// Delivery notification channel template: "delivery_notification:{server_instance_id}"
+    pub delivery_notification: String,
 }
 
 /// Security and rate limiting policies
@@ -136,6 +233,11 @@ pub struct Config {
     pub kafka: KafkaConfig,
     pub apns: ApnsConfig,
     pub federation: FederationConfig,
+    pub db: DbConfig,
+    pub deeplinks: DeepLinksConfig,
+    pub worker: WorkerConfig,
+    pub redis_key_prefixes: RedisKeyPrefixes,
+    pub redis_channels: RedisChannels,
 
     // Legacy aliases (for backward compatibility)
     // TODO: Remove after updating all usages to config.federation.*
@@ -166,36 +268,40 @@ impl Config {
                 if secret.len() < 32 {
                     anyhow::bail!("JWT_SECRET must be at least 32 characters long");
                 }
+                // SECURITY: Validate secret strength (entropy, patterns)
+                if let Err(e) = crate::utils::validate_secret_strength(&secret, 32) {
+                    anyhow::bail!("JWT_SECRET is too weak: {}. Please use a random secret generated with: openssl rand -base64 32", e);
+                }
                 secret
             },
             port: std::env::var("PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
-                .unwrap_or(8080),
+                .unwrap_or(DEFAULT_PORT),
             health_port: std::env::var("HEALTH_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
-                .unwrap_or(8081),
+                .unwrap_or(DEFAULT_HEALTH_PORT),
             heartbeat_interval_secs: std::env::var("HEARTBEAT_INTERVAL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(90),
+                .unwrap_or(DEFAULT_HEARTBEAT_INTERVAL_SECS),
             server_registry_ttl_secs: std::env::var("SERVER_REGISTRY_TTL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(270),
+                .unwrap_or(DEFAULT_SERVER_REGISTRY_TTL_SECS),
             message_ttl_days: std::env::var("MESSAGE_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
-                .unwrap_or(7),
+                .unwrap_or(DEFAULT_MESSAGE_TTL_DAYS),
             session_ttl_days: std::env::var("SESSION_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
-                .unwrap_or(30),
+                .unwrap_or(DEFAULT_SESSION_TTL_DAYS),
             refresh_token_ttl_days: std::env::var("REFRESH_TOKEN_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
-                .unwrap_or(90),
+                .unwrap_or(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
             jwt_issuer: std::env::var("JWT_ISSUER")
                 .unwrap_or_else(|_| "construct-server".to_string()),
             online_channel: std::env::var("ONLINE_CHANNEL")?,
@@ -206,7 +312,7 @@ impl Config {
             delivery_poll_interval_ms: std::env::var("DELIVERY_POLL_INTERVAL_MS")
                 .ok()
                 .and_then(|d| d.parse().ok())
-                .unwrap_or(10000),
+                .unwrap_or(DEFAULT_DELIVERY_POLL_INTERVAL_MS),
             rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
             logging: LoggingConfig {
                 enable_message_metadata: std::env::var("LOG_MESSAGE_METADATA")
@@ -371,14 +477,38 @@ impl Config {
                     .unwrap_or(false);
                 let signing_key_seed = std::env::var("SERVER_SIGNING_KEY").ok();
 
-                // Warn if federation is enabled but no signing key
-                if enabled && signing_key_seed.is_none() {
-                    tracing::warn!(
-                        "Federation is enabled but SERVER_SIGNING_KEY is not set. \
-                         S2S messages will not be signed. \
-                         Generate with: openssl rand -base64 32"
+                // SECURITY: Federation signing key is REQUIRED if federation is enabled
+                // Disable federation if key is missing rather than allowing unsigned messages
+                let (enabled, signing_key_seed) = if enabled && signing_key_seed.is_none() {
+                    tracing::error!(
+                        "FEDERATION_ENABLED=true but SERVER_SIGNING_KEY is not set. \
+                         Federation will be DISABLED for security. \
+                         Generate key with: openssl rand -base64 32"
                     );
-                }
+                    (false, None)
+                } else if enabled {
+                    // Validate signing key strength if provided
+                    if let Some(ref key) = signing_key_seed {
+                        // Base64-encoded 32 bytes should be 44 characters (without padding) or 43-44 with padding
+                        // Use the same validation logic as ServerSigner::from_seed_base64
+                        let decoded = match BASE64.decode(key.trim()) {
+                            Ok(bytes) => bytes,
+                            Err(e) => {
+                                anyhow::bail!("SERVER_SIGNING_KEY is not valid base64: {}", e);
+                            }
+                        };
+                        if decoded.len() != 32 {
+                            anyhow::bail!(
+                                "SERVER_SIGNING_KEY must decode to exactly 32 bytes (got {} bytes). \
+                                 Generate with: openssl rand -base64 32",
+                                decoded.len()
+                            );
+                        }
+                    }
+                    (true, signing_key_seed)
+                } else {
+                    (false, signing_key_seed)
+                };
 
                 FederationConfig {
                     instance_domain,
@@ -402,6 +532,72 @@ impl Config {
 
             deep_link_base_url: std::env::var("DEEP_LINK_BASE_URL")
                 .unwrap_or_else(|_| "https://konstruct.cc".to_string()),
+
+            // Database configuration
+            db: DbConfig {
+                max_connections: std::env::var("DB_MAX_CONNECTIONS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(10),
+                acquire_timeout_secs: std::env::var("DB_ACQUIRE_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30),
+                idle_timeout_secs: std::env::var("DB_IDLE_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(600),
+            },
+
+            // Deep links configuration
+            deeplinks: DeepLinksConfig {
+                apple_team_id: std::env::var("APPLE_TEAM_ID")
+                    .unwrap_or_else(|_| String::new()),
+                android_package_name: std::env::var("ANDROID_PACKAGE_NAME")
+                    .unwrap_or_else(|_| "com.konstruct.messenger".to_string()),
+                android_cert_fingerprint: std::env::var("ANDROID_CERT_FINGERPRINT")
+                    .unwrap_or_else(|_| String::new()),
+            },
+
+            // Worker configuration
+            worker: WorkerConfig {
+                shadow_read_enabled: std::env::var("SHADOW_READ_ENABLED")
+                    .unwrap_or_else(|_| "false".to_string())
+                    .parse()
+                    .unwrap_or(false),
+            },
+
+            // Redis key prefixes configuration
+            redis_key_prefixes: RedisKeyPrefixes {
+                processed_msg: std::env::var("REDIS_KEY_PREFIX_PROCESSED_MSG")
+                    .unwrap_or_else(|_| "processed_msg:".to_string()),
+                user: std::env::var("REDIS_KEY_PREFIX_USER")
+                    .unwrap_or_else(|_| "user:".to_string()),
+                session: std::env::var("REDIS_KEY_PREFIX_SESSION")
+                    .unwrap_or_else(|_| "session:".to_string()),
+                user_sessions: std::env::var("REDIS_KEY_PREFIX_USER_SESSIONS")
+                    .unwrap_or_else(|_| "user_sessions:".to_string()),
+                msg_hash: std::env::var("REDIS_KEY_PREFIX_MSG_HASH")
+                    .unwrap_or_else(|_| "msg_hash:".to_string()),
+                rate: std::env::var("REDIS_KEY_PREFIX_RATE")
+                    .unwrap_or_else(|_| "rate:".to_string()),
+                blocked: std::env::var("REDIS_KEY_PREFIX_BLOCKED")
+                    .unwrap_or_else(|_| "blocked:".to_string()),
+                key_bundle: std::env::var("REDIS_KEY_PREFIX_KEY_BUNDLE")
+                    .unwrap_or_else(|_| "key_bundle:".to_string()),
+                connections: std::env::var("REDIS_KEY_PREFIX_CONNECTIONS")
+                    .unwrap_or_else(|_| "connections:".to_string()),
+            },
+
+            // Redis channels configuration
+            redis_channels: RedisChannels {
+                dead_letter_queue: std::env::var("REDIS_CHANNEL_DEAD_LETTER_QUEUE")
+                    .unwrap_or_else(|_| "dead_letter_queue".to_string()),
+                delivery_message: std::env::var("REDIS_CHANNEL_DELIVERY_MESSAGE")
+                    .unwrap_or_else(|_| "delivery_message:".to_string()),
+                delivery_notification: std::env::var("REDIS_CHANNEL_DELIVERY_NOTIFICATION")
+                    .unwrap_or_else(|_| "delivery_notification:".to_string()),
+            },
         })
     }
 }

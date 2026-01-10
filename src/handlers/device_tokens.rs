@@ -82,6 +82,17 @@ pub async fn handle_register_device_token(
     };
 
     // Insert or update device token in database
+    let user_uuid = match Uuid::parse_str(&user_id) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            tracing::error!(error = %e, user_id = %user_id, "Invalid user_id UUID format");
+            handler
+                .send_error("INVALID_USER_ID", "Invalid user ID format")
+                .await;
+            return;
+        }
+    };
+
     let query_result = sqlx::query(
         r#"
         INSERT INTO device_tokens (user_id, device_token_hash, device_token_encrypted, device_name_encrypted, notification_filter, enabled)
@@ -93,7 +104,7 @@ pub async fn handle_register_device_token(
             enabled = TRUE
         "#,
     )
-    .bind(Uuid::parse_str(&user_id).unwrap())
+    .bind(user_uuid)
     .bind(&token_hash)
     .bind(&token_encrypted)
     .bind(&name_encrypted)
@@ -141,13 +152,24 @@ pub async fn handle_unregister_device_token(
     let token_hash = DeviceTokenEncryption::hash_token(&device_token);
 
     // Delete device token from database
+    let user_uuid = match Uuid::parse_str(&user_id) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            tracing::error!(error = %e, user_id = %user_id, "Invalid user_id UUID format");
+            handler
+                .send_error("INVALID_USER_ID", "Invalid user ID format")
+                .await;
+            return;
+        }
+    };
+
     let query_result = sqlx::query(
         r#"
         DELETE FROM device_tokens
         WHERE user_id = $1 AND device_token_hash = $2
         "#,
     )
-    .bind(Uuid::parse_str(&user_id).unwrap())
+    .bind(user_uuid)
     .bind(&token_hash)
     .execute(&*ctx.db_pool)
     .await;
@@ -213,6 +235,17 @@ pub async fn handle_update_device_token_preferences(
     let token_hash = DeviceTokenEncryption::hash_token(&device_token);
 
     // Update device token preferences
+    let user_uuid = match Uuid::parse_str(&user_id) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            tracing::error!(error = %e, user_id = %user_id, "Invalid user_id UUID format");
+            handler
+                .send_error("INVALID_USER_ID", "Invalid user ID format")
+                .await;
+            return;
+        }
+    };
+
     let query_result = sqlx::query(
         r#"
         UPDATE device_tokens
@@ -220,7 +253,7 @@ pub async fn handle_update_device_token_preferences(
         WHERE user_id = $1 AND device_token_hash = $2
         "#,
     )
-    .bind(Uuid::parse_str(&user_id).unwrap())
+    .bind(user_uuid)
     .bind(&token_hash)
     .bind(&notification_filter)
     .bind(enabled)

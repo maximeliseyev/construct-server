@@ -310,6 +310,7 @@ fn spawn_delivery_listener(
 ) {
     let redis_url = config.redis_url.clone();
     let poll_interval = config.delivery_poll_interval_ms;
+    let dead_letter_queue = config.redis_channels.dead_letter_queue.clone();
 
     tokio::spawn(async move {
         tracing::info!(
@@ -351,14 +352,14 @@ fn spawn_delivery_listener(
         };
 
         // Phase 5: Subscribe to direct delivery channel (messages come directly from worker)
-        let delivery_channel = format!("delivery_message:{}", server_instance_id);
+        let delivery_channel = format!("{}{}", config.redis_channels.delivery_message, server_instance_id);
         if let Err(e) = pubsub_conn.subscribe(&delivery_channel).await {
             tracing::error!(error = %e, channel = %delivery_channel, "Failed to subscribe to delivery message channel");
             return;
         }
         
         // Legacy: Also subscribe to notification channel for backward compatibility
-        let notification_channel = format!("delivery_notification:{}", server_instance_id);
+        let notification_channel = format!("{}{}", config.redis_channels.delivery_notification, server_instance_id);
         if let Err(e) = pubsub_conn.subscribe(&notification_channel).await {
             tracing::error!(error = %e, channel = %notification_channel, "Failed to subscribe to notification channel");
             return;
@@ -543,7 +544,7 @@ fn spawn_delivery_listener(
                         );
                         if let Some(conn) = &mut dlq_conn {
                             let _: Result<(), _> =
-                                conn.lpush("dead_letter_queue", &message_bytes).await;
+                                conn.lpush(&dead_letter_queue, &message_bytes).await;
                         }
                     }
                 } else {
@@ -552,7 +553,7 @@ fn spawn_delivery_listener(
                     );
                     if let Some(conn) = &mut dlq_conn {
                         let _: Result<(), _> =
-                            conn.lpush("dead_letter_queue", &message_bytes).await;
+                            conn.lpush(&dead_letter_queue, &message_bytes).await;
                     }
                 }
             }
@@ -561,22 +562,20 @@ fn spawn_delivery_listener(
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    // Load configuration
+    // Load configuration first (needed for logging)
     let config = Config::from_env()?;
     let app_config = Arc::new(config);
+
+    // Initialize tracing using config
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(app_config.rust_log.clone()))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     let bind_address = format!("0.0.0.0:{}", app_config.port);
 
     // Connect to database
-    let db_pool = Arc::new(db::create_pool(&app_config.database_url).await?);
+    let db_pool = Arc::new(db::create_pool(&app_config.database_url, &app_config.db).await?);
     tracing::info!("Connected to database");
 
     // Apply database migrations

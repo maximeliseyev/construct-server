@@ -238,7 +238,10 @@ impl PublicKeyCache {
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
-                .expect("Failed to create HTTP client"),
+                .unwrap_or_else(|e| {
+                    tracing::error!(error = %e, "Failed to create HTTP client for public key cache");
+                    panic!("Failed to create HTTP client: {}. This is a critical error and the application cannot continue.", e);
+                }),
         }
     }
 
@@ -248,10 +251,16 @@ impl PublicKeyCache {
     pub async fn get_public_key(&self, domain: &str) -> Result<String, SigningError> {
         // Check cache first
         {
-            let cache = self.cache.read().unwrap();
-            if let Some(cached) = cache.get(domain) {
-                if cached.fetched_at.elapsed() < std::time::Duration::from_secs(3600) {
-                    return Ok(cached.public_key.clone());
+            match self.cache.read() {
+                Ok(cache) => {
+                    if let Some(cached) = cache.get(domain) {
+                        if cached.fetched_at.elapsed() < std::time::Duration::from_secs(3600) {
+                            return Ok(cached.public_key.clone());
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to acquire read lock on public key cache, will fetch from remote");
                 }
             }
         }
@@ -260,15 +269,20 @@ impl PublicKeyCache {
         let public_key = self.fetch_public_key(domain).await?;
 
         // Update cache
-        {
-            let mut cache = self.cache.write().unwrap();
-            cache.insert(
-                domain.to_string(),
-                CachedPublicKey {
-                    public_key: public_key.clone(),
-                    fetched_at: std::time::Instant::now(),
-                },
-            );
+        match self.cache.write() {
+            Ok(mut cache) => {
+                cache.insert(
+                    domain.to_string(),
+                    CachedPublicKey {
+                        public_key: public_key.clone(),
+                        fetched_at: std::time::Instant::now(),
+                    },
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to update public key cache (non-critical)");
+                // Continue anyway - we have the key
+            }
         }
 
         Ok(public_key)
@@ -329,8 +343,14 @@ impl PublicKeyCache {
     /// Clear the cache (for testing or key rotation)
     #[allow(dead_code)]
     pub fn clear(&self) {
-        let mut cache = self.cache.write().unwrap();
-        cache.clear();
+        match self.cache.write() {
+            Ok(mut cache) => {
+                cache.clear();
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to clear public key cache");
+            }
+        }
     }
 }
 

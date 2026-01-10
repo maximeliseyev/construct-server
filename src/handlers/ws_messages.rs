@@ -46,6 +46,7 @@
 
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
+use crate::utils::log_safe_id;
 use crate::handlers::device_tokens;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::message::{ChatMessage, ServerMessage};
@@ -93,11 +94,33 @@ pub async fn handle_send_message(
     }
     // ========================================================================
 
+    // SECURITY: Validate message size to prevent DoS
+    if msg.content.len() > crate::config::MAX_MESSAGE_SIZE {
+        tracing::warn!(
+            size = msg.content.len(),
+            limit = crate::config::MAX_MESSAGE_SIZE,
+            sender_hash = %log_safe_id(&sender_id, &ctx.config.logging.hash_salt),
+            "Message content too large"
+        );
+        handler
+            .send_error(
+                "MESSAGE_TOO_LARGE",
+                &format!("Message size exceeds maximum of {} bytes", crate::config::MAX_MESSAGE_SIZE),
+            )
+            .await;
+        return;
+    }
+
     let mut queue = ctx.queue.lock().await;
 
     // 1. Проверка блокировки пользователя
     if let Ok(Some(reason)) = queue.is_user_blocked(&msg.from).await {
-        tracing::warn!(user_id = %msg.from, reason = %reason, "Blocked user attempted to send message");
+        // SECURITY: Always use hashed user_id in logs
+        tracing::warn!(
+            user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+            reason = %reason,
+            "Blocked user attempted to send message"
+        );
         handler
             .send_error(
                 "USER_BLOCKED",
@@ -151,7 +174,12 @@ pub async fn handle_send_message(
                 }
                 return;
             } else if count > max_messages {
-                tracing::warn!(user_id = %msg.from, count = count, "Rate limit warning");
+                // SECURITY: Always use hashed user_id in logs
+                tracing::warn!(
+                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    count = count,
+                    "Rate limit warning"
+                );
                 handler
                     .send_error(
                         "RATE_LIMIT_WARNING",
@@ -168,7 +196,11 @@ pub async fn handle_send_message(
 
     // Validate ChatMessage structure
     if !msg.is_valid() {
-        tracing::warn!(user_id = %msg.from, "Invalid chat message format");
+                // SECURITY: Always use hashed user_id in logs
+                tracing::warn!(
+                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    "Invalid chat message format"
+                );
         handler
             .send_error("INVALID_MESSAGE_FORMAT", "Message validation failed")
             .await;
@@ -177,7 +209,11 @@ pub async fn handle_send_message(
 
     // Additional validation: check ephemeral_public_key length
     if msg.ephemeral_public_key.len() != 32 {
-        tracing::warn!(user_id = %msg.from, "Invalid ephemeral public key size");
+                // SECURITY: Always use hashed user_id in logs
+                tracing::warn!(
+                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    "Invalid ephemeral public key size"
+                );
         handler
             .send_error(
                 "INVALID_MESSAGE_FORMAT",
