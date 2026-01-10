@@ -13,6 +13,9 @@ fi
 # Load .env file
 source .env
 
+# Initialize gateway setup flag
+SHOULD_SETUP_GATEWAY=false
+
 echo "=== Setting up Fly.io secrets from .env ==="
 echo ""
 
@@ -189,8 +192,37 @@ fi
 # ============================================================================
 # Message Gateway secrets (if you want to use Message Gateway service)
 # ============================================================================
+#
+# Required variables for message-gateway:
+# - Core: DATABASE_URL, REDIS_URL, JWT_SECRET, JWT_ISSUER, LOG_HASH_SALT
+# - Queues: ONLINE_CHANNEL, DELIVERY_QUEUE_PREFIX, OFFLINE_QUEUE_PREFIX
+# - Routing: INSTANCE_DOMAIN, FEDERATION_ENABLED (for MessageRouter)
+# - Kafka: All Kafka config if enabled
+#
+# Note: This section runs if ENABLE_MESSAGE_GATEWAY=true OR if running for
+#       gateway-specific deployment (make secrets-gateway)
+# ============================================================================
 
-if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+# Check if we should set up message-gateway secrets
+# Either ENABLE_MESSAGE_GATEWAY is true, or we're running gateway-specific setup
+if [ "$1" = "gateway" ]; then
+  # Explicitly requested for gateway
+  SHOULD_SETUP_GATEWAY=true
+elif [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+  # Enabled via .env variable
+  SHOULD_SETUP_GATEWAY=true
+else
+  # Check if app exists (might want to set up secrets even if not explicitly enabled)
+  # Use flyctl status as it's faster and returns error if app doesn't exist
+  if flyctl status --app construct-message-gateway >/dev/null 2>&1; then
+    SHOULD_SETUP_GATEWAY=true
+    echo ""
+    echo "ℹ️  Message Gateway app exists but ENABLE_MESSAGE_GATEWAY not set to 'true'"
+    echo "   Setting up secrets anyway (use ENABLE_MESSAGE_GATEWAY=true to suppress this message)"
+  fi
+fi
+
+if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
   echo ""
   echo "Setting up Message Gateway secrets..."
   flyctl secrets set \
@@ -200,7 +232,22 @@ if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; t
     JWT_ISSUER="$JWT_ISSUER" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
+    DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
+    OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     --app construct-message-gateway
+
+  # Instance domain and federation (required for MessageRouter to route messages)
+  if [ -n "$INSTANCE_DOMAIN" ]; then
+    flyctl secrets set \
+      INSTANCE_DOMAIN="$INSTANCE_DOMAIN" \
+      --app construct-message-gateway
+  fi
+
+  if [ -n "$FEDERATION_ENABLED" ]; then
+    flyctl secrets set \
+      FEDERATION_ENABLED="$FEDERATION_ENABLED" \
+      --app construct-message-gateway
+  fi
 
   # Kafka secrets for Message Gateway
   if [ "$KAFKA_ENABLED" = "true" ]; then
@@ -218,6 +265,10 @@ if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; t
       KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
       --app construct-message-gateway
   fi
+else
+  echo ""
+  echo "ℹ️  Skipping Message Gateway secrets setup"
+  echo "   (Set ENABLE_MESSAGE_GATEWAY=true in .env or use 'make secrets-gateway')"
 fi
 
 echo ""
@@ -226,13 +277,13 @@ echo ""
 echo "To verify:"
 echo "  flyctl secrets list --app construct-server"
 echo "  flyctl secrets list --app construct-delivery-worker"
-if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
   echo "  flyctl secrets list --app construct-message-gateway"
 fi
 echo ""
 echo "To deploy:"
 echo "  flyctl deploy --app construct-server"
-echo "  flyctl deploy --config fly.worker.toml --app construct-delivery-worker"
-if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
-  echo "  flyctl deploy --config fly.gateway.toml --app construct-message-gateway"
+echo "  flyctl deploy --config ops/fly.worker.toml --app construct-delivery-worker"
+if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
+  echo "  flyctl deploy --config ops/fly.gateway.toml --app construct-message-gateway"
 fi

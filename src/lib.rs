@@ -390,7 +390,7 @@ fn spawn_delivery_listener(
                     let payload: Vec<u8> = msg.get_payload().unwrap_or_default();
                     
                     // Parse as KafkaMessageEnvelope (MessagePack format from worker)
-                    if let Ok(envelope) = rmp_serde::from_slice::<construct_server::kafka::KafkaMessageEnvelope>(&payload) {
+                    if let Ok(envelope) = rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(&payload) {
                         // Convert envelope to ChatMessage for WebSocket delivery
                         // Note: KafkaMessageEnvelope uses encrypted_payload, not content
                         // But ChatMessage expects content field - we'll use encrypted_payload
@@ -404,7 +404,7 @@ fn spawn_delivery_listener(
                             .unwrap_or_else(chrono::Utc::now)
                             .timestamp() as u64;
                         
-                        let chat_msg = construct_server::message::ChatMessage {
+                        let chat_msg = message::ChatMessage {
                             id: envelope.message_id.clone(),
                             from: envelope.sender_id.clone(),
                             to: envelope.recipient_id.clone(),
@@ -416,7 +416,7 @@ fn spawn_delivery_listener(
                         
                         let clients_guard = clients_clone.read().await;
                         if let Some(tx) = clients_guard.get(&envelope.recipient_id) {
-                            let server_msg = construct_server::message::ServerMessage::Message(chat_msg.clone());
+                            let server_msg = message::ServerMessage::Message(chat_msg.clone());
                             if tx.send(server_msg).is_ok() {
                                 tracing::info!(
                                     message_id = %envelope.message_id,
