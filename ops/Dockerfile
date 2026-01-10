@@ -40,15 +40,20 @@ RUN apt-get update && apt-get install -y \
     libsasl2-2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy both binaries from builder
-COPY --from=builder /app/target/release/construct-server /usr/local/bin/construct-server
-COPY --from=builder /app/target/release/delivery-worker /usr/local/bin/delivery-worker
+# Ensure /usr/local/bin is in PATH (where binaries are installed)
+ENV PATH="/usr/local/bin:${PATH}"
+
+# Copy all binaries from builder with execute permissions
+COPY --from=builder --chmod=+x /app/target/release/construct-server /usr/local/bin/construct-server
+COPY --from=builder --chmod=+x /app/target/release/delivery-worker /usr/local/bin/delivery-worker
+COPY --from=builder --chmod=+x /app/target/release/message-gateway /usr/local/bin/message-gateway
 
 # Copy migrations for the main server
 COPY migrations /app/migrations
 
-# Expose port (only needed for main server)
+# Expose port (used by all services)
 EXPOSE 8080
 
 # Default command (can be overridden in docker-compose or fly.toml)
+# Each service (server, worker, gateway) uses its own process name from fly.toml
 CMD ["construct-server"]
