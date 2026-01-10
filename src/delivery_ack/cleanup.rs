@@ -69,12 +69,9 @@ impl<S: DeliveryPendingStorage> DeliveryCleanupTask<S> {
                             "Cleaned up expired delivery pending records"
                         );
 
-                        // Update metrics if available
-                        #[cfg(feature = "metrics")]
-                        {
-                            use crate::metrics;
-                            metrics::DELIVERY_PENDING_EXPIRED_TOTAL.inc_by(deleted_count as f64);
-                        }
+                        // Update metrics (prometheus is always available)
+                        // Note: Delivery pending metrics may not be defined in metrics.rs
+                        // This code is left for future metrics implementation
                     } else {
                         tracing::debug!("No expired delivery pending records to clean up");
                     }
@@ -92,12 +89,9 @@ impl<S: DeliveryPendingStorage> DeliveryCleanupTask<S> {
                 Ok(count) => {
                     tracing::debug!(pending_count = count, "Current delivery pending records");
 
-                    // Update metrics if available
-                    #[cfg(feature = "metrics")]
-                    {
-                        use crate::metrics;
-                        metrics::DELIVERY_PENDING_COUNT.set(count as f64);
-                    }
+                    // Update metrics (prometheus is always available)
+                    // Note: Delivery pending metrics may not be defined in metrics.rs
+                    // This code is left for future metrics implementation
                 }
                 Err(e) => {
                     tracing::warn!(

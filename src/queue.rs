@@ -399,6 +399,48 @@ impl MessageQueue {
 
     /// Publishes a notification that a user has come online
     /// This triggers the Delivery Worker to process offline messages
+    /// Phase 5: Track which server instance a user is connected to
+    /// This allows delivery-worker to route messages directly to the correct server
+    pub async fn track_user_online(
+        &mut self,
+        user_id: &str,
+        server_instance_id: &str,
+    ) -> Result<()> {
+        let key = format!("user:{}:server_instance_id", user_id);
+        // Set with TTL matching session TTL (30 days default)
+        let ttl_seconds = 30 * 24 * 60 * 60; // 30 days
+        
+        let _: () = self.client.setex(&key, ttl_seconds, server_instance_id).await?;
+        
+        tracing::debug!(
+            user_id = %user_id,
+            server_instance_id = %server_instance_id,
+            "Tracked user online status"
+        );
+        
+        Ok(())
+    }
+    
+    /// Phase 5: Remove user online tracking when they disconnect
+    pub async fn untrack_user_online(&mut self, user_id: &str) -> Result<()> {
+        let key = format!("user:{}:server_instance_id", user_id);
+        let _: () = self.client.del(&key).await?;
+        
+        tracing::debug!(
+            user_id = %user_id,
+            "Removed user online tracking"
+        );
+        
+        Ok(())
+    }
+    
+    /// Phase 5: Get server instance ID for an online user
+    pub async fn get_user_server_instance(&mut self, user_id: &str) -> Result<Option<String>> {
+        let key = format!("user:{}:server_instance_id", user_id);
+        let result: Option<String> = self.client.get(&key).await?;
+        Ok(result)
+    }
+
     pub async fn publish_user_online(
         &mut self,
         user_id: &str,

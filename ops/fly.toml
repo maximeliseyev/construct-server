@@ -15,11 +15,17 @@ app = 'construct-server'
 primary_region = 'ams'
 
 [build]
-  dockerfile = "ops/Dockerfile"
+  # Dockerfile path is specified via --dockerfile flag in Makefile
 
 [env]
-  # Rust logging (debug level for our app, info for dependencies)
-  RUST_LOG = "info,construct_server=debug"
+  # Rust logging (info level for production, exclude noisy sqlx DEBUG logs)
+  # Set to "info,construct_server=debug" for detailed debugging if needed
+  RUST_LOG = "info,sqlx=warn,construct_server=info"
+  
+  # Database connection pool settings
+  DB_MAX_CONNECTIONS = "10"
+  DB_ACQUIRE_TIMEOUT_SECS = "30"
+  DB_IDLE_TIMEOUT_SECS = "600"
 
   # Server configuration
   PORT = "8080"
@@ -36,8 +42,8 @@ primary_region = 'ams'
 
   # Delivery worker config
   DELIVERY_POLL_INTERVAL_MS = "10000"
-  HEARTBEAT_INTERVAL_SECS = "90"
-  SERVER_REGISTRY_TTL_SECS = "270"
+  HEARTBEAT_INTERVAL_SECS = "90"  # How often server updates its registration
+  SERVER_REGISTRY_TTL_SECS = "270"  # TTL for delivery_queue keys (must be > HEARTBEAT_INTERVAL_SECS)
 
   # Redis prefixes
   ONLINE_CHANNEL = "user_online_notifications:"
@@ -52,14 +58,13 @@ primary_region = 'ams'
   min_machines_running = 1
 
   # Health check endpoint
-  [http_service.checks]
-    [http_service.checks.health]
-      type = "http"
-      interval = "10s"
-      timeout = "2s"
-      grace_period = "5s"
-      method = "get"
-      path = "/health"
+  [[http_service.checks]]
+    grace_period = "5s"
+    interval = "10s"
+    method = "GET"
+    path = "/health"
+    timeout = "2s"
+    protocol = "http"
 
 # VM configuration - WebSocket server needs more resources
 [[vm]]

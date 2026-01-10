@@ -32,6 +32,19 @@ pub async fn establish_session(
             return Err(format!("Failed to create session: {}", e));
         }
 
+        // Phase 5: Track user online status in Redis for delivery-worker
+        // This allows worker to route messages directly to the correct server
+        if let Err(e) = queue_lock
+            .track_user_online(&uid_str, &ctx.server_instance_id)
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                user_id = %uid_str,
+                "Failed to track user online status"
+            );
+        }
+        
         // Publish notification that user came online
         // This triggers the Delivery Worker to process offline messages
         if let Err(e) = queue_lock

@@ -132,17 +132,17 @@ docker-rebuild:
 
 deploy-server:
 	@echo "🚀 Deploying WebSocket server to Fly.io..."
-	fly deploy --config ops/fly.toml --app construct-server
+	fly deploy . --config ops/fly.toml --dockerfile ./ops/Dockerfile --app construct-server
 	@echo "✅ Server deployed. View logs: make logs-server"
 
 deploy-worker:
 	@echo "⚙️  Deploying delivery worker to Fly.io..."
-	fly deploy --config ops/fly.worker.toml --app construct-delivery-worker
+	fly deploy . --config ops/fly.worker.toml --dockerfile ./ops/Dockerfile --app construct-delivery-worker
 	@echo "✅ Worker deployed. View logs: make logs-worker"
 
 deploy-gateway:
 	@echo "🌐 Deploying message gateway to Fly.io..."
-	fly deploy --config ops/fly.gateway.toml --app construct-message-gateway
+	fly deploy . --config ops/fly.gateway.toml --dockerfile ./ops/Dockerfile --app construct-message-gateway
 	@echo "✅ Gateway deployed. View logs: make logs-gateway"
 
 deploy-all:

@@ -39,9 +39,11 @@ pub fn spawn_server_heartbeat(
                 .await
             {
                 Ok(()) => {
-                    tracing::debug!(
+                    tracing::info!(
                         server_instance_id = %server_instance_id,
                         queue_key = %queue_key,
+                        ttl_secs = config.server_registry_ttl_secs,
+                        prefix = %delivery_queue_prefix,
                         "Server heartbeat: registered in Redis"
                     );
                 }
