@@ -26,20 +26,13 @@
 
 use anyhow::{Context, Result};
 use construct_server::config::Config;
-use construct_server::kafka::types::DeliveryAckEvent;
 use construct_server::kafka::{KafkaMessageEnvelope, MessageConsumer};
-use construct_server::message::ChatMessage;
-use construct_server::metrics::{
-    SHADOW_READ_DISCREPANCIES, SHADOW_READ_KAFKA_ONLY, SHADOW_READ_MATCHES,
-    SHADOW_READ_PROCESSED, SHADOW_READ_REDIS_ONLY,
-};
 use construct_server::utils::log_safe_id;
 use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -59,11 +52,14 @@ struct WorkerState {
     redis_conn: Arc<RwLock<redis::aio::MultiplexedConnection>>,
     redis_client: Arc<redis::Client>,
     /// Counter for consecutive "no delivery queues" errors (for periodic summary logging)
+    #[allow(dead_code)]
     no_queues_count: Arc<RwLock<u64>>,
     /// Phase 4: Shadow-read mode enabled
     /// When true, compares Kafka messages with Redis offline queues for validation
+    #[allow(dead_code)]
     shadow_read_enabled: bool,
     /// Track message IDs processed from Kafka (for reverse-check in Phase 4.3)
+    #[allow(dead_code)]
     processed_message_ids: Arc<RwLock<HashSet<String>>>,
     /// Users who came online (for logging and monitoring)
     users_online_notifications: Arc<RwLock<HashSet<String>>>,
@@ -138,8 +134,8 @@ async fn main() -> Result<()> {
         info!("Starting Kafka consumer mode");
         run_kafka_consumer_mode(state).await
     } else {
-        info!("Starting Redis-only mode (legacy)");
-        run_redis_only_mode(config).await
+        error!("Redis-only mode is not supported. Please enable KAFKA_ENABLED=true");
+        Err(anyhow::anyhow!("Redis-only mode is deprecated. Use Kafka mode instead."))
     }
 }
 
@@ -156,21 +152,13 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
     );
 
     // Spawn ACK consumer in background (Solution 1D)
-    let state_clone = state.clone();
-    let _ack_consumer_handle = tokio::spawn(async move {
-        if let Err(e) = run_ack_consumer_loop(state_clone).await {
-            error!(error = %e, "ACK consumer loop failed");
-        }
-    });
+    // Note: ACK consumer disabled in Phase 5 Kafka-only mode
+    // Delivery ACKs are handled directly by the server
+    // TODO: Re-enable if ACK processing via Kafka is needed
 
     // Phase 4.3: Spawn reverse-check scanner (if shadow-read enabled)
-    if state.shadow_read_enabled {
-        let state_clone = state.clone();
-        let _reverse_check_handle = tokio::spawn(async move {
-            run_redis_reverse_check_scanner(state_clone).await;
-        });
-        info!("Started Redis reverse-check scanner (Phase 4.3)");
-    }
+    // Note: Shadow-read disabled in Phase 5 Kafka-only mode
+    // TODO: Re-enable if shadow-read validation is needed
 
     // Phase 5: Subscribe to user online notifications
     // This allows worker to know when users come online and can process their messages
@@ -194,7 +182,6 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
                     Ok(()) => {
                         // Message processed successfully - reset offline counter
                         if offline_message_count > 0 {
-                            let salt = &state.config.logging.hash_salt;
                             info!(
                                 offline_messages_handled = offline_message_count,
                                 "Processed offline messages queue, resuming normal operation"
@@ -564,13 +551,4 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
             "Recipient is offline - message will be retried when user comes online"
         ));
     }
-    
-    // Phase 4: Shadow-read comparison (if enabled)
-    // Note: This only runs if shadow-read is enabled and user was online
-    // (Otherwise we return early above)
-    if state.shadow_read_enabled {
-        shadow_read_compare(state, envelope).await;
-    }
-
-    Ok(())
 }
