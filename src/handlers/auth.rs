@@ -505,12 +505,144 @@ pub async fn handle_logout(
         if let Err(e) = queue_lock.revoke_session(&claims.jti, &claims.sub).await {
             tracing::warn!(error = %e, "Failed to revoke session on logout");
         }
+        
+        // Phase 5: Untrack user online status
+        if let Err(e) = queue_lock.untrack_user_online(&claims.sub).await {
+            tracing::warn!(error = %e, user_id = %claims.sub, "Failed to untrack user online status on logout");
+        }
         drop(queue_lock);
 
         handler.disconnect(&ctx.clients).await;
     }
     if handler
         .send_msgpack(&ServerMessage::LogoutSuccess)
+        .await
+        .is_err()
+    {}
+}
+
+/// Handles account deletion
+/// Deletes user account and all associated data (requires password confirmation)
+pub async fn handle_delete_account(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    session_token: String,
+    password: String,
+) {
+    // 1. Verify session token
+    let claims = match ctx.auth_manager.verify_token(&session_token) {
+        Ok(claims) => claims,
+        Err(_) => {
+            handler
+                .send_error("INVALID_TOKEN", "Session token is invalid or expired")
+                .await;
+            return;
+        }
+    };
+
+    // 2. Parse user_id from claims
+    let user_id = match Uuid::parse_str(&claims.sub) {
+        Ok(id) => id,
+        Err(_) => {
+            handler
+                .send_error("INVALID_USER_ID", "Invalid user ID in token")
+                .await;
+            return;
+        }
+    };
+
+    // 3. Get user from database
+    let user = match db::get_user_by_id(&ctx.db_pool, &user_id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            handler.send_error("USER_NOT_FOUND", "User not found").await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Database error while fetching user");
+            handler
+                .send_error("SERVER_ERROR", "A server error occurred")
+                .await;
+            return;
+        }
+    };
+
+    // 4. Verify password is correct
+    match db::verify_password(&user, &password).await {
+        Ok(true) => {}
+        Ok(false) => {
+            if ctx.config.logging.enable_user_identifiers {
+                tracing::warn!(user_id = %user_id, "Invalid password during account deletion");
+            } else {
+                tracing::warn!(
+                    user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                    "Invalid password during account deletion"
+                );
+            }
+            handler
+                .send_error("INVALID_PASSWORD", "Password is incorrect")
+                .await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Error verifying password");
+            handler
+                .send_error("SERVER_ERROR", "Failed to verify password")
+                .await;
+            return;
+        }
+    }
+
+    // 5. Revoke all sessions for this user
+    let mut queue_lock = ctx.queue.lock().await;
+    if let Err(e) = queue_lock.revoke_all_sessions(&user_id.to_string()).await {
+        tracing::warn!(error = %e, user_id = %user_id, "Failed to revoke all sessions");
+    }
+    drop(queue_lock);
+
+    // 6. Delete delivery ACK data if available (GDPR compliance)
+    if let Some(ack_manager) = &ctx.delivery_ack_manager {
+        if let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
+            tracing::warn!(
+                error = %e,
+                user_id = %user_id,
+                "Failed to delete delivery ACK data"
+            );
+        }
+    }
+
+    // 7. Phase 5: Untrack user online status
+    let mut queue_lock = ctx.queue.lock().await;
+    if let Err(e) = queue_lock.untrack_user_online(&user_id.to_string()).await {
+        tracing::warn!(error = %e, user_id = %user_id, "Failed to untrack user online status");
+    }
+    drop(queue_lock);
+    
+    // 8. Disconnect user from WebSocket clients
+    handler.disconnect(&ctx.clients).await;
+
+    // 8. Delete user account from database (cascade will handle related records)
+    if let Err(e) = db::delete_user_account(&ctx.db_pool, &user_id).await {
+        tracing::error!(error = %e, user_id = %user_id, "Failed to delete user account");
+        handler
+            .send_error("SERVER_ERROR", "Failed to delete account")
+            .await;
+        return;
+    }
+
+    // 9. Log success
+    if ctx.config.logging.enable_user_identifiers {
+        tracing::info!(user_id = %user_id, username = %user.username, "Account deleted successfully");
+    } else {
+        tracing::info!(
+            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            "Account deleted successfully"
+        );
+    }
+
+    // 10. Send success response
+    if handler
+        .send_msgpack(&ServerMessage::DeleteAccountSuccess)
         .await
         .is_err()
     {}

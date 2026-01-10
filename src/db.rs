@@ -17,10 +17,31 @@ pub struct User {
 }
 
 pub async fn create_pool(database_url: &str) -> Result<DbPool> {
+    let max_connections = std::env::var("DB_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    
+    let acquire_timeout_secs = std::env::var("DB_ACQUIRE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    
+    let idle_timeout_secs = std::env::var("DB_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    
+    // sqlx 0.8 API - используем доступные методы
+    // connect_timeout недоступен в 0.8, используем acquire_timeout и idle_timeout
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections)
+        .acquire_timeout(std::time::Duration::from_secs(acquire_timeout_secs))
+        .idle_timeout(Some(std::time::Duration::from_secs(idle_timeout_secs)))
+        .test_before_acquire(true) // Test connections before returning from pool
         .connect(database_url)
         .await?;
+    
     Ok(pool)
 }
 
@@ -74,6 +95,22 @@ pub async fn get_user_by_id(pool: &DbPool, user_id: &Uuid) -> Result<Option<User
 
 pub async fn verify_password(user: &User, password: &str) -> Result<bool> {
     Ok(bcrypt::verify(password, &user.password_hash)?)
+}
+
+/// Delete user account and all associated data
+/// This performs a hard delete (cascade will handle related records)
+pub async fn delete_user_account(pool: &DbPool, user_id: &Uuid) -> Result<()> {
+    sqlx::query(
+        r#"
+        DELETE FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 /// Updates user password (requires valid old password)

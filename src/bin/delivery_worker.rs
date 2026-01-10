@@ -1,17 +1,23 @@
 // ============================================================================
-// Delivery Worker - Phase 3: Kafka Consumer
+// Delivery Worker - Phase 5: Kafka-only Mode
 // ============================================================================
 //
 // This worker consumes messages from Kafka and delivers them to online users.
 //
-// Architecture:
+// Architecture (Phase 5 - Kafka-only):
 // 1. Kafka Consumer reads from "construct-messages" topic (partitioned by recipient_id)
 // 2. For each message:
 //    - Check if processed (Redis deduplication)
-//    - Check if recipient online (Redis lookup)
-//    - If online: Forward to delivery_queue:{server_instance_id}
-//    - Commit Kafka offset after successful forward
+//    - Check if recipient online via user:{user_id}:server_instance_id
+//    - If online: Publish message directly to delivery_message:{server_instance_id} Pub/Sub channel
+//    - If offline: Don't commit offset - leave message in Kafka for retry
+//    - Commit Kafka offset only after successful delivery
 // 3. Redis Pub/Sub listener triggers immediate processing when user comes online
+//
+// Key differences from Phase 3:
+// - NO Redis delivery_queue - messages delivered directly via Pub/Sub
+// - NO Redis offline queues - Kafka is the only storage
+// - Direct routing to server instance where user is connected
 //
 // Guarantees:
 // - At-least-once delivery (Kafka consumer may retry)
@@ -314,166 +320,102 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         return Ok(()); // Return success to commit offset
     }
 
-    // 2. Check if recipient is online by looking for active connections
-    // We search for "delivery_queue:*" pattern and check if any server has this user online
-    // For now, we use a simpler approach: try to deliver to ALL server instances
-    // and let the server instance handle it if the user is connected
+    // 2. Phase 5: Check if recipient is online by looking up their server instance
+    // Instead of searching delivery_queue keys, we directly check user:{user_id}:server_instance_id
+    let user_server_key = format!("user:{}:server_instance_id", recipient_id);
+    
+    let server_instance_id: Option<String> = execute_redis_with_retry(state, "check_user_online", |conn| {
+        let key = user_server_key.clone();
+        Box::pin(async move {
+            redis::cmd("GET")
+                .arg(&key)
+                .query_async(conn)
+                .await
+        })
+    })
+    .await
+    .context("Failed to check user online status after retries")?;
 
-    // OPTIMIZATION: In production, you'd maintain a "user:{user_id}:server_instance" mapping
-    // For now, we broadcast to all delivery queues (inefficient but functional)
+    if let Some(server_instance_id) = server_instance_id {
+        // User is online on this server instance - deliver directly via Pub/Sub
+        info!(
+            message_id = %message_id,
+            recipient_hash = %log_safe_id(recipient_id, &state.config.logging.hash_salt),
+            server_instance_id = %server_instance_id,
+            "Recipient is online, delivering message directly via Pub/Sub"
+        );
 
-    // Get list of all delivery queue keys using SCAN for production safety
-    let delivery_keys: Vec<String> =
-        execute_redis_with_retry(state, "fetch_delivery_queues", |conn| {
-            let prefix = state.config.delivery_queue_prefix.clone();
+        // Serialize envelope to MessagePack
+        let message_bytes = rmp_serde::encode::to_vec_named(&envelope)
+            .context("Failed to serialize Kafka envelope to MessagePack")?;
+
+        // Phase 5: Publish message directly to delivery_message channel
+        // Server will listen to this channel and deliver via WebSocket
+        let delivery_channel = format!("delivery_message:{}", server_instance_id);
+        
+        let _: i64 = execute_redis_with_retry(state, "publish_delivery_message", |conn| {
+            let channel = delivery_channel.clone();
+            let msg = message_bytes.clone();
             Box::pin(async move {
-                let mut keys = Vec::new();
-                let mut cursor: u64 = 0;
-                let pattern = format!("{}*", prefix);
-
-                loop {
-                    let (new_cursor, mut found_keys): (u64, Vec<String>) = redis::cmd("SCAN")
-                        .arg(cursor)
-                        .arg("MATCH")
-                        .arg(&pattern)
-                        .arg("COUNT")
-                        .arg(100) // Fetch 100 keys per iteration
-                        .query_async(conn)
-                        .await?;
-
-                    keys.append(&mut found_keys);
-
-                    if new_cursor == 0 {
-                        break;
-                    }
-                    cursor = new_cursor;
-                }
-                Ok(keys)
+                redis::cmd("PUBLISH")
+                    .arg(&channel)
+                    .arg(&msg)
+                    .query_async(conn)
+                    .await
             })
         })
         .await
-        .context("Failed to fetch delivery queue keys after retries")?;
-
-    debug!(
-        "Redis SCAN for '{}*' returned {} keys.",
-        state.config.delivery_queue_prefix,
-        delivery_keys.len()
-    );
-
-    if delivery_keys.is_empty() {
-        // Return error to prevent Kafka offset commit - message will be retried
-        // This happens when no server instances are running to accept deliveries
-
-        // Track consecutive failures and log summary periodically to avoid spam
-        let mut count = state.no_queues_count.write().await;
-        *count += 1;
-        let current_count = *count;
-        drop(count);
-
-        // Log detailed warning every 100 messages, or for the first occurrence
-        // SECURITY: Hash recipient_id for privacy
+        .context("Failed to publish delivery message after retries")?;
+        
+        info!(
+            message_id = %message_id,
+            channel = %delivery_channel,
+            "Message published to delivery channel (Phase 5 - direct Pub/Sub delivery)"
+        );
+        
+        // 3. Mark message as processed (7-day TTL)
+        // Phase 5: After successful Pub/Sub publication, we commit Kafka offset
+        let ttl_seconds = state.config.message_ttl_days * 24 * 60 * 60;
+        let _: String = execute_redis_with_retry(state, "mark_message_processed", |conn| {
+            let key = dedup_key.clone();
+            let ttl = ttl_seconds;
+            Box::pin(async move {
+                redis::cmd("SETEX")
+                    .arg(&key)
+                    .arg(ttl)
+                    .arg("1")
+                    .query_async(conn)
+                    .await
+            })
+        })
+        .await
+        .context("Failed to mark message as processed after retries")?;
+        
+        // SECURITY: Hash recipient_id for privacy in production logs
         let salt = &state.config.logging.hash_salt;
-        if current_count == 1 || current_count % 100 == 0 {
-            warn!(
-                message_id = %message_id,
-                recipient_hash = %log_safe_id(recipient_id, salt),
-                consecutive_failures = current_count,
-                "No delivery queues available - messages held in Kafka until servers come online"
-            );
-        } else {
-            // Use debug level for subsequent messages to reduce log spam
-            debug!(
-                message_id = %message_id,
-                recipient_hash = %log_safe_id(recipient_id, salt),
-                consecutive_failures = current_count,
-                "No delivery queues available (message will retry)"
-            );
-        }
-
+        info!(
+            message_id = %message_id,
+            recipient_hash = %log_safe_id(recipient_id, salt),
+            "Message delivered directly via Pub/Sub (Phase 5)"
+        );
+        
+        return Ok(()); // Success - Kafka offset will be committed
+    } else {
+        // User is offline - don't commit Kafka offset, leave message for retry
+        info!(
+            message_id = %message_id,
+            recipient_hash = %log_safe_id(recipient_id, &state.config.logging.hash_salt),
+            "Recipient is offline - message will remain in Kafka for retry when user comes online"
+        );
+        
         return Err(anyhow::anyhow!(
-            "No delivery queues available (no server instances online). Message will be retried."
+            "Recipient is offline - message will be retried when user comes online"
         ));
     }
-
-    // Reset counter when we successfully find delivery queues
-    let mut count = state.no_queues_count.write().await;
-    if *count > 0 {
-        info!(
-            recovered_after = *count,
-            "Server instances are back online, resuming message delivery"
-        );
-        *count = 0;
-    }
-    drop(count);
-
-    // 3. Serialize envelope to MessagePack for Redis storage
-    let message_bytes = rmp_serde::encode::to_vec_named(&envelope)
-        .context("Failed to serialize Kafka envelope to MessagePack")?;
-
-    // 4. Forward message to delivery queues
-    // Push to first available delivery queue (simplification)
-    // In production, you'd route to specific server instance where user is connected
-    let delivery_key = delivery_keys[0].clone();
-
-    let _: i64 = execute_redis_with_retry(state, "push_to_delivery_queue", |conn| {
-        let key = delivery_key.clone();
-        let msg = message_bytes.clone();
-        Box::pin(async move {
-            redis::cmd("RPUSH")
-                .arg(&key)
-                .arg(&msg)
-                .query_async(conn)
-                .await
-        })
-    })
-    .await
-    .context("Failed to push message to delivery queue after retries")?;
-
-    // Notify server instance via Pub/Sub
-    let server_instance_id = delivery_key
-        .strip_prefix(&state.config.delivery_queue_prefix)
-        .unwrap_or("unknown");
-    let notification_channel = format!("delivery_notification:{}", server_instance_id);
-
-    let _: i64 = execute_redis_with_retry(state, "publish_notification", |conn| {
-        let channel = notification_channel.clone();
-        Box::pin(async move {
-            redis::cmd("PUBLISH")
-                .arg(&channel)
-                .arg("1")
-                .query_async(conn)
-                .await
-        })
-    })
-    .await
-    .context("Failed to publish delivery notification after retries")?;
-
-    // 5. Mark message as processed (7-day TTL)
-    let ttl_seconds = state.config.message_ttl_days * 24 * 60 * 60;
-    let _: String = execute_redis_with_retry(state, "mark_message_processed", |conn| {
-        let key = dedup_key.clone();
-        let ttl = ttl_seconds;
-        Box::pin(async move {
-            redis::cmd("SETEX")
-                .arg(&key)
-                .arg(ttl)
-                .arg("1")
-                .query_async(conn)
-                .await
-        })
-    })
-    .await
-    .context("Failed to mark message as processed after retries")?;
-
-    // SECURITY: Hash recipient_id for privacy in production logs
-    let salt = &state.config.logging.hash_salt;
-    info!(
-        message_id = %message_id,
-        recipient_hash = %log_safe_id(recipient_id, salt),
-        "Message forwarded to delivery queue"
-    );
-
+    
     // Phase 4: Shadow-read comparison (if enabled)
+    // Note: This only runs if shadow-read is enabled and user was online
+    // (Otherwise we return early above)
     if state.shadow_read_enabled {
         shadow_read_compare(state, envelope).await;
     }

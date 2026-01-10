@@ -92,6 +92,16 @@ pub async fn handle_websocket(
                                 .await;
                             }
 
+                            Ok(ClientMessage::DeleteAccount(data)) => {
+                                auth::handle_delete_account(
+                                    &mut handler,
+                                    &ctx,
+                                    data.session_token,
+                                    data.password,
+                                )
+                                .await;
+                            }
+
                             Ok(ClientMessage::GetPublicKey(data)) => {
                                 keys::handle_get_public_key(&mut handler, &ctx, data.user_id).await;
                             }
@@ -180,6 +190,14 @@ pub async fn handle_websocket(
         }
     }
 
+    // Phase 5: Untrack user online status when they disconnect
+    if let Some(user_id) = handler.user_id() {
+        let mut queue_lock = ctx.queue.lock().await;
+        if let Err(e) = queue_lock.untrack_user_online(user_id).await {
+            tracing::warn!(error = %e, user_id = %user_id, "Failed to untrack user online status");
+        }
+    }
+    
     handler.disconnect(&ctx.clients).await;
     tracing::info!("Connection closed: {}", addr);
 }

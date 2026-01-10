@@ -23,7 +23,7 @@ app = 'construct-message-gateway'
 primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  # Dockerfile path is specified via --dockerfile flag in Makefile
 
 [processes]
   app = "message-gateway"
@@ -32,8 +32,13 @@ primary_region = 'ams'
   # Port for gRPC server
   PORT = "8080"
 
-  # Rust logging level
-  RUST_LOG = "info,construct_server=debug"
+  # Rust logging level (reduced noise in production)
+  RUST_LOG = "info,sqlx=warn,construct_server=info"
+  
+  # Database connection pool settings
+  DB_MAX_CONNECTIONS = "10"
+  DB_ACQUIRE_TIMEOUT_SECS = "30"
+  DB_IDLE_TIMEOUT_SECS = "600"
 
   # Rate limiting
   MAX_MESSAGES_PER_HOUR = "1000"

@@ -350,24 +350,103 @@ fn spawn_delivery_listener(
             }
         };
 
+        // Phase 5: Subscribe to direct delivery channel (messages come directly from worker)
+        let delivery_channel = format!("delivery_message:{}", server_instance_id);
+        if let Err(e) = pubsub_conn.subscribe(&delivery_channel).await {
+            tracing::error!(error = %e, channel = %delivery_channel, "Failed to subscribe to delivery message channel");
+            return;
+        }
+        
+        // Legacy: Also subscribe to notification channel for backward compatibility
         let notification_channel = format!("delivery_notification:{}", server_instance_id);
         if let Err(e) = pubsub_conn.subscribe(&notification_channel).await {
             tracing::error!(error = %e, channel = %notification_channel, "Failed to subscribe to notification channel");
             return;
         }
 
-        tracing::info!(channel = %notification_channel, "Subscribed to Redis Pub/Sub notifications");
+        tracing::info!(
+            delivery_channel = %delivery_channel,
+            notification_channel = %notification_channel,
+            "Subscribed to Redis Pub/Sub channels"
+        );
 
         // Use a notify to trigger immediate polling from pub/sub
         let notify = Arc::new(tokio::sync::Notify::new());
         let notify_clone = notify.clone();
 
-        // Spawn a task to listen for pub/sub notifications
+        // Phase 5: Spawn a task to listen for direct delivery messages via Pub/Sub
+        let clients_clone = clients.clone();
+        let delivery_channel_clone = delivery_channel.clone();
+        let notification_channel_clone = notification_channel.clone();
         let _pubsub_listener = tokio::spawn(async move {
             let mut stream = pubsub_conn.on_message();
-            while let Some(_msg) = stream.next().await {
-                tracing::debug!("Received delivery notification via Pub/Sub");
-                notify_clone.notify_one();
+            while let Some(msg) = stream.next().await {
+                let channel: String = msg.get_channel_name().to_string();
+                
+                if channel == delivery_channel_clone {
+                    // Phase 5: Direct message delivery from worker
+                    tracing::debug!("Received direct delivery message via Pub/Sub");
+                    
+                    let payload: Vec<u8> = msg.get_payload().unwrap_or_default();
+                    
+                    // Parse as KafkaMessageEnvelope (MessagePack format from worker)
+                    if let Ok(envelope) = rmp_serde::from_slice::<construct_server::kafka::KafkaMessageEnvelope>(&payload) {
+                        // Convert envelope to ChatMessage for WebSocket delivery
+                        // Note: KafkaMessageEnvelope uses encrypted_payload, not content
+                        // But ChatMessage expects content field - we'll use encrypted_payload
+                        // Convert KafkaMessageEnvelope to ChatMessage
+                        let ephemeral_key = envelope.ephemeral_public_key
+                            .as_ref()
+                            .and_then(|k| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok())
+                            .unwrap_or_else(|| vec![0u8; 32]); // Default 32 bytes if decoding fails
+                        
+                        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
+                            .unwrap_or_else(chrono::Utc::now)
+                            .timestamp() as u64;
+                        
+                        let chat_msg = construct_server::message::ChatMessage {
+                            id: envelope.message_id.clone(),
+                            from: envelope.sender_id.clone(),
+                            to: envelope.recipient_id.clone(),
+                            content: envelope.encrypted_payload.clone(), // Use encrypted payload as content
+                            ephemeral_public_key: ephemeral_key,
+                            message_number: envelope.message_number.unwrap_or(0),
+                            timestamp,
+                        };
+                        
+                        let clients_guard = clients_clone.read().await;
+                        if let Some(tx) = clients_guard.get(&envelope.recipient_id) {
+                            let server_msg = construct_server::message::ServerMessage::Message(chat_msg.clone());
+                            if tx.send(server_msg).is_ok() {
+                                tracing::info!(
+                                    message_id = %envelope.message_id,
+                                    recipient_id = %envelope.recipient_id,
+                                    "Delivered message directly via Pub/Sub (Phase 5)"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    message_id = %envelope.message_id,
+                                    recipient_id = %envelope.recipient_id,
+                                    "Failed to deliver message - client channel closed"
+                                );
+                            }
+                        } else {
+                            tracing::warn!(
+                                message_id = %envelope.message_id,
+                                recipient_id = %envelope.recipient_id,
+                                "Recipient not found in clients map"
+                            );
+                        }
+                    } else {
+                        tracing::warn!("Failed to parse direct delivery message as KafkaMessageEnvelope (MessagePack)");
+                    }
+                } else if channel == notification_channel_clone {
+                    // Legacy: Notification channel - trigger polling for delivery_queue
+                    tracing::debug!("Received delivery notification via Pub/Sub (legacy mode)");
+                    notify_clone.notify_one();
+                } else {
+                    tracing::debug!("Received message from unknown channel: {}", channel);
+                }
             }
             tracing::warn!("Pub/Sub stream ended unexpectedly");
         });

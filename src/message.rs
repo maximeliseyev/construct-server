@@ -159,6 +159,13 @@ pub struct AcknowledgeMessageData {
     pub status: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAccountData {
+    pub session_token: String,
+    pub password: String,
+}
+
 // ============================================================================
 // ClientMessage Enum - Internally Tagged Format
 // ============================================================================
@@ -176,6 +183,7 @@ pub enum ClientMessage {
     RotatePrekey(RotatePrekeyData),
     ChangePassword(ChangePasswordData),
     Logout(LogoutData),
+    DeleteAccount(DeleteAccountData),
     RegisterDeviceToken(RegisterDeviceTokenData),
     UnregisterDeviceToken(UnregisterDeviceTokenData),
     UpdateDeviceTokenPreferences(UpdateDeviceTokenPreferencesData),
@@ -261,6 +269,7 @@ pub enum ServerMessage {
     ChangePasswordSuccess,
     Error(ErrorData),
     LogoutSuccess,
+    DeleteAccountSuccess,
     DeviceTokenRegistered,
     DeviceTokenUnregistered,
     DeviceTokenPreferencesUpdated,
