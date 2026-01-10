@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// Encrypted message as stored on the server
@@ -180,8 +181,8 @@ impl ServerCryptoValidator {
 
     /// Validates UploadableKeyBundle for API v3
     ///
-    /// Note: This does NOT verify the cryptographic signature.
-    /// Signature verification is the responsibility of clients.
+    /// Now includes cryptographic signature verification using Ed25519.
+    /// The server verifies that the bundle_data was signed by the master_identity_key.
     ///
     /// # Arguments
     /// * `bundle` - The uploadable key bundle to validate
@@ -208,6 +209,8 @@ impl ServerCryptoValidator {
         }
 
         // 3. Decode and deserialize bundle_data
+        // NOTE: We decode bundle_data from base64 to get the original bytes that were signed
+        // The signature is over the canonical JSON representation of bundle_data
         let bundle_data_bytes = general_purpose::STANDARD
             .decode(&bundle.bundle_data)
             .context("Invalid base64 in bundle_data")?;
@@ -215,8 +218,33 @@ impl ServerCryptoValidator {
         let bundle_data: BundleData =
             serde_json::from_slice(&bundle_data_bytes).context("Invalid JSON in bundle_data")?;
 
-        // 4. Validate the bundle_data content
+        // 4. Validate the bundle_data content (format, lengths, etc.)
         Self::validate_bundle_data(&bundle_data, allow_empty_user_id)?;
+
+        // 5. SECURITY: Verify Ed25519 signature
+        // Convert master_identity_key bytes to VerifyingKey
+        let master_key_array: [u8; 32] = master_key_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Failed to convert master_identity_key to array"))?;
+
+        let verifying_key = VerifyingKey::from_bytes(&master_key_array)
+            .context("Invalid Ed25519 master_identity_key format")?;
+
+        // Convert signature bytes to Signature
+        let signature_array: [u8; 64] = signature_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Failed to convert signature to array"))?;
+
+        let signature = Signature::from_bytes(&signature_array);
+
+        // CRITICAL: Verify signature over the exact bytes that were signed
+        // The signature is over bundle_data bytes (the canonical JSON representation)
+        // We use bundle_data_bytes directly, as that's what the client signed after base64 encoding
+        // This ensures we verify against the exact message that was signed
+        // Note: We already validated that bundle_data_bytes is valid JSON via deserialization above
+        verifying_key
+            .verify(&bundle_data_bytes, &signature)
+            .context("Ed25519 signature verification failed - bundle may be tampered or signed with different key")?;
 
         Ok(())
     }
@@ -306,6 +334,18 @@ pub struct BundleData {
 
     /// List of supported cipher suites with their key material
     pub supported_suites: Vec<SuiteKeyMaterial>,
+}
+
+impl BundleData {
+    /// Returns the canonical byte representation for signing/verification
+    ///
+    /// Uses JSON serialization with deterministic field ordering (via serde_json)
+    /// This matches what the client signed when creating the bundle
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        // Use serde_json::to_vec which produces canonical JSON (deterministic ordering)
+        // This is the same format that the client signed
+        serde_json::to_vec(self).context("Failed to serialize BundleData to canonical bytes")
+    }
 }
 
 /// Uploadable key bundle that the client sends to the server

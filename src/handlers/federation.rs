@@ -251,28 +251,41 @@ pub async fn receive_federated_message_http(
                 }
             }
             Err(e) => {
-                tracing::warn!(
+                // SECURITY: If federation is enabled, signature verification is mandatory
+                // Cannot proceed without verifying the signature
+                tracing::error!(
                     message_id = %req.message_id,
                     origin_server = %origin_server,
                     error = %e,
-                    "Failed to fetch origin server's public key"
+                    "Failed to fetch origin server's public key - cannot verify signature"
                 );
-                // In production, this should fail. For now, allow with warning.
-                // return json_response(StatusCode::BAD_GATEWAY, json!({"error": "Cannot verify origin server"}));
+                return json_response(
+                    StatusCode::BAD_GATEWAY,
+                    json!({"error": "Cannot verify origin server: failed to fetch public key"}),
+                );
             }
         }
     } else if req.server_signature.is_some() {
-        // Signature provided but missing required fields
+        // Signature provided but missing required fields (origin_server or payload_hash)
         tracing::warn!(
             message_id = %req.message_id,
             "Incomplete signature data: missing origin_server or payload_hash"
         );
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "Incomplete signature data: origin_server and payload_hash are required when server_signature is provided"}),
+        );
     } else {
-        // No signature provided - log warning (should require in production)
+        // SECURITY: Server signature is REQUIRED for federated messages
+        // This endpoint only accepts messages from remote federation servers
         tracing::warn!(
             message_id = %req.message_id,
             from_hash = %log_safe_id(&req.from, salt),
-            "Received unsigned federated message - signatures should be required in production"
+            "Received unsigned federated message - server signature is required"
+        );
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            json!({"error": "Server signature is required for federation messages"}),
         );
     }
 

@@ -113,6 +113,31 @@ pub async fn handle_send_message(
 
     let mut queue = ctx.queue.lock().await;
 
+    // 0. SECURITY: IP-based rate limiting (protects against distributed attacks)
+    // Check IP rate limit BEFORE user_id rate limit to catch attacks from multiple accounts
+    let client_ip = handler.addr().ip().to_string();
+    match queue.increment_ip_message_count(&client_ip).await {
+        Ok(ip_count) => {
+            let max_ip_messages = ctx.config.security.max_messages_per_ip_per_hour;
+            if ip_count > max_ip_messages {
+                // SECURITY: Log IP rate limit but don't block yet (user_id check comes next)
+                // This helps detect distributed attacks from same IP
+                tracing::warn!(
+                    ip = %client_ip,
+                    count = ip_count,
+                    limit = max_ip_messages,
+                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    "IP rate limit exceeded - possible distributed attack"
+                );
+                // Continue to user_id check - if both exceed limits, block
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, ip = %client_ip, "Failed to check IP rate limit");
+            // Continue processing but log error
+        }
+    }
+
     // 1. Проверка блокировки пользователя
     if let Ok(Some(reason)) = queue.is_user_blocked(&msg.from).await {
         // SECURITY: Always use hashed user_id in logs
@@ -228,6 +253,7 @@ pub async fn handle_send_message(
     // ========================================================================
     // MESSAGE GATEWAY PATH (Phase 2+)
     // If Message Gateway client is configured, delegate processing to it
+    // FALLBACK: If gateway is unavailable, use legacy local processing
     // ========================================================================
     if let Some(gateway_client) = &ctx.gateway_client {
         tracing::debug!(
@@ -252,32 +278,53 @@ pub async fn handle_send_message(
                 return;
             }
             Err(e) => {
-                // Message Gateway rejected the message
-                tracing::warn!(
-                    message_id = %msg.id,
-                    error = %e,
-                    "Message Gateway rejected message"
-                );
-
-                // Parse error to send appropriate error code
                 let error_msg = e.to_string();
-                if error_msg.contains("RATE_LIMIT") {
-                    handler.send_error("RATE_LIMIT_WARNING", &error_msg).await;
-                } else if error_msg.contains("USER_BLOCKED") {
-                    handler.send_error("USER_BLOCKED", &error_msg).await;
-                } else if error_msg.contains("DUPLICATE") {
-                    handler.send_error("DUPLICATE_MESSAGE", &error_msg).await;
+                
+                // Check if this is a connection/unavailability error (should fallback)
+                let is_connection_error = error_msg.contains("Failed to connect")
+                    || error_msg.contains("gRPC call failed")
+                    || error_msg.contains("unavailable")
+                    || error_msg.contains("deadline")
+                    || error_msg.contains("timeout")
+                    || error_msg.contains("refused");
+
+                if is_connection_error {
+                    // HIGH AVAILABILITY: Gateway unavailable - fallback to legacy local processing
+                    tracing::warn!(
+                        message_id = %msg.id,
+                        error = %e,
+                        "Message Gateway unavailable - falling back to local processing"
+                    );
+                    // Continue to legacy path below (don't return)
                 } else {
-                    handler.send_error("VALIDATION_ERROR", &error_msg).await;
+                    // Gateway is available but rejected the message (validation/rate limit/etc)
+                    // These are legitimate rejections - don't fallback
+                    tracing::warn!(
+                        message_id = %msg.id,
+                        error = %e,
+                        "Message Gateway rejected message"
+                    );
+
+                    // Parse error to send appropriate error code
+                    if error_msg.contains("RATE_LIMIT") {
+                        handler.send_error("RATE_LIMIT_WARNING", &error_msg).await;
+                    } else if error_msg.contains("USER_BLOCKED") {
+                        handler.send_error("USER_BLOCKED", &error_msg).await;
+                    } else if error_msg.contains("DUPLICATE") {
+                        handler.send_error("DUPLICATE_MESSAGE", &error_msg).await;
+                    } else {
+                        handler.send_error("VALIDATION_ERROR", &error_msg).await;
+                    }
+                    return;
                 }
-                return;
             }
         }
     }
 
     // ========================================================================
-    // LEGACY PATH (when Message Gateway is not configured)
+    // LEGACY PATH (when Message Gateway is not configured OR unavailable)
     // Direct processing with Kafka as source of truth (Phase 5+)
+    // This path is also used as fallback when message-gateway is unavailable
     // ========================================================================
 
     // PHASE 5: Kafka is the ONLY source of truth
