@@ -535,18 +535,67 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         
         return Ok(()); // Success - Kafka offset will be committed
     } else {
-        // Phase 5: User is offline - don't commit Kafka offset, leave message for retry
-        // This is EXPECTED behavior - log at debug level to reduce noise
-        // (Summary will be logged periodically in main loop)
-        debug!(
+        // CRITICAL FIX: User is offline - save message to Redis delivery_queue for later delivery
+        // Problem: Message was already read from Kafka via recv(), but offset not committed.
+        // If we do continue, next poll() will return the NEXT message, and current message is LOST.
+        // Solution: Save message to Redis delivery_queue with recipient_id as key, so it can be
+        // delivered when user comes online via the delivery listener mechanism.
+        
+        // Get all active server instances to find where to queue the message
+        // We'll queue it to a special key that will be processed when user comes online
+        // Format: delivery_queue:offline:{recipient_id} -> list of messages
+        let offline_queue_key = format!("{}offline:{}", state.config.delivery_queue_prefix, recipient_id);
+        
+        // Serialize envelope to MessagePack for Redis storage
+        let message_bytes = rmp_serde::encode::to_vec_named(envelope)
+            .context("Failed to serialize Kafka envelope to MessagePack for offline queue")?;
+        
+        // Save to Redis list with TTL (will be cleaned up after delivery or TTL expiry)
+        use construct_server::config::SECONDS_PER_DAY;
+        let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
+        
+        let _: i64 = execute_redis_with_retry(state, "save_offline_message", |conn| {
+            let key = offline_queue_key.clone();
+            let msg = message_bytes.clone();
+            let ttl = ttl_seconds;
+            Box::pin(async move {
+                // Use RPUSH to add message to list (FIFO order - oldest first)
+                // This maintains order when messages are later moved to delivery_queue
+                let _: () = redis::cmd("RPUSH").arg(&key).arg(&msg).query_async(conn).await?;
+                // Set TTL on the key (messages will expire if not delivered)
+                let _: () = redis::cmd("EXPIRE").arg(&key).arg(ttl).query_async(conn).await?;
+                Ok::<i64, redis::RedisError>(1)
+            })
+        })
+        .await
+        .context("Failed to save offline message to Redis after retries")?;
+        
+        // Mark message as processed to prevent duplicate delivery when user comes online
+        // (the message is saved in Redis, so it will be delivered via delivery listener)
+        let _: String = execute_redis_with_retry(state, "mark_message_processed_for_offline", |conn| {
+            let key = dedup_key.clone();
+            let ttl = ttl_seconds;
+            Box::pin(async move {
+                redis::cmd("SETEX")
+                    .arg(&key)
+                    .arg(ttl)
+                    .arg("1")
+                    .query_async(conn)
+                    .await
+            })
+        })
+        .await
+        .context("Failed to mark offline message as processed after retries")?;
+        
+        info!(
             message_id = %message_id,
             recipient_hash = %log_safe_id(recipient_id, &state.config.logging.hash_salt),
-            "Recipient is offline - message will remain in Kafka for retry when user comes online"
+            queue_key = %offline_queue_key,
+            "Recipient is offline - message saved to Redis delivery_queue for later delivery"
         );
         
-        // Return error to prevent offset commit, but this is expected behavior
-        return Err(anyhow::anyhow!(
-            "Recipient is offline - message will be retried when user comes online"
-        ));
+        // Return success to commit offset - message is safely stored in Redis
+        // When user comes online, delivery listener will process messages from delivery_queue
+        return Ok(());
     }
 }

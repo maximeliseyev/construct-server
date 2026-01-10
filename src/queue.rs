@@ -467,6 +467,56 @@ impl MessageQueue {
         let result: Option<String> = self.client.get(&key).await?;
         Ok(result)
     }
+    
+    /// Process offline messages for a user when they come online
+    /// Moves messages from delivery_queue:offline:{user_id} to delivery_queue:{server_instance_id}
+    /// so they can be delivered via the delivery listener mechanism
+    /// 
+    /// Messages are moved in FIFO order (oldest first) to maintain message ordering
+    pub async fn process_offline_messages_for_user(
+        &mut self,
+        user_id: &str,
+        server_instance_id: &str,
+    ) -> Result<usize> {
+        let offline_queue_key = format!("{}offline:{}", self.delivery_queue_prefix, user_id);
+        let delivery_queue_key = format!("{}{}", self.delivery_queue_prefix, server_instance_id);
+        
+        // Use Lua script to atomically get all messages from offline queue and move to delivery queue
+        // This ensures atomicity and maintains FIFO order
+        let script = redis::Script::new(
+            r"
+            local offline_key = KEYS[1]
+            local delivery_key = KEYS[2]
+            local messages = redis.call('LRANGE', offline_key, 0, -1)
+            if #messages > 0 then
+                -- Move messages to delivery queue (FIFO order - oldest first)
+                for i, msg in ipairs(messages) do
+                    redis.call('RPUSH', delivery_key, msg)
+                end
+                -- Delete offline queue after moving
+                redis.call('DEL', offline_key)
+            end
+            return #messages
+            ",
+        );
+        
+        let message_count: usize = script
+            .key(&offline_queue_key)
+            .key(&delivery_queue_key)
+            .invoke_async(&mut self.client)
+            .await?;
+        
+        if message_count > 0 {
+            tracing::info!(
+                user_id = %user_id,
+                server_instance_id = %server_instance_id,
+                message_count = message_count,
+                "Processed offline messages for user - moved to delivery queue (FIFO order maintained)"
+            );
+        }
+        
+        Ok(message_count)
+    }
 
     pub async fn publish_user_online(
         &mut self,

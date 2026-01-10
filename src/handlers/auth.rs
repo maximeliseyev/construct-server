@@ -1,3 +1,4 @@
+use crate::audit::AuditLogger;
 use crate::context::AppContext;
 
 use crate::db::{self, User};
@@ -190,9 +191,15 @@ pub async fn handle_login(
                     tracing::warn!(error = %e, "Failed to reset login counter");
                 }
                 drop(queue);
+                
+                // AUDIT: Log successful login
+                let user_id_hash = log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt);
+                let username_hash = log_safe_id(&username, &ctx.config.logging.hash_salt);
+                let client_ip = Some(handler.addr().ip());
+                
                 // SECURITY: Always use hashed identifiers in logs
                 tracing::info!(
-                    user_hash = %log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt),
+                    user_hash = %user_id_hash,
                     "User logged in successfully"
                 );
 
@@ -208,6 +215,16 @@ pub async fn handle_login(
                             return;
                         }
 
+                        // AUDIT: Log successful login with session ID
+                        AuditLogger::log_login_attempt(
+                            Some(user_id_hash.clone()),
+                            Some(username_hash.clone()),
+                            client_ip,
+                            true,
+                            Some("Login successful".to_string()),
+                            Some(jti.clone()),
+                        );
+                        
                         let response =
                             ServerMessage::LoginSuccess(crate::message::LoginSuccessData {
                                 user_id: user.id.to_string(),
@@ -218,6 +235,16 @@ pub async fn handle_login(
                         if handler.send_msgpack(&response).await.is_err() {}
                     }
                     Err(e) => {
+                        // AUDIT: Log login failure due to token creation error
+                        AuditLogger::log_login_attempt(
+                            Some(user_id_hash.clone()),
+                            Some(username_hash.clone()),
+                            client_ip,
+                            false,
+                            Some(format!("Token creation failed: {}", e)),
+                            None,
+                        );
+                        
                         tracing::error!(error = %e, "Failed to create token");
                         handler
                             .send_error("TOKEN_CREATION_FAILED", "Could not create session token")
@@ -225,17 +252,35 @@ pub async fn handle_login(
                     }
                 }
             } else {
-            // SECURITY: Always use hashed username in logs, never log plain username
-            tracing::warn!(
-                user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
-                "Invalid password attempt"
-            );
+                // AUDIT: Log failed login (invalid password)
+                let username_hash = log_safe_id(&username, &ctx.config.logging.hash_salt);
+                let client_ip = Some(handler.addr().ip());
+                AuditLogger::log_authentication_failure(
+                    Some(username_hash.clone()),
+                    client_ip,
+                    Some("Invalid password".to_string()),
+                );
+                
+                // SECURITY: Always use hashed username in logs, never log plain username
+                tracing::warn!(
+                    user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
+                    "Invalid password attempt"
+                );
                 handler
                     .send_error("INVALID_CREDENTIALS", "Invalid credentials")
                     .await;
             }
         }
         Ok(None) => {
+            // AUDIT: Log failed login (user not found)
+            let username_hash = log_safe_id(&username, &ctx.config.logging.hash_salt);
+            let client_ip = Some(handler.addr().ip());
+            AuditLogger::log_authentication_failure(
+                Some(username_hash.clone()),
+                client_ip,
+                Some("User not found".to_string()),
+            );
+            
             // SECURITY: Always use hashed username in logs
             tracing::warn!(
                 user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
@@ -378,9 +423,21 @@ pub async fn handle_change_password(
 
     let max_changes = ctx.config.security.max_password_changes_per_day;
     if change_count > max_changes {
+        // AUDIT: Log rate limit violation for password changes
+        let user_id_hash = log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt);
+        let client_ip = Some(handler.addr().ip());
+        AuditLogger::log_rate_limit_violation(
+            Some(user_id_hash.clone()),
+            None,
+            client_ip,
+            "password_change".to_string(),
+            change_count,
+            max_changes,
+        );
+        
         // SECURITY: Always use hashed user_id in logs
         tracing::warn!(
-            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            user_hash = %user_id_hash,
             count = change_count,
             limit = max_changes,
             "Password change rate limit exceeded"
@@ -413,12 +470,25 @@ pub async fn handle_change_password(
     };
 
     // 4. Verify old password is correct
+    let user_id_hash = log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt);
+    let client_ip = Some(handler.addr().ip());
+    
     match db::verify_password(&user, &old_password).await {
         Ok(true) => {}
         Ok(false) => {
+            // AUDIT: Log failed password change (invalid old password)
+            AuditLogger::log_password_change(
+                user_id_hash.clone(),
+                None,
+                client_ip,
+                false,
+                Some("Invalid old password".to_string()),
+                Some(claims.jti.clone()),
+            );
+            
             // SECURITY: Always use hashed user_id in logs
             tracing::warn!(
-                user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                user_hash = %user_id_hash,
                 "Invalid old password during password change"
             );
             handler
@@ -427,6 +497,16 @@ pub async fn handle_change_password(
             return;
         }
         Err(e) => {
+            // AUDIT: Log failed password change (verification error)
+            AuditLogger::log_password_change(
+                user_id_hash.clone(),
+                None,
+                client_ip,
+                false,
+                Some(format!("Password verification error: {}", e)),
+                Some(claims.jti.clone()),
+            );
+            
             tracing::error!(error = %e, "Error verifying old password");
             handler
                 .send_error("SERVER_ERROR", "Failed to verify password")
@@ -455,9 +535,20 @@ pub async fn handle_change_password(
     }
 
     // 7. Validate new password strength
+    // user_id_hash and client_ip already defined above
     if let Err(error_msg) = validate_password_strength(&new_password) {
+        // AUDIT: Log failed password change (weak password)
+        AuditLogger::log_password_change(
+            user_id_hash.clone(),
+            None,
+            client_ip,
+            false,
+            Some(format!("Weak password: {}", error_msg)),
+            Some(claims.jti.clone()),
+        );
+        
         tracing::warn!(
-            user_id = %user_id,
+            user_hash = %user_id_hash,
             "Password change rejected: weak password"
         );
         handler.send_error("WEAK_PASSWORD", &error_msg).await;
@@ -465,10 +556,22 @@ pub async fn handle_change_password(
     }
 
     // 8. Update password in database
+    // user_id_hash and client_ip already defined above
+    
     if let Err(e) = db::update_user_password(&ctx.db_pool, &user_id, &new_password).await {
+        // AUDIT: Log failed password change (database error)
+        AuditLogger::log_password_change(
+            user_id_hash.clone(),
+            None,
+            client_ip,
+            false,
+            Some(format!("Database error: {}", e)),
+            Some(claims.jti.clone()),
+        );
+        
         tracing::error!(
             error = %e,
-            user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+            user_hash = %user_id_hash,
             "Failed to update password"
         );
         handler
@@ -495,10 +598,28 @@ pub async fn handle_change_password(
     }
     drop(queue);
 
+    // AUDIT: Log password change success (user_id_hash and client_ip already defined above)
+    AuditLogger::log_password_change(
+        user_id_hash.clone(),
+        None, // Username not available in this context
+        client_ip,
+        true,
+        Some("Password changed successfully".to_string()),
+        Some(claims.jti.clone()),
+    );
+    
+    // AUDIT: Log session revocation after password change
+    AuditLogger::log_session_revocation(
+        user_id_hash.clone(),
+        None,
+        client_ip,
+        "All sessions revoked after password change".to_string(),
+    );
+
     // 9. Log success
     // SECURITY: Always use hashed identifiers in logs
     tracing::info!(
-        user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+        user_hash = %user_id_hash,
         "Password changed successfully"
     );
 
@@ -533,6 +654,16 @@ pub async fn handle_logout(
         }
         drop(queue_lock);
 
+        // AUDIT: Log logout
+        let user_id_hash = log_safe_id(&claims.sub, &ctx.config.logging.hash_salt);
+        let client_ip = Some(handler.addr().ip());
+        AuditLogger::log_logout(
+            Some(user_id_hash),
+            None, // Username not available in this context
+            client_ip,
+            Some(claims.jti.clone()),
+        );
+        
         handler.disconnect(&ctx.clients).await;
     }
     if handler
@@ -660,10 +791,22 @@ pub async fn handle_delete_account(
         return;
     }
 
+    // AUDIT: Log account deletion
+    let user_id_hash = log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt);
+    let username_hash = Some(log_safe_id(&user.username, &ctx.config.logging.hash_salt));
+    let client_ip = Some(handler.addr().ip());
+    AuditLogger::log_account_deletion(
+        user_id_hash.clone(),
+        username_hash,
+        client_ip,
+        true,
+        Some("Account deleted successfully".to_string()),
+    );
+
     // 9. Log success
     // SECURITY: Always use hashed identifiers in logs
     tracing::info!(
-        user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+        user_hash = %user_id_hash,
         "Account deleted successfully"
     );
 

@@ -20,7 +20,7 @@ use crate::{
     kafka::KafkaMessageEnvelope,
     message::ChatMessage,
     user_id::UserId,
-    utils::log_safe_id,
+    utils::{log_safe_id, add_security_headers},
 };
 
 fn json_response(status: StatusCode, body: serde_json::Value) -> hyper::Response<Full<Bytes>> {
@@ -38,6 +38,10 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> hyper::Response
             // This should never happen, but if it does, we continue without the header
         }
     }
+    
+    // SECURITY: Add security headers to protect against XSS, clickjacking, etc.
+    // Assume HTTPS for federation endpoints (they should always use HTTPS)
+    add_security_headers(response.headers_mut(), true);
     
     response
 }

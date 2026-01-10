@@ -21,6 +21,7 @@ use hyper::{Request, Response, StatusCode, body::Incoming as IncomingBody};
 use hyper_util::rt::TokioIo;
 
 pub mod apns;
+pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod context;
@@ -486,11 +487,57 @@ fn spawn_delivery_listener(
 
             // Forward messages to clients
             for message_bytes in messages {
-                // Try to parse as ChatMessage (old format) or as JSON (v3 format)
-
-                // First, try to deserialize as MessagePack (old format)
-                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes)
-                {
+                // Try to parse as KafkaMessageEnvelope (Phase 5 format from delivery-worker)
+                // This is the format used when messages are saved to offline queue
+                if let Ok(envelope) = rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(&message_bytes) {
+                    // Convert KafkaMessageEnvelope to ChatMessage for WebSocket delivery
+                    let ephemeral_key = envelope.ephemeral_public_key
+                        .as_ref()
+                        .and_then(|k| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok())
+                        .unwrap_or_else(|| vec![0u8; 32]);
+                    
+                    let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
+                        .unwrap_or_else(chrono::Utc::now)
+                        .timestamp() as u64;
+                    
+                    let chat_msg = message::ChatMessage {
+                        id: envelope.message_id.clone(),
+                        from: envelope.sender_id.clone(),
+                        to: envelope.recipient_id.clone(),
+                        content: envelope.encrypted_payload.clone(),
+                        ephemeral_public_key: ephemeral_key,
+                        message_number: envelope.message_number.unwrap_or(0),
+                        timestamp,
+                    };
+                    
+                    let clients_guard = clients.read().await;
+                    if let Some(tx) = clients_guard.get(&envelope.recipient_id) {
+                        let server_msg = message::ServerMessage::Message(chat_msg.clone());
+                        if tx.send(server_msg).is_err() {
+                            tracing::warn!(
+                                recipient_id = %envelope.recipient_id,
+                                message_id = %envelope.message_id,
+                                "Failed to send offline message to client (channel closed)"
+                            );
+                        } else {
+                            tracing::info!(
+                                recipient_id = %envelope.recipient_id,
+                                message_id = %envelope.message_id,
+                                "Delivered offline message from delivery_queue to online client"
+                            );
+                        }
+                    } else {
+                        tracing::warn!(
+                            recipient_id = %envelope.recipient_id,
+                            message_id = %envelope.message_id,
+                            "Client not found for offline message delivery"
+                        );
+                    }
+                    continue;
+                }
+                
+                // Try to parse as ChatMessage (old format)
+                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes) {
                     // Old format: send to the recipient via WebSocket
                     let clients_guard = clients.read().await;
                     if let Some(tx) = clients_guard.get(&chat_msg.to) {
@@ -513,9 +560,11 @@ fn spawn_delivery_listener(
                             "Client not found for message delivery"
                         );
                     }
+                    continue;
                 }
+                
                 // Try to parse as JSON (v3 format)
-                else if let Ok(json_str) = std::str::from_utf8(&message_bytes) {
+                if let Ok(json_str) = std::str::from_utf8(&message_bytes) {
                     if let Ok(v3_msg) = serde_json::from_str::<e2e::EncryptedMessageV3>(json_str) {
                         // V3 format: send to the recipient via WebSocket
                         let clients_guard = clients.read().await;
@@ -538,23 +587,17 @@ fn spawn_delivery_listener(
                                 "Client not found for V3 message delivery"
                             );
                         }
-                    } else {
-                        tracing::error!(
-                            "Failed to parse message as ChatMessage or EncryptedMessageV3. Moving to dead-letter queue."
-                        );
-                        if let Some(conn) = &mut dlq_conn {
-                            let _: Result<(), _> =
-                                conn.lpush(&dead_letter_queue, &message_bytes).await;
-                        }
+                        continue;
                     }
-                } else {
-                    tracing::error!(
-                        "Invalid message encoding (not UTF-8). Moving to dead-letter queue."
-                    );
-                    if let Some(conn) = &mut dlq_conn {
-                        let _: Result<(), _> =
-                            conn.lpush(&dead_letter_queue, &message_bytes).await;
-                    }
+                }
+                
+                // If none of the formats match, move to dead-letter queue
+                tracing::error!(
+                    "Failed to parse message from delivery_queue. Expected KafkaMessageEnvelope (MessagePack), ChatMessage (MessagePack), or EncryptedMessageV3 (JSON). Moving to dead-letter queue."
+                );
+                if let Some(conn) = &mut dlq_conn {
+                    let _: Result<(), _> =
+                        conn.lpush(&dead_letter_queue, &message_bytes).await;
                 }
             }
         }

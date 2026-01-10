@@ -155,7 +155,7 @@ if [ -n "$SERVER_SIGNING_KEY" ]; then
   flyctl secrets set \
     SERVER_SIGNING_KEY="$SERVER_SIGNING_KEY" \
     --app construct-server
-  
+
   # Also set for message gateway if it uses federation
   if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
     flyctl secrets set \
@@ -234,6 +234,7 @@ if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
+    APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
     --app construct-message-gateway
 
   # Instance domain and federation (required for MessageRouter to route messages)
