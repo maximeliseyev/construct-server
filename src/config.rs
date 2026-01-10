@@ -77,6 +77,20 @@ pub struct ApnsConfig {
     pub device_token_encryption_key: String,
 }
 
+/// Federation configuration
+#[derive(Clone, Debug)]
+pub struct FederationConfig {
+    /// Instance domain (e.g., "eu.konstruct.cc")
+    pub instance_domain: String,
+    /// Base federation domain (e.g., "konstruct.cc")
+    pub base_domain: String,
+    /// Whether federation is enabled
+    pub enabled: bool,
+    /// Server signing key seed (base64-encoded 32 bytes for Ed25519)
+    /// Generate with: openssl rand -base64 32
+    pub signing_key_seed: Option<String>,
+}
+
 /// APNs environment
 #[derive(Clone, Debug, PartialEq)]
 pub enum ApnsEnvironment {
@@ -121,8 +135,10 @@ pub struct Config {
     pub security: SecurityConfig,
     pub kafka: KafkaConfig,
     pub apns: ApnsConfig,
+    pub federation: FederationConfig,
 
-    // Federation and domain configuration
+    // Legacy aliases (for backward compatibility)
+    // TODO: Remove after updating all usages to config.federation.*
     /// Instance domain (e.g., "eu.konstruct.cc")
     pub instance_domain: String,
     /// Base federation domain (e.g., "konstruct.cc")
@@ -343,7 +359,36 @@ impl Config {
                 },
             },
 
-            // Federation and domain configuration
+            // Federation configuration
+            federation: {
+                let instance_domain = std::env::var("INSTANCE_DOMAIN")
+                    .unwrap_or_else(|_| "eu.konstruct.cc".to_string());
+                let base_domain = std::env::var("FEDERATION_BASE_DOMAIN")
+                    .unwrap_or_else(|_| "konstruct.cc".to_string());
+                let enabled = std::env::var("FEDERATION_ENABLED")
+                    .unwrap_or_else(|_| "false".to_string())
+                    .parse()
+                    .unwrap_or(false);
+                let signing_key_seed = std::env::var("SERVER_SIGNING_KEY").ok();
+
+                // Warn if federation is enabled but no signing key
+                if enabled && signing_key_seed.is_none() {
+                    tracing::warn!(
+                        "Federation is enabled but SERVER_SIGNING_KEY is not set. \
+                         S2S messages will not be signed. \
+                         Generate with: openssl rand -base64 32"
+                    );
+                }
+
+                FederationConfig {
+                    instance_domain,
+                    base_domain,
+                    enabled,
+                    signing_key_seed,
+                }
+            },
+
+            // Legacy aliases (for backward compatibility)
             instance_domain: std::env::var("INSTANCE_DOMAIN")
                 .unwrap_or_else(|_| "eu.konstruct.cc".to_string()),
 

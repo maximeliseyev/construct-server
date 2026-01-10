@@ -5,7 +5,7 @@
 set -e
 
 # Check if .env exists
-if [ ! -f .env.deploy ]; then
+if [ ! -f .env ]; then
   echo "Error: .env file not found"
   exit 1
 fi
@@ -142,6 +142,23 @@ if [ -n "$DEEP_LINK_BASE_URL" ]; then
   flyctl secrets set \
     DEEP_LINK_BASE_URL="$DEEP_LINK_BASE_URL" \
     --app construct-server
+fi
+
+# Server Signing Key for S2S federation authentication
+# Generate with: openssl rand -base64 32
+if [ -n "$SERVER_SIGNING_KEY" ]; then
+  echo ""
+  echo "Setting up server signing key for S2S federation..."
+  flyctl secrets set \
+    SERVER_SIGNING_KEY="$SERVER_SIGNING_KEY" \
+    --app construct-server
+  
+  # Also set for message gateway if it uses federation
+  if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+    flyctl secrets set \
+      SERVER_SIGNING_KEY="$SERVER_SIGNING_KEY" \
+      --app construct-message-gateway
+  fi
 fi
 
 # ============================================================================

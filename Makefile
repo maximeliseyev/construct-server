@@ -42,7 +42,7 @@ help:
 	@echo "  make secrets-server     Set secrets for construct-server"
 	@echo "  make secrets-worker     Set secrets for construct-delivery-worker"
 	@echo "  make secrets-gateway    Set secrets for construct-message-gateway"
-	@echo "  make secrets-all        Set secrets for all services (from .env)"
+	@echo "  make secrets-all        Set secrets for all services (from .env.deploy)"
 	@echo ""
 	@echo "📊 Fly.io Monitoring:"
 	@echo "  make logs-server        View WebSocket server logs"

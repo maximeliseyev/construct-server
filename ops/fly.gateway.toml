@@ -23,7 +23,7 @@ app = 'construct-message-gateway'
 primary_region = 'ams'
 
 [build]
-  dockerfile = "ops/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [processes]
   app = "message-gateway"
@@ -54,6 +54,7 @@ primary_region = 'ams'
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 1
+  processes = ["app"]  # Link to the "app" process defined above
 
   [[services.ports]]
     port = 443

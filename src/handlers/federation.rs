@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use crate::{
     context::AppContext,
+    federation::{FederatedEnvelope, ServerSigner},
     kafka::KafkaMessageEnvelope,
     message::ChatMessage,
     user_id::UserId,
@@ -38,22 +39,32 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> hyper::Response
 ///
 /// Returns server capabilities and federation endpoints
 pub async fn well_known_konstruct(ctx: AppContext) -> hyper::Response<Full<Bytes>> {
+    // Get public key if server signer is configured
+    let public_key = ctx
+        .server_signer
+        .as_ref()
+        .map(|signer| signer.public_key_base64());
+
     let info = json!({
         "server": ctx.config.instance_domain,
         "version": "1.0",
+        "public_key": public_key,
         "federation": {
             "enabled": ctx.config.federation_enabled,
             "protocol_version": "1.0",
+            "public_key": public_key,
             "endpoints": {
                 "messages": format!("https://{}/federation/v1/messages", ctx.config.instance_domain),
-                "health": format!("https://{}/federation/health", ctx.config.instance_domain)
+                "health": format!("https://{}/federation/health", ctx.config.instance_domain),
+                "keys": format!("https://{}/federation/v1/keys", ctx.config.instance_domain)
             }
         },
         "features": [
             "end_to_end_encryption",
             "double_ratchet",
             "message_delivery",
-            "offline_queue"
+            "offline_queue",
+            "server_signatures"
         ],
         "limits": {
             "max_message_size": 100_000,
@@ -92,7 +103,15 @@ pub struct FederatedMessageRequest {
     pub message_number: u32,
     pub timestamp: u64,
 
-    // Server signature (optional for MVP, required for production)
+    // S2S authentication fields
+    /// Origin server domain (who sent this S2S request)
+    #[serde(default)]
+    pub origin_server: Option<String>,
+    /// Hash of the ciphertext for integrity verification
+    #[serde(default)]
+    pub payload_hash: Option<String>,
+    /// Ed25519 signature over the canonical envelope (base64)
+    #[serde(default)]
     pub server_signature: Option<String>,
 }
 
@@ -148,6 +167,89 @@ pub async fn receive_federated_message_http(
     if !sender.is_federated() {
         tracing::warn!(from_hash = %log_safe_id(&req.from, salt), "Sender must be federated (must have @domain)");
         return json_response(StatusCode::BAD_REQUEST, json!({"error": "Sender must be federated"}));
+    }
+
+    // 3.5 Verify server signature (if provided)
+    // In production, signatures should be required. For now, log warnings for unsigned messages.
+    if let (Some(origin_server), Some(payload_hash), Some(signature)) = (
+        &req.origin_server,
+        &req.payload_hash,
+        &req.server_signature,
+    ) {
+        // Reconstruct envelope for verification
+        let envelope = FederatedEnvelope {
+            message_id: req.message_id.clone(),
+            from: req.from.clone(),
+            to: req.to.clone(),
+            origin_server: origin_server.clone(),
+            destination_server: ctx.config.instance_domain.clone(),
+            timestamp: req.timestamp,
+            payload_hash: payload_hash.clone(),
+        };
+
+        // Verify payload hash integrity
+        let expected_hash = FederatedEnvelope::hash_payload(&req.ciphertext);
+        if expected_hash != *payload_hash {
+            tracing::warn!(
+                message_id = %req.message_id,
+                origin_server = %origin_server,
+                "Payload hash mismatch - message may have been tampered"
+            );
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": "Payload integrity check failed"}),
+            );
+        }
+
+        // Fetch origin server's public key and verify signature
+        match ctx.public_key_cache.get_public_key(origin_server).await {
+            Ok(public_key) => {
+                match ServerSigner::verify_signature(&public_key, &envelope, signature) {
+                    Ok(()) => {
+                        tracing::debug!(
+                            message_id = %req.message_id,
+                            origin_server = %origin_server,
+                            "S2S signature verified successfully"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            message_id = %req.message_id,
+                            origin_server = %origin_server,
+                            error = %e,
+                            "S2S signature verification FAILED"
+                        );
+                        return json_response(
+                            StatusCode::UNAUTHORIZED,
+                            json!({"error": "Invalid server signature"}),
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    message_id = %req.message_id,
+                    origin_server = %origin_server,
+                    error = %e,
+                    "Failed to fetch origin server's public key"
+                );
+                // In production, this should fail. For now, allow with warning.
+                // return json_response(StatusCode::BAD_GATEWAY, json!({"error": "Cannot verify origin server"}));
+            }
+        }
+    } else if req.server_signature.is_some() {
+        // Signature provided but missing required fields
+        tracing::warn!(
+            message_id = %req.message_id,
+            "Incomplete signature data: missing origin_server or payload_hash"
+        );
+    } else {
+        // No signature provided - log warning (should require in production)
+        tracing::warn!(
+            message_id = %req.message_id,
+            from_hash = %log_safe_id(&req.from, salt),
+            "Received unsigned federated message - signatures should be required in production"
+        );
     }
 
     // 4. Validate recipient is local to this instance

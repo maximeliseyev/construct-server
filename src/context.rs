@@ -3,6 +3,7 @@ use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
+use crate::federation::{PublicKeyCache, ServerSigner};
 use crate::handlers::session::Clients;
 use crate::kafka::MessageProducer;
 use crate::message_gateway::MessageGatewayClient;
@@ -35,6 +36,12 @@ pub struct AppContext {
     /// When None: delivery ACK system is disabled
     /// When Some: track and route delivery acknowledgments
     pub delivery_ack_manager: Option<Arc<DeliveryAckManager<PostgresDeliveryStorage>>>,
+    /// Server signer for S2S federation authentication
+    /// When None: federation signing is disabled (messages sent unsigned)
+    /// When Some: sign outgoing S2S messages with Ed25519
+    pub server_signer: Option<Arc<ServerSigner>>,
+    /// Cache for remote server public keys (for signature verification)
+    pub public_key_cache: Arc<PublicKeyCache>,
 }
 
 impl AppContext {
@@ -51,6 +58,22 @@ impl AppContext {
         token_encryption: Arc<DeviceTokenEncryption>,
         server_instance_id: String,
     ) -> Self {
+        // Initialize server signer if signing key is configured
+        let server_signer = config
+            .federation
+            .signing_key_seed
+            .as_ref()
+            .and_then(|seed| {
+                match ServerSigner::from_seed_base64(seed, config.federation.instance_domain.clone())
+                {
+                    Ok(signer) => Some(Arc::new(signer)),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to initialize server signer");
+                        None
+                    }
+                }
+            });
+
         Self {
             db_pool,
             queue,
@@ -63,6 +86,8 @@ impl AppContext {
             server_instance_id,
             gateway_client: None, // Legacy mode by default
             delivery_ack_manager: None, // Disabled by default
+            server_signer,
+            public_key_cache: Arc::new(PublicKeyCache::new()),
         }
     }
 
@@ -80,6 +105,22 @@ impl AppContext {
         server_instance_id: String,
         gateway_client: Arc<Mutex<MessageGatewayClient>>,
     ) -> Self {
+        // Initialize server signer if signing key is configured
+        let server_signer = config
+            .federation
+            .signing_key_seed
+            .as_ref()
+            .and_then(|seed| {
+                match ServerSigner::from_seed_base64(seed, config.federation.instance_domain.clone())
+                {
+                    Ok(signer) => Some(Arc::new(signer)),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to initialize server signer");
+                        None
+                    }
+                }
+            });
+
         Self {
             db_pool,
             queue,
@@ -92,6 +133,8 @@ impl AppContext {
             server_instance_id,
             gateway_client: Some(gateway_client),
             delivery_ack_manager: None, // Disabled by default
+            server_signer,
+            public_key_cache: Arc::new(PublicKeyCache::new()),
         }
     }
 

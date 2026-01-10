@@ -8,11 +8,12 @@
 //
 // ============================================================================
 
-use crate::federation::FederationClient;
+use crate::federation::{FederationClient, ServerSigner};
 use crate::kafka::MessageProducer;
 use crate::message::ChatMessage;
 use crate::user_id::UserId;
 use anyhow::Result;
+use std::sync::Arc;
 
 pub struct MessageRouter {
     kafka_producer: MessageProducer,
@@ -30,6 +31,33 @@ impl MessageRouter {
     ) -> Self {
         let federation_client = if federation_enabled {
             Some(FederationClient::new())
+        } else {
+            None
+        };
+
+        Self {
+            kafka_producer,
+            federation_client,
+            local_domain,
+            federation_enabled,
+        }
+    }
+
+    /// Create a new message router with server signing for S2S authentication
+    pub fn new_with_signer(
+        kafka_producer: MessageProducer,
+        local_domain: String,
+        federation_enabled: bool,
+        server_signer: Option<Arc<ServerSigner>>,
+    ) -> Self {
+        let federation_client = if federation_enabled {
+            match server_signer {
+                Some(signer) => Some(FederationClient::new_with_signer(
+                    signer,
+                    local_domain.clone(),
+                )),
+                None => Some(FederationClient::new()),
+            }
         } else {
             None
         };
