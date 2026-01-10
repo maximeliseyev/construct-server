@@ -234,6 +234,25 @@ impl MessageQueue {
         Ok(count)
     }
 
+    /// Increments message count per IP address for rate limiting
+    /// Returns the total count of messages from this IP in the last hour
+    /// This provides protection against distributed attacks (multiple users from same IP)
+    pub async fn increment_ip_message_count(&mut self, ip: &str) -> Result<u32> {
+        // Normalize IP (handle IPv6 brackets if present)
+        let normalized_ip = ip.trim_start_matches('[').trim_end_matches(']');
+        let key = format!("rate:ip:{}", normalized_ip);
+
+        // Increment counter
+        let count: u32 = self.client.incr(&key, 1).await?;
+
+        // Set TTL only on first increment (1 hour window)
+        if count == 1 {
+            let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
+        }
+
+        Ok(count)
+    }
+
     pub async fn increment_key_update_count(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:key:{}", user_id);
 

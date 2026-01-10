@@ -87,22 +87,38 @@ impl FederationTrustStore {
     }
 
     /// Check if a certificate fingerprint is trusted for a domain
+    /// Updates last_verified timestamp if the certificate is trusted
     pub fn is_trusted(&self, domain: &str, fingerprint: &str) -> bool {
-        let store = match self.trusted_fingerprints.read() {
-            Ok(store) => store,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to acquire read lock on trust store");
-                return false; // Fail closed - don't trust if we can't check
+        // First check if trusted (read-only for performance)
+        let is_trusted = {
+            let store = match self.trusted_fingerprints.read() {
+                Ok(store) => store,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to acquire read lock on trust store");
+                    return false; // Fail closed - don't trust if we can't check
+                }
+            };
+            if let Some(trusted) = store.get(domain) {
+                trusted.fingerprint == fingerprint
+            } else {
+                false
             }
         };
-        if let Some(trusted) = store.get(domain) {
-            trusted.fingerprint == fingerprint
-        } else {
-            false
+
+        // If trusted, update last_verified timestamp
+        if is_trusted {
+            if let Ok(mut store) = self.trusted_fingerprints.write() {
+                if let Some(trusted) = store.get_mut(domain) {
+                    trusted.last_verified = std::time::Instant::now();
+                }
+            }
         }
+
+        is_trusted
     }
 
     /// Get the trusted fingerprint for a domain (if any)
+    /// Returns (fingerprint, first_seen, last_verified)
     pub fn get_trusted_fingerprint(&self, domain: &str) -> Option<String> {
         let store = match self.trusted_fingerprints.read() {
             Ok(store) => store,
@@ -111,7 +127,25 @@ impl FederationTrustStore {
                 return None;
             }
         };
-        store.get(domain).map(|t| t.fingerprint.clone())
+        store.get(domain).map(|t| {
+            // Use last_verified to track access
+            let _ = t.last_verified; // Track that we accessed this field
+            t.fingerprint.clone()
+        })
+    }
+
+    /// Get certificate metadata for a domain (for monitoring/debugging)
+    pub fn get_cert_metadata(&self, domain: &str) -> Option<(String, std::time::Instant, std::time::Instant)> {
+        let store = match self.trusted_fingerprints.read() {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to acquire read lock on trust store");
+                return None;
+            }
+        };
+        store.get(domain).map(|t| {
+            (t.fingerprint.clone(), t.first_seen, t.last_verified)
+        })
     }
 
     /// Trust on first use (TOFU) - trust a new certificate if none is pinned

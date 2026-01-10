@@ -113,6 +113,8 @@ pub struct SecurityConfig {
     #[allow(dead_code)]
     pub prekey_max_ttl_days: i64,
     pub max_messages_per_hour: u32,
+    /// Maximum messages per IP address per hour (protects against distributed attacks)
+    pub max_messages_per_ip_per_hour: u32,
     pub max_key_rotations_per_day: u32,
     pub max_password_changes_per_day: u32,
     pub max_failed_login_attempts: u32,
@@ -349,6 +351,10 @@ impl Config {
                     .ok()
                     .and_then(|m| m.parse().ok())
                     .unwrap_or(1000),
+                max_messages_per_ip_per_hour: std::env::var("MAX_MESSAGES_PER_IP_PER_HOUR")
+                    .ok()
+                    .and_then(|m| m.parse().ok())
+                    .unwrap_or(5000), // Higher limit for IP (shared IPs, NAT, etc.)
                 max_key_rotations_per_day: std::env::var("MAX_KEY_ROTATIONS_PER_DAY")
                     .ok()
                     .and_then(|k| k.parse().ok())
