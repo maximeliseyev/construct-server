@@ -676,12 +676,71 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let apns_client = Arc::new(apns_client);
 
-    // Initialize device token encryption
+    // Initialize device token encryption with key versioning support
     tracing::info!("Initializing device token encryption...");
-    let token_encryption =
-        apns::DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key)?;
+    let token_encryption = {
+        use std::collections::HashMap;
+        
+        // Start with primary key (version 1) - backward compatibility
+        let mut keys = HashMap::new();
+        keys.insert(1, app_config.apns.device_token_encryption_key.clone());
+        
+        // Load additional key versions from environment variables
+        // Format: APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V2, APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V3, etc.
+        let mut current_version = 1u8;
+        
+        for version in 2..=10 {
+            let env_var = format!("APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V{}", version);
+            if let Ok(key) = std::env::var(&env_var) {
+                if key.len() != 64 {
+                    tracing::warn!(
+                        version = version,
+                        env_var = %env_var,
+                        "APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V{} must be 64 hex characters (32 bytes) - skipping",
+                        version
+                    );
+                    continue;
+                }
+                
+                if key == "0000000000000000000000000000000000000000000000000000000000000000" {
+                    tracing::warn!(
+                        version = version,
+                        env_var = %env_var,
+                        "APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V{} must be changed from default value - skipping",
+                        version
+                    );
+                    continue;
+                }
+                
+                keys.insert(version, key);
+                current_version = version; // Use highest version as current
+                tracing::info!(
+                    version = version,
+                    "Loaded device token encryption key version {}",
+                    version
+                );
+            }
+        }
+        
+        if keys.len() > 1 {
+            tracing::info!(
+                active_versions = ?keys.keys().collect::<Vec<_>>(),
+                current_version = current_version,
+                "Device token encryption initialized with key versioning ({} active keys)",
+                keys.len()
+            );
+            apns::DeviceTokenEncryption::from_keys(keys, current_version)?
+        } else {
+            tracing::info!("Device token encryption initialized with single key (no versioning)");
+            apns::DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key)?
+        }
+    };
     let token_encryption = Arc::new(token_encryption);
-    tracing::info!("Device token encryption initialized");
+    tracing::info!(
+        current_version = token_encryption.current_version(),
+        active_versions = ?token_encryption.active_versions(),
+        "Device token encryption initialized"
+    );
 
     // Initialize Delivery ACK system (optional, based on env vars)
     let delivery_ack_manager = match delivery_ack::DeliveryAckConfig::from_env() {
