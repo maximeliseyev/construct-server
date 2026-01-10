@@ -44,6 +44,7 @@
 //
 // ============================================================================
 
+use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
 use crate::utils::log_safe_id;
@@ -79,6 +80,18 @@ pub async fn handle_send_message(
     };
 
     if sender_id != msg.from {
+        // AUDIT: Log security violation (message spoofing attempt)
+        let user_id_hash = log_safe_id(&sender_id, &ctx.config.logging.hash_salt);
+        let message_sender_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
+        let client_ip = Some(handler.addr().ip());
+        AuditLogger::log_security_violation(
+            Some(user_id_hash.clone()),
+            None,
+            client_ip,
+            "message_spoofing".to_string(),
+            Some(format!("Authenticated user (hash={}) attempted to send message as different user (hash={})", user_id_hash, message_sender_hash)),
+        );
+        
         tracing::warn!(
             authenticated_user = %sender_id,
             message_sender = %msg.from,
@@ -183,6 +196,18 @@ pub async fn handle_send_message(
             let block_threshold = max_messages + (max_messages / 2);
 
             if count > block_threshold {
+                // AUDIT: Log rate limit violation (user blocked)
+                let user_id_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
+                let client_ip = Some(handler.addr().ip());
+                AuditLogger::log_rate_limit_violation(
+                    Some(user_id_hash.clone()),
+                    None,
+                    client_ip,
+                    "messages_per_hour".to_string(),
+                    count,
+                    max_messages,
+                );
+                
                 let block_duration = ctx.config.security.rate_limit_block_duration_seconds;
                 if let Err(e) = queue
                     .block_user_temporarily(&msg.from, block_duration, "Rate limit exceeded")
@@ -199,9 +224,21 @@ pub async fn handle_send_message(
                 }
                 return;
             } else if count > max_messages {
+                // AUDIT: Log rate limit warning (approaching limit)
+                let user_id_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
+                let client_ip = Some(handler.addr().ip());
+                AuditLogger::log_rate_limit_violation(
+                    Some(user_id_hash.clone()),
+                    None,
+                    client_ip,
+                    "messages_per_hour_warning".to_string(),
+                    count,
+                    max_messages,
+                );
+                
                 // SECURITY: Always use hashed user_id in logs
                 tracing::warn!(
-                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    user_hash = %user_id_hash,
                     count = count,
                     "Rate limit warning"
                 );

@@ -1,6 +1,7 @@
 use crate::context::AppContext;
 use crate::db;
 use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
+use crate::utils::add_security_headers;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming as IncomingBody, HeaderMap, Response, StatusCode};
@@ -241,6 +242,11 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
             // This should never happen, but if it does, we continue without the header
         }
     }
+    
+    // SECURITY: Add security headers to protect against XSS, clickjacking, etc.
+    // For API endpoints, assume HTTPS in production (can be made configurable)
+    add_security_headers(response.headers_mut(), true);
+    
     response
 }
 
