@@ -410,7 +410,12 @@ impl MessageQueue {
         // Set with TTL matching session TTL (30 days default)
         let ttl_seconds = 30 * 24 * 60 * 60; // 30 days
         
-        let _: () = self.client.setex(&key, ttl_seconds, server_instance_id).await?;
+        let _: () = cmd("SETEX")
+            .arg(&key)
+            .arg(ttl_seconds)
+            .arg(server_instance_id)
+            .query_async(&mut self.client)
+            .await?;
         
         tracing::debug!(
             user_id = %user_id,

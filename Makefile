@@ -1,6 +1,6 @@
 .PHONY: help build run-server run-worker run-gateway test check clean \
 	docker-up docker-down docker-logs docker-build docker-rebuild \
-	deploy-server deploy-worker deploy-gateway deploy-all \
+	deploy-server deploy-worker deploy-gateway deploy-all check-before-deploy \
 	secrets-server secrets-worker secrets-gateway secrets-all \
 	logs-server logs-worker logs-gateway \
 	status-server status-worker status-gateway status-all \
@@ -130,32 +130,43 @@ docker-rebuild:
 # Fly.io Deployment
 # ============================================================================
 
-deploy-server:
+deploy-server: check-before-deploy
 	@echo "🚀 Deploying WebSocket server to Fly.io..."
 	fly deploy . --config ops/fly.toml --dockerfile ./ops/Dockerfile --app construct-server
 	@echo "✅ Server deployed. View logs: make logs-server"
 
-deploy-worker:
+deploy-worker: check-before-deploy
 	@echo "⚙️  Deploying delivery worker to Fly.io..."
 	fly deploy . --config ops/fly.worker.toml --dockerfile ./ops/Dockerfile --app construct-delivery-worker
 	@echo "✅ Worker deployed. View logs: make logs-worker"
 
-deploy-gateway:
+deploy-gateway: check-before-deploy
 	@echo "🌐 Deploying message gateway to Fly.io..."
 	fly deploy . --config ops/fly.gateway.toml --dockerfile ./ops/Dockerfile --app construct-message-gateway
 	@echo "✅ Gateway deployed. View logs: make logs-gateway"
 
+check-before-deploy:
+	@if [ -z "$$SKIP_CHECK" ]; then \
+		echo "🔍 Checking code compilation before deploy..."; \
+		cargo check --release || (echo "❌ Compilation failed! Fix errors before deploying." && exit 1); \
+		echo "✓ Code compiles successfully"; \
+	fi
+
 deploy-all:
+	@echo "🔍 Checking code compilation before deploying all services..."
+	@cargo check --release || (echo "❌ Compilation failed! Fix errors before deploying." && exit 1)
+	@echo "✓ Code compiles successfully"
+	@echo ""
 	@echo "🚀 Deploying all services to Fly.io..."
 	@echo ""
 	@echo "1/3 Deploying WebSocket server..."
-	@make deploy-server
+	@SKIP_CHECK=1 make deploy-server
 	@echo ""
 	@echo "2/3 Deploying delivery worker..."
-	@make deploy-worker
+	@SKIP_CHECK=1 make deploy-worker
 	@echo ""
 	@echo "3/3 Deploying message gateway..."
-	@make deploy-gateway
+	@SKIP_CHECK=1 make deploy-gateway
 	@echo ""
 	@echo "✅ All services deployed!"
 
