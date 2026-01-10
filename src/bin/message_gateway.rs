@@ -51,14 +51,42 @@ impl MessageGatewayServiceImpl {
         kafka_producer: MessageProducer,
         config: Arc<Config>,
     ) -> Self {
-        Self {
-            validator: MessageValidator::new(),
-            rate_limiter: Arc::new(RwLock::new(RateLimiter::new(redis_conn))),
-            router: MessageRouter::new(
+        // Initialize MessageRouter with mTLS configuration if federation is enabled
+        let router = if config.federation_enabled && !config.federation.mtls.pinned_certs.is_empty() {
+            // Use mTLS configuration with pinned certificates
+            let mtls_config = Arc::new(config.federation.mtls.clone());
+            // Clone kafka_producer since it's Arc inside and cheap to clone
+            MessageRouter::new_with_mtls(
+                kafka_producer.clone(),
+                config.instance_domain.clone(),
+                config.federation_enabled,
+                None, // No server signer in message-gateway (signing happens in construct-server)
+                mtls_config,
+            )
+            .unwrap_or_else(|e| {
+                error!(
+                    error = %e,
+                    "Failed to create MessageRouter with mTLS, falling back to basic router"
+                );
+                MessageRouter::new(
+                    kafka_producer,
+                    config.instance_domain.clone(),
+                    config.federation_enabled,
+                )
+            })
+        } else {
+            // Basic router without mTLS
+            MessageRouter::new(
                 kafka_producer,
                 config.instance_domain.clone(),
                 config.federation_enabled,
-            ),
+            )
+        };
+
+        Self {
+            validator: MessageValidator::new(),
+            rate_limiter: Arc::new(RwLock::new(RateLimiter::new(redis_conn))),
+            router,
             config,
         }
     }

@@ -7,6 +7,7 @@ test_*.py
 __pycache__/
 venv/
 *.egg-info/
+.mypy_cache/
 
 # Rust
 target/
@@ -18,7 +19,7 @@ target/
 # Environment
 .env
 .env.local
-*.p8
+.env.deploy
 
 # APNs Keys
 *.p8
@@ -27,6 +28,7 @@ target/
 .vscode/
 .claude/
 .idea/
+.zed/
 *.swp
 *.swo
 .DS_Store

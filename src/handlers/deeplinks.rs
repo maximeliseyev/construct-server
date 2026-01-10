@@ -22,7 +22,7 @@ use crate::context::AppContext;
 pub async fn apple_app_site_association(
     State(ctx): State<AppContext>,
 ) -> Response {
-    let team_id = std::env::var("APPLE_TEAM_ID").unwrap_or_default();
+    let team_id = ctx.config.deeplinks.apple_team_id.clone();
     let bundle_id = ctx.config.apns.bundle_id.clone();
 
     let aasa = json!({
@@ -47,12 +47,11 @@ pub async fn apple_app_site_association(
 
 /// Android Asset Links file
 /// Served at: /.well-known/assetlinks.json
-pub async fn android_asset_links() -> Response {
-    let package_name = std::env::var("ANDROID_PACKAGE_NAME")
-        .unwrap_or_else(|_| "com.konstruct.messenger".to_string());
-
-    let cert_fingerprint = std::env::var("ANDROID_CERT_FINGERPRINT")
-        .unwrap_or_default();
+pub async fn android_asset_links(
+    State(ctx): State<AppContext>,
+) -> Response {
+    let package_name = ctx.config.deeplinks.android_package_name.clone();
+    let cert_fingerprint = ctx.config.deeplinks.android_cert_fingerprint.clone();
 
     let asset_links = json!([{
         "relation": ["delegate_permission/common.handle_all_urls"],

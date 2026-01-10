@@ -1,5 +1,6 @@
 use a2::{Client, ClientConfig, Endpoint, DefaultNotificationBuilder, NotificationBuilder, NotificationOptions, Priority};
 use anyhow::{Context, Result};
+use hex;
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -87,8 +88,12 @@ impl ApnsClient {
         let payload_json = serde_json::to_string(&payload)
             .with_context(|| "Failed to serialize APNs payload")?;
 
-        debug!("Sending APNs notification: device_token={}, push_type={:?}, priority={:?}",
-            &device_token[..8.min(device_token.len())], push_type, priority);
+        // SECURITY: Hash device token for logging (never log full token)
+        use crate::apns::DeviceTokenEncryption;
+        let token_hash_bytes = DeviceTokenEncryption::hash_token(device_token);
+        let token_hash_hex = hex::encode(&token_hash_bytes);
+        debug!("Sending APNs notification: device_token_hash={}, push_type={:?}, priority={:?}",
+            &token_hash_hex[..8], push_type, priority);
         debug!("APNs payload: {}", payload_json);
 
         // Create notification options
@@ -120,7 +125,11 @@ impl ApnsClient {
                 // Check if error indicates invalid token
                 match &e {
                     a2::Error::ResponseError(resp) if resp.code == 400 => {
-                        warn!("Device token may be invalid or unregistered: {}", &device_token[..8.min(device_token.len())]);
+                        // SECURITY: Use hash instead of partial token
+                        use crate::apns::DeviceTokenEncryption;
+                        let token_hash_bytes = DeviceTokenEncryption::hash_token(device_token);
+                        let token_hash_hex = hex::encode(&token_hash_bytes);
+                        warn!("Device token may be invalid or unregistered: device_token_hash={}", &token_hash_hex[..8]);
                         // TODO: Remove device token from database
                     }
                     _ => {}

@@ -1,10 +1,12 @@
 use crate::context::AppContext;
 use crate::e2e::{EncryptedMessageV3, ServerCryptoValidator};
-use crate::utils::log_safe_id;
+use crate::kafka::types::{KafkaMessageEnvelope, MessageType};
+use crate::utils::{log_safe_id, add_security_headers};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming as IncomingBody, HeaderMap, Response, StatusCode};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// POST /messages/send
@@ -20,9 +22,68 @@ pub async fn handle_send_message(
         Err(response) => return response,
     };
 
-    // 2. Read request body
+    // 1.5. SECURITY: Check rate limiting BEFORE reading body (DoS protection)
+    // This prevents attackers from sending large requests before rate limit check
+    {
+        let mut queue = ctx.queue.lock().await;
+        if let Ok(Some(reason)) = queue.is_user_blocked(&sender_id.to_string()).await {
+            drop(queue);
+            tracing::warn!(
+                sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+                reason = %reason,
+                "Blocked user attempted to send message"
+            );
+            return error_response(
+                StatusCode::FORBIDDEN,
+                &format!("Your account is temporarily blocked: {}", reason)
+            );
+        }
+
+        // Check message rate limit
+        match queue.increment_message_count(&sender_id.to_string()).await {
+            Ok(count) => {
+                let max_messages = ctx.config.security.max_messages_per_hour;
+                if count > max_messages {
+                    drop(queue);
+                    tracing::warn!(
+                        sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+                        count = count,
+                        limit = max_messages,
+                        "Message rate limit exceeded"
+                    );
+                    return error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        &format!("Rate limit exceeded: maximum {} messages per hour", max_messages)
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to check message rate limit");
+                // Fail open - continue but log error
+            }
+        }
+        drop(queue);
+    }
+
+    // 2. Read request body with size limit
     let body_bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
+        Ok(collected) => {
+            let bytes = collected.to_bytes();
+            // SECURITY: Validate request body size to prevent DoS
+            if bytes.len() > crate::config::MAX_REQUEST_BODY_SIZE {
+                tracing::warn!(
+                    size = bytes.len(),
+                    limit = crate::config::MAX_REQUEST_BODY_SIZE,
+                    sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+                    "Request body too large"
+                );
+                return error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    &format!("Request body exceeds maximum size of {} bytes", crate::config::MAX_REQUEST_BODY_SIZE)
+                );
+            }
+            bytes
+        }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to read request body");
             return error_response(StatusCode::BAD_REQUEST, "Failed to read request body");
@@ -38,17 +99,34 @@ pub async fn handle_send_message(
         }
     };
 
-    // 4. Validate the message
+    // 4. Validate message size
+    // SECURITY: Validate ciphertext size to prevent DoS
+    if message.ciphertext.len() > crate::config::MAX_MESSAGE_SIZE {
+        tracing::warn!(
+            size = message.ciphertext.len(),
+            limit = crate::config::MAX_MESSAGE_SIZE,
+            sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+            "Message ciphertext too large"
+        );
+        return error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!("Message size exceeds maximum of {} bytes", crate::config::MAX_MESSAGE_SIZE)
+        );
+    }
+
+    // 5. Validate the message format
+    // SECURITY: Hash sender_id for privacy in logs
+    let salt = &ctx.config.logging.hash_salt;
     if let Err(e) = ServerCryptoValidator::validate_encrypted_message_v3(&message) {
         tracing::warn!(
             error = %e,
-            sender_id = %sender_id,
+            sender_hash = %log_safe_id(&sender_id.to_string(), salt),
             "Message validation failed"
         );
         return error_response(StatusCode::BAD_REQUEST, &e.to_string());
     }
 
-    // 5. Parse recipient_id
+    // 6. Parse recipient_id
     let recipient_id = match Uuid::parse_str(&message.recipient_id) {
         Ok(id) => id,
         Err(_) => {
@@ -61,56 +139,80 @@ pub async fn handle_send_message(
         return error_response(StatusCode::BAD_REQUEST, "Cannot send message to self");
     }
 
-    // 7. Serialize message to JSON for storage in Redis
-    let message_json = match serde_json::to_string(&message) {
-        Ok(json) => json,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to serialize message");
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to process message",
-            );
-        }
+    // 7. Create Kafka envelope for message (Phase 5+)
+    let message_id = Uuid::new_v4().to_string();
+
+    // Calculate content hash for deduplication
+    let mut hasher = Sha256::new();
+    hasher.update(message_id.as_bytes());
+    hasher.update(message.ciphertext.as_bytes());
+    let content_hash = format!("{:x}", hasher.finalize());
+
+    let envelope = KafkaMessageEnvelope {
+        message_id: message_id.clone(),
+        sender_id: sender_id.to_string(),
+        recipient_id: recipient_id.to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+        message_type: MessageType::DirectMessage,
+        // REST API v3 doesn't provide ephemeral key - use placeholder
+        ephemeral_public_key: None,
+        message_number: None,
+        mls_payload: None,
+        group_id: None,
+        encrypted_payload: message.ciphertext.clone(),
+        content_hash,
+        suite_id: message.suite_id as u8, // Convert u16 to u8 (valid range 0-255)
+        origin_server: None,
+        federated: false,
+        server_signature: None,
     };
 
-    // 8. Queue message in Redis for recipient
-    let mut queue = ctx.queue.lock().await;
-    if let Err(e) = queue
-        .enqueue_message_raw(&message.recipient_id, &message_json)
-        .await
-    {
+    // 8. Write to Kafka (Phase 5: source of truth)
+    if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
+        // SECURITY: Use hashed IDs in error logs
         tracing::error!(
             error = %e,
-            sender_id = %sender_id,
-            recipient_id = %recipient_id,
-            "Failed to queue message"
+            message_id = %message_id,
+            sender_hash = %log_safe_id(&sender_id.to_string(), salt),
+            recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+            kafka_enabled = ctx.kafka_producer.is_enabled(),
+            "Kafka write FAILED - message NOT persisted (REST API v3)"
         );
-        drop(queue);
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue message");
     }
-    drop(queue);
+
+    tracing::debug!(
+        message_id = %message_id,
+        "Message persisted to Kafka (REST API v3)"
+    );
 
     // 9. Log the operation (with privacy in mind)
     if ctx.config.logging.enable_user_identifiers {
         tracing::info!(
+            message_id = %message_id,
             sender_id = %sender_id,
             recipient_id = %recipient_id,
             suite_id = message.suite_id,
-            "Message queued (v3)"
+            "Message accepted (REST API v3, Kafka)"
         );
     } else {
         tracing::info!(
+            message_id = %message_id,
             sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
             recipient_hash = %log_safe_id(&recipient_id.to_string(), &ctx.config.logging.hash_salt),
             suite_id = message.suite_id,
-            "Message queued (v3)"
+            "Message accepted (REST API v3, Kafka)"
         );
     }
 
     // 10. Return success (202 Accepted - message is queued for delivery)
     json_response(
         StatusCode::ACCEPTED,
-        json!({"status": "accepted", "message": "Message queued for delivery"}),
+        json!({
+            "status": "accepted",
+            "message_id": message_id,
+            "message": "Message queued for delivery"
+        }),
     )
 }
 
@@ -154,10 +256,21 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
     let json_bytes = serde_json::to_vec(&body).unwrap_or_default();
     let mut response = Response::new(Full::new(Bytes::from(json_bytes)));
     *response.status_mut() = status;
-    response.headers_mut().insert(
-        "content-type",
-        "application/json".parse().unwrap(),
-    );
+    // SECURITY: Handle header parsing errors gracefully
+    match "application/json".parse() {
+        Ok(content_type) => {
+            response.headers_mut().insert("content-type", content_type);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to parse Content-Type header (this should never happen)");
+            // This should never happen, but if it does, we continue without the header
+        }
+    }
+    
+    // SECURITY: Add security headers to protect against XSS, clickjacking, etc.
+    // For API endpoints, assume HTTPS in production (can be made configurable)
+    add_security_headers(response.headers_mut(), true);
+    
     response
 }
 

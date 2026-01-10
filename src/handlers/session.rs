@@ -32,8 +32,44 @@ pub async fn establish_session(
             return Err(format!("Failed to create session: {}", e));
         }
 
+        // Phase 5: Track user online status in Redis for delivery-worker
+        // This allows worker to route messages directly to the correct server
+        if let Err(e) = queue_lock
+            .track_user_online(&uid_str, &ctx.server_instance_id)
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                user_id = %uid_str,
+                "Failed to track user online status"
+            );
+        }
+        
+        // CRITICAL FIX: Process offline messages when user comes online
+        // Move messages from delivery_queue:offline:{user_id} to delivery_queue:{server_instance_id}
+        // so they can be delivered via the delivery listener
+        match queue_lock.process_offline_messages_for_user(&uid_str, &ctx.server_instance_id).await {
+            Ok(count) => {
+                if count > 0 {
+                    tracing::info!(
+                        user_id = %uid_str,
+                        server_instance_id = %ctx.server_instance_id,
+                        message_count = count,
+                        "Processed offline messages for user"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    user_id = %uid_str,
+                    "Failed to process offline messages for user"
+                );
+            }
+        }
+        
         // Publish notification that user came online
-        // This triggers the Delivery Worker to process offline messages
+        // This triggers the Delivery Worker to process offline messages from Kafka
         if let Err(e) = queue_lock
             .publish_user_online(&uid_str, &ctx.server_instance_id, &ctx.config.online_channel)
             .await

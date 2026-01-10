@@ -1,7 +1,9 @@
 services:
   # Main application server
   construct-server:
-    build: .
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
     container_name: construct-server
     command: ["construct-server"]
     ports:
@@ -19,7 +21,9 @@ services:
 
   # Delivery Worker (processes offline message delivery)
   delivery-worker:
-    build: .
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
     container_name: delivery-worker
     command: ["delivery-worker"]
     environment:

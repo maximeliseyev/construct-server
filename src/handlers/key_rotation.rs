@@ -1,7 +1,9 @@
+use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::ServerMessage;
 use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
+use crate::utils::log_safe_id;
 use uuid::Uuid;
 
 /// Handles key bundle update request (API v3)
@@ -56,9 +58,20 @@ pub async fn handle_rotate_prekey(
     // 3. Validate the new bundle
     // Don't allow empty user_id for key rotation (user must already exist)
     if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false) {
+        // AUDIT: Log failed key rotation (validation error)
+        let user_id_hash = log_safe_id(&user_id, &ctx.config.logging.hash_salt);
+        let client_ip = Some(handler.addr().ip());
+        AuditLogger::log_key_rotation(
+            user_id_hash.clone(),
+            None,
+            client_ip,
+            false,
+            Some(format!("Validation failed: {}", e)),
+        );
+        
         tracing::warn!(
             error = %e,
-            user_id = %user_id,
+            user_hash = %user_id_hash,
             "Invalid key bundle after rotation"
         );
         handler.send_error("INVALID_KEY_BUNDLE", &e.to_string()).await;
@@ -89,6 +102,17 @@ pub async fn handle_rotate_prekey(
 
     // Verify that user_id in bundle matches the authenticated user
     if bundle_data.user_id != user_id {
+        // AUDIT: Log security violation (spoofing attempt during key rotation)
+        let user_id_hash = log_safe_id(&user_id, &ctx.config.logging.hash_salt);
+        let client_ip = Some(handler.addr().ip());
+        AuditLogger::log_security_violation(
+            Some(user_id_hash.clone()),
+            None,
+            client_ip,
+            "user_id mismatch during key rotation".to_string(),
+            Some(format!("Attempted to rotate keys for different user: {}", bundle_data.user_id)),
+        );
+        
         tracing::warn!(
             authenticated_user = %user_id,
             bundle_user_id = %bundle_data.user_id,
@@ -103,9 +127,20 @@ pub async fn handle_rotate_prekey(
 
     // 6. Store the new bundle in the database
     if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &uuid, &bundle).await {
+        // AUDIT: Log failed key rotation (database error)
+        let user_id_hash = log_safe_id(&user_id, &ctx.config.logging.hash_salt);
+        let client_ip = Some(handler.addr().ip());
+        AuditLogger::log_key_rotation(
+            user_id_hash.clone(),
+            None,
+            client_ip,
+            false,
+            Some(format!("Database error: {}", e)),
+        );
+        
         tracing::error!(
             error = %e,
-            user_id = %user_id,
+            user_hash = %user_id_hash,
             "Failed to store rotated key bundle"
         );
         handler.send_error("SERVER_ERROR", "Failed to update key").await;
@@ -119,10 +154,24 @@ pub async fn handle_rotate_prekey(
     }
     drop(queue);
 
+    // AUDIT: Log successful key rotation
+    let user_id_hash = log_safe_id(&user_id, &ctx.config.logging.hash_salt);
+    let client_ip = Some(handler.addr().ip());
+    AuditLogger::log_key_rotation(
+        user_id_hash.clone(),
+        None, // Username not available in this context
+        client_ip,
+        true,
+        Some("Key bundle rotated successfully".to_string()),
+    );
+
     // 8. Send success response
     if handler.send_msgpack(&ServerMessage::KeyRotationSuccess).await.is_err() {
         return;
     }
     
-    tracing::info!(user_id = %user_id, "Key bundle updated successfully");
+    tracing::info!(
+        user_hash = %user_id_hash,
+        "Key bundle updated successfully"
+    );
 }

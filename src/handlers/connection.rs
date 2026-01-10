@@ -136,6 +136,8 @@ impl ConnectionHandler {
         &mut self,
         clients: &Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ServerMessage>>>>,
     ) {
+        // Note: user_id tracking removal is handled in the caller context
+        // where we have access to AppContext and can call untrack_user_online
         if let Some(uid) = &self.user_id {
             clients.write().await.remove(uid);
         }

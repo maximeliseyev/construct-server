@@ -44,8 +44,10 @@
 //
 // ============================================================================
 
+use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
+use crate::utils::log_safe_id;
 use crate::handlers::device_tokens;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::message::{ChatMessage, ServerMessage};
@@ -78,6 +80,18 @@ pub async fn handle_send_message(
     };
 
     if sender_id != msg.from {
+        // AUDIT: Log security violation (message spoofing attempt)
+        let user_id_hash = log_safe_id(&sender_id, &ctx.config.logging.hash_salt);
+        let message_sender_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
+        let client_ip = Some(handler.addr().ip());
+        AuditLogger::log_security_violation(
+            Some(user_id_hash.clone()),
+            None,
+            client_ip,
+            "message_spoofing".to_string(),
+            Some(format!("Authenticated user (hash={}) attempted to send message as different user (hash={})", user_id_hash, message_sender_hash)),
+        );
+        
         tracing::warn!(
             authenticated_user = %sender_id,
             message_sender = %msg.from,
@@ -93,11 +107,58 @@ pub async fn handle_send_message(
     }
     // ========================================================================
 
+    // SECURITY: Validate message size to prevent DoS
+    if msg.content.len() > crate::config::MAX_MESSAGE_SIZE {
+        tracing::warn!(
+            size = msg.content.len(),
+            limit = crate::config::MAX_MESSAGE_SIZE,
+            sender_hash = %log_safe_id(&sender_id, &ctx.config.logging.hash_salt),
+            "Message content too large"
+        );
+        handler
+            .send_error(
+                "MESSAGE_TOO_LARGE",
+                &format!("Message size exceeds maximum of {} bytes", crate::config::MAX_MESSAGE_SIZE),
+            )
+            .await;
+        return;
+    }
+
     let mut queue = ctx.queue.lock().await;
+
+    // 0. SECURITY: IP-based rate limiting (protects against distributed attacks)
+    // Check IP rate limit BEFORE user_id rate limit to catch attacks from multiple accounts
+    let client_ip = handler.addr().ip().to_string();
+    match queue.increment_ip_message_count(&client_ip).await {
+        Ok(ip_count) => {
+            let max_ip_messages = ctx.config.security.max_messages_per_ip_per_hour;
+            if ip_count > max_ip_messages {
+                // SECURITY: Log IP rate limit but don't block yet (user_id check comes next)
+                // This helps detect distributed attacks from same IP
+                tracing::warn!(
+                    ip = %client_ip,
+                    count = ip_count,
+                    limit = max_ip_messages,
+                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    "IP rate limit exceeded - possible distributed attack"
+                );
+                // Continue to user_id check - if both exceed limits, block
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, ip = %client_ip, "Failed to check IP rate limit");
+            // Continue processing but log error
+        }
+    }
 
     // 1. Проверка блокировки пользователя
     if let Ok(Some(reason)) = queue.is_user_blocked(&msg.from).await {
-        tracing::warn!(user_id = %msg.from, reason = %reason, "Blocked user attempted to send message");
+        // SECURITY: Always use hashed user_id in logs
+        tracing::warn!(
+            user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+            reason = %reason,
+            "Blocked user attempted to send message"
+        );
         handler
             .send_error(
                 "USER_BLOCKED",
@@ -135,6 +196,18 @@ pub async fn handle_send_message(
             let block_threshold = max_messages + (max_messages / 2);
 
             if count > block_threshold {
+                // AUDIT: Log rate limit violation (user blocked)
+                let user_id_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
+                let client_ip = Some(handler.addr().ip());
+                AuditLogger::log_rate_limit_violation(
+                    Some(user_id_hash.clone()),
+                    None,
+                    client_ip,
+                    "messages_per_hour".to_string(),
+                    count,
+                    max_messages,
+                );
+                
                 let block_duration = ctx.config.security.rate_limit_block_duration_seconds;
                 if let Err(e) = queue
                     .block_user_temporarily(&msg.from, block_duration, "Rate limit exceeded")
@@ -151,7 +224,24 @@ pub async fn handle_send_message(
                 }
                 return;
             } else if count > max_messages {
-                tracing::warn!(user_id = %msg.from, count = count, "Rate limit warning");
+                // AUDIT: Log rate limit warning (approaching limit)
+                let user_id_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
+                let client_ip = Some(handler.addr().ip());
+                AuditLogger::log_rate_limit_violation(
+                    Some(user_id_hash.clone()),
+                    None,
+                    client_ip,
+                    "messages_per_hour_warning".to_string(),
+                    count,
+                    max_messages,
+                );
+                
+                // SECURITY: Always use hashed user_id in logs
+                tracing::warn!(
+                    user_hash = %user_id_hash,
+                    count = count,
+                    "Rate limit warning"
+                );
                 handler
                     .send_error(
                         "RATE_LIMIT_WARNING",
@@ -168,7 +258,11 @@ pub async fn handle_send_message(
 
     // Validate ChatMessage structure
     if !msg.is_valid() {
-        tracing::warn!(user_id = %msg.from, "Invalid chat message format");
+                // SECURITY: Always use hashed user_id in logs
+                tracing::warn!(
+                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    "Invalid chat message format"
+                );
         handler
             .send_error("INVALID_MESSAGE_FORMAT", "Message validation failed")
             .await;
@@ -177,7 +271,11 @@ pub async fn handle_send_message(
 
     // Additional validation: check ephemeral_public_key length
     if msg.ephemeral_public_key.len() != 32 {
-        tracing::warn!(user_id = %msg.from, "Invalid ephemeral public key size");
+                // SECURITY: Always use hashed user_id in logs
+                tracing::warn!(
+                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+                    "Invalid ephemeral public key size"
+                );
         handler
             .send_error(
                 "INVALID_MESSAGE_FORMAT",
@@ -192,6 +290,7 @@ pub async fn handle_send_message(
     // ========================================================================
     // MESSAGE GATEWAY PATH (Phase 2+)
     // If Message Gateway client is configured, delegate processing to it
+    // FALLBACK: If gateway is unavailable, use legacy local processing
     // ========================================================================
     if let Some(gateway_client) = &ctx.gateway_client {
         tracing::debug!(
@@ -216,47 +315,74 @@ pub async fn handle_send_message(
                 return;
             }
             Err(e) => {
-                // Message Gateway rejected the message
-                tracing::warn!(
-                    message_id = %msg.id,
-                    error = %e,
-                    "Message Gateway rejected message"
-                );
-
-                // Parse error to send appropriate error code
                 let error_msg = e.to_string();
-                if error_msg.contains("RATE_LIMIT") {
-                    handler.send_error("RATE_LIMIT_WARNING", &error_msg).await;
-                } else if error_msg.contains("USER_BLOCKED") {
-                    handler.send_error("USER_BLOCKED", &error_msg).await;
-                } else if error_msg.contains("DUPLICATE") {
-                    handler.send_error("DUPLICATE_MESSAGE", &error_msg).await;
+                
+                // Check if this is a connection/unavailability error (should fallback)
+                let is_connection_error = error_msg.contains("Failed to connect")
+                    || error_msg.contains("gRPC call failed")
+                    || error_msg.contains("unavailable")
+                    || error_msg.contains("deadline")
+                    || error_msg.contains("timeout")
+                    || error_msg.contains("refused");
+
+                if is_connection_error {
+                    // HIGH AVAILABILITY: Gateway unavailable - fallback to legacy local processing
+                    tracing::warn!(
+                        message_id = %msg.id,
+                        error = %e,
+                        "Message Gateway unavailable - falling back to local processing"
+                    );
+                    // Continue to legacy path below (don't return)
                 } else {
-                    handler.send_error("VALIDATION_ERROR", &error_msg).await;
+                    // Gateway is available but rejected the message (validation/rate limit/etc)
+                    // These are legitimate rejections - don't fallback
+                    tracing::warn!(
+                        message_id = %msg.id,
+                        error = %e,
+                        "Message Gateway rejected message"
+                    );
+
+                    // Parse error to send appropriate error code
+                    if error_msg.contains("RATE_LIMIT") {
+                        handler.send_error("RATE_LIMIT_WARNING", &error_msg).await;
+                    } else if error_msg.contains("USER_BLOCKED") {
+                        handler.send_error("USER_BLOCKED", &error_msg).await;
+                    } else if error_msg.contains("DUPLICATE") {
+                        handler.send_error("DUPLICATE_MESSAGE", &error_msg).await;
+                    } else {
+                        handler.send_error("VALIDATION_ERROR", &error_msg).await;
+                    }
+                    return;
                 }
-                return;
             }
         }
     }
 
     // ========================================================================
-    // LEGACY PATH (Phase 1)
-    // Direct processing when Message Gateway is not configured
+    // LEGACY PATH (when Message Gateway is not configured OR unavailable)
+    // Direct processing with Kafka as source of truth (Phase 5+)
+    // This path is also used as fallback when message-gateway is unavailable
     // ========================================================================
 
-    // PHASE 2: Kafka Dual-Write
-    // Write to Kafka BEFORE Redis (source of truth)
+    // PHASE 5: Kafka is the ONLY source of truth
+    // If Kafka write fails, message is NOT persisted - return error to sender
     let envelope = KafkaMessageEnvelope::from(&msg);
     if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
-        tracing::warn!(
+        // Phase 5: Kafka failure is a HARD ERROR
+        // Message is NOT persisted anywhere - must reject
+        tracing::error!(
             error = %e,
             message_id = %msg.id,
             kafka_enabled = ctx.kafka_producer.is_enabled(),
-            "Kafka write failed (dual-write phase, continuing with Redis)"
+            "Kafka write FAILED - message NOT persisted"
         );
-        // In Phase 2 (dual-write), we continue with Redis even if Kafka fails
-        // In Phase 5 (cutover), this would be a hard error
-    } else if ctx.kafka_producer.is_enabled() {
+        handler
+            .send_error("KAFKA_FAILURE", "Message could not be persisted. Please retry.")
+            .await;
+        return;
+    }
+
+    if ctx.kafka_producer.is_enabled() {
         tracing::debug!(
             message_id = %msg.id,
             "Message persisted to Kafka"
@@ -293,43 +419,38 @@ pub async fn handle_send_message(
                 }
             }
             Err(e) => {
+                // Phase 5: Message already persisted to Kafka (line 250)
+                // delivery_worker will read from Kafka when recipient comes online
                 if ctx.config.logging.enable_message_metadata {
-                    tracing::warn!(
+                    tracing::debug!(
                         error = %e,
                         message_id = %msg.id,
                         from = %msg.from,
                         to = %msg.to,
-                        "Failed to deliver to online recipient, queueing message"
+                        "Direct delivery failed, message persisted to Kafka for later delivery"
                     );
                 } else {
-                    tracing::warn!(
+                    tracing::debug!(
                         error = %e,
                         message_id = %msg.id,
-                        "Failed to deliver to online recipient, queueing message"
+                        "Direct delivery failed, message persisted to Kafka for later delivery"
                     );
                 }
 
-                let mut queue = ctx.queue.lock().await;
-                if let Err(qe) = queue.enqueue_message(&msg.to, &msg).await {
-                    tracing::error!(error = %qe, "Failed to queue message after delivery failure");
-                    handler
-                        .send_error("DELIVERY_FAILED", "Failed to deliver message")
-                        .await;
-                } else {
-                    let ack = ServerMessage::Ack(crate::message::AckData {
-                        message_id: msg.id.clone(),
-                        status: "queued".to_string(),
-                    });
-                    if handler.send_msgpack(&ack).await.is_err() {
-                        return;
+                // Record pending delivery for ACK tracking
+                if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
+                    if let Err(e) = delivery_ack_manager
+                        .record_pending_delivery(&msg.id, &msg.from)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            message_id = %msg.id,
+                            "Failed to record pending delivery"
+                        );
                     }
                 }
-            }
-        }
-    } else {
-        let mut queue = ctx.queue.lock().await;
-        match queue.enqueue_message(&msg.to, &msg).await {
-            Ok(_) => {
+
                 let ack = ServerMessage::Ack(crate::message::AckData {
                     message_id: msg.id.clone(),
                     status: "queued".to_string(),
@@ -337,29 +458,41 @@ pub async fn handle_send_message(
                 if handler.send_msgpack(&ack).await.is_err() {
                     return;
                 }
-
-                if ctx.config.logging.enable_message_metadata {
-                    tracing::debug!(
-                        message_id = %msg.id,
-                        from = %msg.from,
-                        to = %msg.to,
-                        content_len = msg.content.len(),
-                        "Message queued for offline recipient"
-                    );
-                } else {
-                    tracing::debug!(message_id = %msg.id, "Message queued for offline recipient");
-                }
-
-                // Send push notification to offline recipient
-                send_push_notification_for_message(ctx, &msg).await;
-            }
-            Err(e) => {
-                tracing::error!(error = %e, message_id = %msg.id, "Error queuing message");
-                handler
-                    .send_error("QUEUE_FAILED", "Failed to queue message")
-                    .await;
             }
         }
+    } else {
+        // Phase 5: Recipient offline - message already persisted to Kafka (line 250)
+        // delivery_worker will read from Kafka when recipient comes online
+        tracing::debug!(
+            message_id = %msg.id,
+            recipient = %msg.to,
+            "Recipient offline, message persisted to Kafka for later delivery"
+        );
+
+        // Record pending delivery for ACK tracking
+        if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
+            if let Err(e) = delivery_ack_manager
+                .record_pending_delivery(&msg.id, &msg.from)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    message_id = %msg.id,
+                    "Failed to record pending delivery"
+                );
+            }
+        }
+
+        let ack = ServerMessage::Ack(crate::message::AckData {
+            message_id: msg.id.clone(),
+            status: "queued".to_string(),
+        });
+        if handler.send_msgpack(&ack).await.is_err() {
+            return;
+        }
+
+        // Send push notification to offline recipient
+        send_push_notification_for_message(ctx, &msg).await;
     }
 }
 
@@ -371,17 +504,20 @@ async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage)
         return;
     }
 
+    // SECURITY: Hash user IDs for privacy in push notification logs
+    let salt = &ctx.config.logging.hash_salt;
+
     // Get device tokens for recipient
     let device_tokens = match device_tokens::get_user_device_tokens(ctx, &msg.to).await {
         Ok(tokens) => tokens,
         Err(e) => {
-            tracing::warn!(error = %e, recipient_id = %msg.to, "Failed to fetch device tokens for push notification");
+            tracing::warn!(error = %e, recipient_hash = %crate::utils::log_safe_id(&msg.to, salt), "Failed to fetch device tokens for push notification");
             return;
         }
     };
 
     if device_tokens.is_empty() {
-        tracing::debug!(recipient_id = %msg.to, "No device tokens registered for recipient");
+        tracing::debug!(recipient_hash = %crate::utils::log_safe_id(&msg.to, salt), "No device tokens registered for recipient");
         return;
     }
 
@@ -389,7 +525,7 @@ async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage)
     let sender_username = match get_username_for_push(ctx, &msg.from).await {
         Ok(username) => username,
         Err(e) => {
-            tracing::warn!(error = %e, sender_id = %msg.from, "Failed to get sender username for push");
+            tracing::warn!(error = %e, sender_hash = %crate::utils::log_safe_id(&msg.from, salt), "Failed to get sender username for push");
             "Someone".to_string() // Fallback
         }
     };
@@ -427,15 +563,15 @@ async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage)
         if let Err(e) = notification_result {
             tracing::warn!(
                 error = %e,
-                recipient_id = %msg.to,
-                device_token = &device.device_token[..8],
+                recipient_hash = %crate::utils::log_safe_id(&msg.to, salt),
+                device_token_prefix = &device.device_token[..8.min(device.device_token.len())],
                 filter = %device.notification_filter,
                 "Failed to send push notification"
             );
         } else {
             tracing::debug!(
-                recipient_id = %msg.to,
-                device_token = &device.device_token[..8],
+                recipient_hash = %crate::utils::log_safe_id(&msg.to, salt),
+                device_token_prefix = &device.device_token[..8.min(device.device_token.len())],
                 filter = %device.notification_filter,
                 "Push notification sent successfully"
             );
@@ -463,5 +599,125 @@ async fn get_username_for_push(ctx: &AppContext, user_id: &str) -> Result<String
     Ok(result
         .and_then(|row| row.try_get("username").ok())
         .unwrap_or_else(|| "Someone".to_string()))
+}
+
+/// Handles message delivery acknowledgment from recipient
+///
+/// When a recipient confirms they received a message, this handler:
+/// 1. Validates the message_id format
+/// 2. Looks up the original sender (if delivery ACK is enabled)
+/// 3. Sends "delivered" ACK back to the sender
+pub async fn handle_acknowledge_message(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    ack_data: crate::message::AcknowledgeMessageData,
+) {
+    // Validate user is authenticated
+    let recipient_id = match handler.user_id() {
+        Some(id) => id.clone(),
+        None => {
+            tracing::error!("Unauthenticated user attempted to acknowledge message");
+            handler
+                .send_error("AUTH_REQUIRED", "Authentication is required")
+                .await;
+            return;
+        }
+    };
+
+    // SECURITY: Hash user IDs for privacy
+    let salt = &ctx.config.logging.hash_salt;
+
+    // Validate message ID format (should be UUID)
+    if uuid::Uuid::parse_str(&ack_data.message_id).is_err() {
+        tracing::warn!(
+            recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
+            message_id = %ack_data.message_id,
+            "Invalid message ID format in acknowledgment"
+        );
+        handler
+            .send_error("INVALID_MESSAGE_ID", "Message ID must be a valid UUID")
+            .await;
+        return;
+    }
+
+    // Only process "delivered" status
+    if ack_data.status != "delivered" {
+        tracing::debug!(
+            recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
+            message_id = %ack_data.message_id,
+            status = %ack_data.status,
+            "Ignoring non-delivered ACK status"
+        );
+        return;
+    }
+
+    tracing::debug!(
+        recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
+        message_id = %ack_data.message_id,
+        "Received delivery acknowledgment"
+    );
+
+    // Process acknowledgment if delivery ACK system is enabled
+    let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager else {
+        tracing::debug!(
+            message_id = %ack_data.message_id,
+            "Delivery ACK system not enabled, ignoring acknowledgment"
+        );
+        return;
+    };
+
+    // Look up the original sender
+    let sender_id = match delivery_ack_manager
+        .process_acknowledgment(&ack_data.message_id)
+        .await
+    {
+        Ok(Some(sender_id)) => sender_id,
+        Ok(None) => {
+            tracing::debug!(
+                message_id = %ack_data.message_id,
+                "No pending delivery found (already acknowledged or expired)"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                message_id = %ack_data.message_id,
+                "Failed to process delivery acknowledgment"
+            );
+            return;
+        }
+    };
+
+    // Send "delivered" ACK to the original sender
+    let clients_guard = ctx.clients.read().await;
+    if let Some(sender_tx) = clients_guard.get(&sender_id) {
+        let delivered_ack = crate::message::ServerMessage::Ack(crate::message::AckData {
+            message_id: ack_data.message_id.clone(),
+            status: "delivered".to_string(),
+        });
+
+        if let Err(e) = sender_tx.send(delivered_ack) {
+            tracing::warn!(
+                error = %e,
+                sender_hash = %crate::utils::log_safe_id(&sender_id, salt),
+                message_id = %ack_data.message_id,
+                "Failed to send delivery ACK to sender (channel closed)"
+            );
+        } else {
+            tracing::info!(
+                sender_hash = %crate::utils::log_safe_id(&sender_id, salt),
+                recipient_hash = %crate::utils::log_safe_id(&recipient_id, salt),
+                message_id = %ack_data.message_id,
+                "Delivered ACK sent to sender"
+            );
+        }
+    } else {
+        tracing::debug!(
+            sender_hash = %crate::utils::log_safe_id(&sender_id, salt),
+            message_id = %ack_data.message_id,
+            "Sender not online, delivery ACK not sent"
+        );
+    }
 }
 

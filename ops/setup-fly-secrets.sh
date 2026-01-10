@@ -13,6 +13,9 @@ fi
 # Load .env file
 source .env
 
+# Initialize gateway setup flag
+SHOULD_SETUP_GATEWAY=false
+
 echo "=== Setting up Fly.io secrets from .env ==="
 echo ""
 
@@ -28,6 +31,8 @@ flyctl secrets set \
   JWT_ISSUER="$JWT_ISSUER" \
   LOG_HASH_SALT="$LOG_HASH_SALT" \
   ONLINE_CHANNEL="$ONLINE_CHANNEL" \
+  DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
+  OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
   --app construct-server
 
 echo ""
@@ -39,6 +44,8 @@ flyctl secrets set \
   JWT_ISSUER="$JWT_ISSUER" \
   LOG_HASH_SALT="$LOG_HASH_SALT" \
   ONLINE_CHANNEL="$ONLINE_CHANNEL" \
+  DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
+  OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
   --app construct-delivery-worker
 
 # ============================================================================
@@ -140,11 +147,82 @@ if [ -n "$DEEP_LINK_BASE_URL" ]; then
     --app construct-server
 fi
 
+# Server Signing Key for S2S federation authentication
+# Generate with: openssl rand -base64 32
+if [ -n "$SERVER_SIGNING_KEY" ]; then
+  echo ""
+  echo "Setting up server signing key for S2S federation..."
+  flyctl secrets set \
+    SERVER_SIGNING_KEY="$SERVER_SIGNING_KEY" \
+    --app construct-server
+
+  # Also set for message gateway if it uses federation
+  if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+    flyctl secrets set \
+      SERVER_SIGNING_KEY="$SERVER_SIGNING_KEY" \
+      --app construct-message-gateway
+  fi
+fi
+
+# ============================================================================
+# Delivery ACK secrets (if enabled)
+# ============================================================================
+
+if [ -n "$DELIVERY_ACK_MODE" ] && [ "$DELIVERY_ACK_MODE" != "disabled" ]; then
+  echo ""
+  echo "Setting up Delivery ACK secrets for construct-server..."
+  flyctl secrets set \
+    DELIVERY_ACK_MODE="$DELIVERY_ACK_MODE" \
+    DELIVERY_SECRET_KEY="$DELIVERY_SECRET_KEY" \
+    DELIVERY_EXPIRY_DAYS="$DELIVERY_EXPIRY_DAYS" \
+    DELIVERY_CLEANUP_INTERVAL_SECS="$DELIVERY_CLEANUP_INTERVAL_SECS" \
+    DELIVERY_ACK_ENABLE_BATCHING="$DELIVERY_ACK_ENABLE_BATCHING" \
+    DELIVERY_ACK_BATCH_BUFFER_SECS="$DELIVERY_ACK_BATCH_BUFFER_SECS" \
+    --app construct-server
+
+  echo ""
+  echo "Setting up Delivery ACK secrets for construct-delivery-worker..."
+  flyctl secrets set \
+    DELIVERY_ACK_MODE="$DELIVERY_ACK_MODE" \
+    DELIVERY_SECRET_KEY="$DELIVERY_SECRET_KEY" \
+    DELIVERY_EXPIRY_DAYS="$DELIVERY_EXPIRY_DAYS" \
+    --app construct-delivery-worker
+fi
+
 # ============================================================================
 # Message Gateway secrets (if you want to use Message Gateway service)
 # ============================================================================
+#
+# Required variables for message-gateway:
+# - Core: DATABASE_URL, REDIS_URL, JWT_SECRET, JWT_ISSUER, LOG_HASH_SALT
+# - Queues: ONLINE_CHANNEL, DELIVERY_QUEUE_PREFIX, OFFLINE_QUEUE_PREFIX
+# - Routing: INSTANCE_DOMAIN, FEDERATION_ENABLED (for MessageRouter)
+# - Kafka: All Kafka config if enabled
+#
+# Note: This section runs if ENABLE_MESSAGE_GATEWAY=true OR if running for
+#       gateway-specific deployment (make secrets-gateway)
+# ============================================================================
 
-if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+# Check if we should set up message-gateway secrets
+# Either ENABLE_MESSAGE_GATEWAY is true, or we're running gateway-specific setup
+if [ "$1" = "gateway" ]; then
+  # Explicitly requested for gateway
+  SHOULD_SETUP_GATEWAY=true
+elif [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+  # Enabled via .env variable
+  SHOULD_SETUP_GATEWAY=true
+else
+  # Check if app exists (might want to set up secrets even if not explicitly enabled)
+  # Use flyctl status as it's faster and returns error if app doesn't exist
+  if flyctl status --app construct-message-gateway >/dev/null 2>&1; then
+    SHOULD_SETUP_GATEWAY=true
+    echo ""
+    echo "ℹ️  Message Gateway app exists but ENABLE_MESSAGE_GATEWAY not set to 'true'"
+    echo "   Setting up secrets anyway (use ENABLE_MESSAGE_GATEWAY=true to suppress this message)"
+  fi
+fi
+
+if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
   echo ""
   echo "Setting up Message Gateway secrets..."
   flyctl secrets set \
@@ -154,7 +232,23 @@ if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; t
     JWT_ISSUER="$JWT_ISSUER" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
+    DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
+    OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
+    APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
     --app construct-message-gateway
+
+  # Instance domain and federation (required for MessageRouter to route messages)
+  if [ -n "$INSTANCE_DOMAIN" ]; then
+    flyctl secrets set \
+      INSTANCE_DOMAIN="$INSTANCE_DOMAIN" \
+      --app construct-message-gateway
+  fi
+
+  if [ -n "$FEDERATION_ENABLED" ]; then
+    flyctl secrets set \
+      FEDERATION_ENABLED="$FEDERATION_ENABLED" \
+      --app construct-message-gateway
+  fi
 
   # Kafka secrets for Message Gateway
   if [ "$KAFKA_ENABLED" = "true" ]; then
@@ -172,6 +266,10 @@ if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; t
       KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
       --app construct-message-gateway
   fi
+else
+  echo ""
+  echo "ℹ️  Skipping Message Gateway secrets setup"
+  echo "   (Set ENABLE_MESSAGE_GATEWAY=true in .env or use 'make secrets-gateway')"
 fi
 
 echo ""
@@ -180,13 +278,13 @@ echo ""
 echo "To verify:"
 echo "  flyctl secrets list --app construct-server"
 echo "  flyctl secrets list --app construct-delivery-worker"
-if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
+if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
   echo "  flyctl secrets list --app construct-message-gateway"
 fi
 echo ""
 echo "To deploy:"
 echo "  flyctl deploy --app construct-server"
-echo "  flyctl deploy --config fly.worker.toml --app construct-delivery-worker"
-if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
-  echo "  flyctl deploy --config fly.gateway.toml --app construct-message-gateway"
+echo "  flyctl deploy --config ops/fly.worker.toml --app construct-delivery-worker"
+if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
+  echo "  flyctl deploy --config ops/fly.gateway.toml --app construct-message-gateway"
 fi

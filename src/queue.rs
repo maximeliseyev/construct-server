@@ -29,9 +29,7 @@ use anyhow::Result;
 use redis::{AsyncCommands, Client, cmd};
 use sha2::{Digest, Sha256};
 
-use crate::config::Config;
-
-const SECONDS_PER_DAY: i64 = 86400;
+use crate::config::{Config, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 
 pub struct MessageQueue {
     client: redis::aio::ConnectionManager,
@@ -40,6 +38,8 @@ pub struct MessageQueue {
     message_ttl_seconds: i64,
     offline_queue_prefix: String,
     delivery_queue_prefix: String,
+    /// Reference to config for Redis key prefixes (needed for key generation)
+    config: Config,
 }
 impl MessageQueue {
     pub async fn new(config: &Config) -> Result<Self> {
@@ -73,27 +73,39 @@ impl MessageQueue {
             message_ttl_seconds,
             offline_queue_prefix: config.offline_queue_prefix.clone(),
             delivery_queue_prefix: config.delivery_queue_prefix.clone(),
+            config: config.clone(),
         })
     }
+    /// @deprecated Phase 5+: Use Kafka for message persistence instead of Redis queues
+    /// This method is kept for backward compatibility with legacy flows
+    #[deprecated(since = "0.5.0", note = "Use Kafka for message persistence (Phase 5+)")]
+    #[allow(dead_code)]
     pub async fn enqueue_message(&mut self, user_id: &str, message: &ChatMessage) -> Result<()> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = rmp_serde::encode::to_vec_named(message)?;
         let _: () = self.client.lpush(&key, message_bytes).await?;
         let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
-        tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message");
+        tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message (DEPRECATED - use Kafka)");
         Ok(())
     }
 
-    /// Enqueues a raw JSON message (for API v3)
-    /// This stores the message as JSON bytes in Redis
+    /// @deprecated Phase 5+: Use Kafka for message persistence instead of Redis queues
+    /// This method is kept for backward compatibility with legacy flows
+    #[deprecated(since = "0.5.0", note = "Use Kafka for message persistence (Phase 5+)")]
+    #[allow(dead_code)]
     pub async fn enqueue_message_raw(&mut self, user_id: &str, message_json: &str) -> Result<()> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = message_json.as_bytes();
         let _: () = self.client.lpush(&key, message_bytes).await?;
         let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
-        tracing::info!(user_id = %user_id, "Queued message (v3)");
+        tracing::info!(user_id = %user_id, "Queued message v3 (DEPRECATED - use Kafka)");
         Ok(())
     }
+
+    /// @deprecated Phase 5+: Use Kafka consumer for message delivery
+    /// This method is kept for backward compatibility with legacy flows
+    #[deprecated(since = "0.5.0", note = "Use Kafka consumer for message delivery (Phase 5+)")]
+    #[allow(dead_code)]
     pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let messages: Vec<Vec<u8>> = self.client.lrange(&key, 0, -1).await?;
@@ -121,7 +133,7 @@ impl MessageQueue {
             total_messages,
             parsed_messages,
             dropped_messages,
-            "Dequeued messages"
+            "Dequeued messages (DEPRECATED - use Kafka)"
         );
         Ok(result)
     }
@@ -189,7 +201,7 @@ impl MessageQueue {
         hasher.update(nonce.as_bytes());
         let hash = format!("{:x}", hasher.finalize());
 
-        let key = format!("msg_hash:{}", hash);
+        let key = format!("{}{}", self.config.redis_key_prefixes.msg_hash, hash);
 
         // Проверяем существование
         let exists: bool = self.client.exists(&key).await?;
@@ -203,7 +215,7 @@ impl MessageQueue {
             return Ok(false); // Сообщение уже было
         }
 
-        let _: () = self.client.set_ex(&key, "1", 86400).await?;
+        let _: () = self.client.set_ex(&key, "1", SECONDS_PER_DAY as u64).await?;
 
         Ok(true) // Сообщение уникальное
     }
@@ -216,7 +228,26 @@ impl MessageQueue {
 
         // Устанавливаем TTL только при первом инкременте
         if count == 1 {
-            let _: () = self.client.expire(&key, 3600).await?; // 1 час
+            let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
+        }
+
+        Ok(count)
+    }
+
+    /// Increments message count per IP address for rate limiting
+    /// Returns the total count of messages from this IP in the last hour
+    /// This provides protection against distributed attacks (multiple users from same IP)
+    pub async fn increment_ip_message_count(&mut self, ip: &str) -> Result<u32> {
+        // Normalize IP (handle IPv6 brackets if present)
+        let normalized_ip = ip.trim_start_matches('[').trim_end_matches(']');
+        let key = format!("rate:ip:{}", normalized_ip);
+
+        // Increment counter
+        let count: u32 = self.client.incr(&key, 1).await?;
+
+        // Set TTL only on first increment (1 hour window)
+        if count == 1 {
+            let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
         }
 
         Ok(count)
@@ -228,7 +259,7 @@ impl MessageQueue {
         let count: u32 = self.client.incr(&key, 1).await?;
 
         if count == 1 {
-            let _: () = self.client.expire(&key, 86400).await?; // 24 часа
+            let _: () = self.client.expire(&key, SECONDS_PER_DAY).await?;
         }
 
         Ok(count)
@@ -242,7 +273,7 @@ impl MessageQueue {
         let count: u32 = self.client.incr(&key, 1).await?;
 
         if count == 1 {
-            let _: () = self.client.expire(&key, 86400).await?; // 24 hours
+            let _: () = self.client.expire(&key, SECONDS_PER_DAY).await?;
         }
 
         Ok(count)
@@ -255,8 +286,10 @@ impl MessageQueue {
 
         let count: u32 = self.client.incr(&key, 1).await?;
 
+        // 15 minutes = 900 seconds
+        const FAILED_LOGIN_WINDOW_SECS: i64 = 900;
         if count == 1 {
-            let _: () = self.client.expire(&key, 900).await?; // 15 minutes
+            let _: () = self.client.expire(&key, FAILED_LOGIN_WINDOW_SECS).await?;
         }
 
         Ok(count)
@@ -320,7 +353,7 @@ impl MessageQueue {
         let key = format!("key_bundle:{}", user_id);
         let bundle_json = serde_json::to_string(bundle)
             .map_err(|e| anyhow::anyhow!("Failed to serialize bundle: {}", e))?;
-        let ttl_seconds = ttl_hours * 3600;
+        let ttl_seconds = ttl_hours * SECONDS_PER_HOUR;
         let _: () = self
             .client
             .set_ex(&key, bundle_json, ttl_seconds as u64)
@@ -357,7 +390,7 @@ impl MessageQueue {
     pub async fn track_connection(&mut self, user_id: &str, connection_id: &str) -> Result<u32> {
         let key = format!("connections:{}", user_id);
         let _: () = self.client.sadd(&key, connection_id).await?;
-        let _: () = self.client.expire(&key, 3600).await?; // Обновляем TTL
+        let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
 
         let count: u32 = self.client.scard(&key).await?;
         Ok(count)
@@ -388,6 +421,103 @@ impl MessageQueue {
 
     /// Publishes a notification that a user has come online
     /// This triggers the Delivery Worker to process offline messages
+    /// Phase 5: Track which server instance a user is connected to
+    /// This allows delivery-worker to route messages directly to the correct server
+    pub async fn track_user_online(
+        &mut self,
+        user_id: &str,
+        server_instance_id: &str,
+    ) -> Result<()> {
+        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
+        // Set with TTL matching session TTL from config
+        let ttl_seconds = self.config.session_ttl_days * SECONDS_PER_DAY;
+        
+        let _: () = cmd("SETEX")
+            .arg(&key)
+            .arg(ttl_seconds)
+            .arg(server_instance_id)
+            .query_async(&mut self.client)
+            .await?;
+        
+        tracing::debug!(
+            user_id = %user_id,
+            server_instance_id = %server_instance_id,
+            "Tracked user online status"
+        );
+        
+        Ok(())
+    }
+    
+    /// Phase 5: Remove user online tracking when they disconnect
+    pub async fn untrack_user_online(&mut self, user_id: &str) -> Result<()> {
+        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
+        let _: () = self.client.del(&key).await?;
+        
+        tracing::debug!(
+            user_id = %user_id,
+            "Removed user online tracking"
+        );
+        
+        Ok(())
+    }
+    
+    /// Phase 5: Get server instance ID for an online user
+    pub async fn get_user_server_instance(&mut self, user_id: &str) -> Result<Option<String>> {
+        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
+        let result: Option<String> = self.client.get(&key).await?;
+        Ok(result)
+    }
+    
+    /// Process offline messages for a user when they come online
+    /// Moves messages from delivery_queue:offline:{user_id} to delivery_queue:{server_instance_id}
+    /// so they can be delivered via the delivery listener mechanism
+    /// 
+    /// Messages are moved in FIFO order (oldest first) to maintain message ordering
+    pub async fn process_offline_messages_for_user(
+        &mut self,
+        user_id: &str,
+        server_instance_id: &str,
+    ) -> Result<usize> {
+        let offline_queue_key = format!("{}offline:{}", self.delivery_queue_prefix, user_id);
+        let delivery_queue_key = format!("{}{}", self.delivery_queue_prefix, server_instance_id);
+        
+        // Use Lua script to atomically get all messages from offline queue and move to delivery queue
+        // This ensures atomicity and maintains FIFO order
+        let script = redis::Script::new(
+            r"
+            local offline_key = KEYS[1]
+            local delivery_key = KEYS[2]
+            local messages = redis.call('LRANGE', offline_key, 0, -1)
+            if #messages > 0 then
+                -- Move messages to delivery queue (FIFO order - oldest first)
+                for i, msg in ipairs(messages) do
+                    redis.call('RPUSH', delivery_key, msg)
+                end
+                -- Delete offline queue after moving
+                redis.call('DEL', offline_key)
+            end
+            return #messages
+            ",
+        );
+        
+        let message_count: usize = script
+            .key(&offline_queue_key)
+            .key(&delivery_queue_key)
+            .invoke_async(&mut self.client)
+            .await?;
+        
+        if message_count > 0 {
+            tracing::info!(
+                user_id = %user_id,
+                server_instance_id = %server_instance_id,
+                message_count = message_count,
+                "Processed offline messages for user - moved to delivery queue (FIFO order maintained)"
+            );
+        }
+        
+        Ok(message_count)
+    }
+
     pub async fn publish_user_online(
         &mut self,
         user_id: &str,
@@ -427,7 +557,7 @@ impl MessageQueue {
             r"
             local messages = redis.call('LRANGE', KEYS[1], 0, -1)
             if #messages > 0 then
-                redis.call('LTRIM', KEYS[1], #messages, -1)
+                redis.call('LTRIM', KEYS[1], 1, 0)
             end
             return messages
             ",
@@ -453,11 +583,14 @@ impl MessageQueue {
     /// Register this server instance in Redis
     /// Creates a delivery queue key with TTL to signal that this server is active
     /// delivery-worker uses KEYS delivery_queue:* to discover active servers
-    pub async fn register_server_instance(&mut self, queue_key: &str) -> Result<()> {
+    pub async fn register_server_instance(
+        &mut self,
+        queue_key: &str,
+        ttl_seconds: i64,
+    ) -> Result<()> {
         tracing::debug!(queue_key = %queue_key, "Registering server instance");
-        // Create an empty list (if doesn't exist) and set TTL to 60 seconds
-        // The heartbeat task will refresh this every 30 seconds
-        let ttl_seconds = 60;
+        // Create an empty list (if doesn't exist) and set TTL
+        // The heartbeat task will refresh this periodically
 
         // Check if key exists and its type
         let key_type: Option<String> = self.client.key_type(queue_key).await?;
