@@ -101,7 +101,11 @@ pub async fn handle_upload_keys(
     }
     drop(queue);
 
-    tracing::info!(user_id = %user_id, "Key bundle uploaded successfully");
+    // SECURITY: Always use hashed user_id in logs
+    tracing::info!(
+        user_hash = %crate::utils::log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+        "Key bundle uploaded successfully"
+    );
 
     // 7. Return success
     json_response(StatusCode::OK, json!({"status": "ok"}))
@@ -115,8 +119,38 @@ pub async fn handle_get_keys(
     user_id_str: &str,
 ) -> Response<Full<Bytes>> {
     // 1. Verify JWT token (must be authenticated to get keys)
-    if extract_user_id_from_jwt(ctx, headers).is_err() {
-        return error_response(StatusCode::UNAUTHORIZED, "Authentication required");
+    let authenticated_user_id = match extract_user_id_from_jwt(ctx, headers) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
+    // 1.5. SECURITY: Rate limiting to prevent enumeration attacks
+    // Check rate limit before parsing user_id (DoS protection)
+    {
+        let mut queue = ctx.queue.lock().await;
+        match queue.increment_message_count(&authenticated_user_id.to_string()).await {
+            Ok(count) => {
+                let max_messages = ctx.config.security.max_messages_per_hour;
+                if count > max_messages {
+                    drop(queue);
+                    tracing::warn!(
+                        user_hash = %crate::utils::log_safe_id(&authenticated_user_id.to_string(), &ctx.config.logging.hash_salt),
+                        count = count,
+                        limit = max_messages,
+                        "Key bundle request rate limit exceeded"
+                    );
+                    return error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        &format!("Rate limit exceeded: maximum {} requests per hour", max_messages)
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to check rate limit for key bundle request");
+                // Fail open - continue but log error
+            }
+        }
+        drop(queue);
     }
 
     // 2. Parse user_id
@@ -130,15 +164,28 @@ pub async fn handle_get_keys(
     // 3. Fetch from database
     match db::get_key_bundle(&ctx.db_pool, &user_id).await {
         Ok(Some(bundle)) => {
-            tracing::debug!(target_user = %user_id, "Key bundle retrieved");
+            // SECURITY: Always use hashed user_id in logs
+            tracing::debug!(
+                target_user_hash = %crate::utils::log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                "Key bundle retrieved"
+            );
             json_response(StatusCode::OK, json!(bundle))
         }
         Ok(None) => {
-            tracing::warn!(target_user = %user_id, "Key bundle not found");
+            // SECURITY: Always use hashed user_id in logs
+            tracing::warn!(
+                target_user_hash = %crate::utils::log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                "Key bundle not found"
+            );
             error_response(StatusCode::NOT_FOUND, "Key bundle not found")
         }
         Err(e) => {
-            tracing::error!(error = %e, target_user = %user_id, "Database error");
+            // SECURITY: Always use hashed user_id in logs
+            tracing::error!(
+                error = %e,
+                target_user_hash = %crate::utils::log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
+                "Database error"
+            );
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error")
         }
     }
@@ -184,10 +231,16 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
     let json_bytes = serde_json::to_vec(&body).unwrap_or_default();
     let mut response = Response::new(Full::new(Bytes::from(json_bytes)));
     *response.status_mut() = status;
-    response.headers_mut().insert(
-        "content-type",
-        "application/json".parse().unwrap(),
-    );
+    // SECURITY: Handle header parsing errors gracefully
+    match "application/json".parse() {
+        Ok(content_type) => {
+            response.headers_mut().insert("content-type", content_type);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to parse Content-Type header (this should never happen)");
+            // This should never happen, but if it does, we continue without the header
+        }
+    }
     response
 }
 

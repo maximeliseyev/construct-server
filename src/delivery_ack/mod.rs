@@ -157,6 +157,17 @@ impl DeliveryAckConfig {
             anyhow::bail!("DELIVERY_SECRET_KEY must be 32 bytes (64 hex chars)");
         }
 
+        // SECURITY: Validate secret key strength (entropy, patterns)
+        if let Err(e) = crate::utils::validate_secret_strength(
+            &secret_key_hex,
+            64, // 32 bytes = 64 hex chars
+        ) {
+            anyhow::bail!(
+                "DELIVERY_SECRET_KEY is too weak: {}. Please use a random secret generated with: openssl rand -hex 32",
+                e
+            );
+        }
+
         let expiry_days = std::env::var("DELIVERY_EXPIRY_DAYS")
             .ok()
             .and_then(|s| s.parse().ok())

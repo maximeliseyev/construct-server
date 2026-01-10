@@ -29,9 +29,7 @@ use anyhow::Result;
 use redis::{AsyncCommands, Client, cmd};
 use sha2::{Digest, Sha256};
 
-use crate::config::Config;
-
-const SECONDS_PER_DAY: i64 = 86400;
+use crate::config::{Config, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 
 pub struct MessageQueue {
     client: redis::aio::ConnectionManager,
@@ -40,6 +38,8 @@ pub struct MessageQueue {
     message_ttl_seconds: i64,
     offline_queue_prefix: String,
     delivery_queue_prefix: String,
+    /// Reference to config for Redis key prefixes (needed for key generation)
+    config: Config,
 }
 impl MessageQueue {
     pub async fn new(config: &Config) -> Result<Self> {
@@ -73,6 +73,7 @@ impl MessageQueue {
             message_ttl_seconds,
             offline_queue_prefix: config.offline_queue_prefix.clone(),
             delivery_queue_prefix: config.delivery_queue_prefix.clone(),
+            config: config.clone(),
         })
     }
     /// @deprecated Phase 5+: Use Kafka for message persistence instead of Redis queues
@@ -200,7 +201,7 @@ impl MessageQueue {
         hasher.update(nonce.as_bytes());
         let hash = format!("{:x}", hasher.finalize());
 
-        let key = format!("msg_hash:{}", hash);
+        let key = format!("{}{}", self.config.redis_key_prefixes.msg_hash, hash);
 
         // Проверяем существование
         let exists: bool = self.client.exists(&key).await?;
@@ -214,7 +215,7 @@ impl MessageQueue {
             return Ok(false); // Сообщение уже было
         }
 
-        let _: () = self.client.set_ex(&key, "1", 86400).await?;
+        let _: () = self.client.set_ex(&key, "1", SECONDS_PER_DAY as u64).await?;
 
         Ok(true) // Сообщение уникальное
     }
@@ -227,7 +228,7 @@ impl MessageQueue {
 
         // Устанавливаем TTL только при первом инкременте
         if count == 1 {
-            let _: () = self.client.expire(&key, 3600).await?; // 1 час
+            let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
         }
 
         Ok(count)
@@ -239,7 +240,7 @@ impl MessageQueue {
         let count: u32 = self.client.incr(&key, 1).await?;
 
         if count == 1 {
-            let _: () = self.client.expire(&key, 86400).await?; // 24 часа
+            let _: () = self.client.expire(&key, SECONDS_PER_DAY).await?;
         }
 
         Ok(count)
@@ -253,7 +254,7 @@ impl MessageQueue {
         let count: u32 = self.client.incr(&key, 1).await?;
 
         if count == 1 {
-            let _: () = self.client.expire(&key, 86400).await?; // 24 hours
+            let _: () = self.client.expire(&key, SECONDS_PER_DAY).await?;
         }
 
         Ok(count)
@@ -266,8 +267,10 @@ impl MessageQueue {
 
         let count: u32 = self.client.incr(&key, 1).await?;
 
+        // 15 minutes = 900 seconds
+        const FAILED_LOGIN_WINDOW_SECS: i64 = 900;
         if count == 1 {
-            let _: () = self.client.expire(&key, 900).await?; // 15 minutes
+            let _: () = self.client.expire(&key, FAILED_LOGIN_WINDOW_SECS).await?;
         }
 
         Ok(count)
@@ -331,7 +334,7 @@ impl MessageQueue {
         let key = format!("key_bundle:{}", user_id);
         let bundle_json = serde_json::to_string(bundle)
             .map_err(|e| anyhow::anyhow!("Failed to serialize bundle: {}", e))?;
-        let ttl_seconds = ttl_hours * 3600;
+        let ttl_seconds = ttl_hours * SECONDS_PER_HOUR;
         let _: () = self
             .client
             .set_ex(&key, bundle_json, ttl_seconds as u64)
@@ -368,7 +371,7 @@ impl MessageQueue {
     pub async fn track_connection(&mut self, user_id: &str, connection_id: &str) -> Result<u32> {
         let key = format!("connections:{}", user_id);
         let _: () = self.client.sadd(&key, connection_id).await?;
-        let _: () = self.client.expire(&key, 3600).await?; // Обновляем TTL
+        let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
 
         let count: u32 = self.client.scard(&key).await?;
         Ok(count)
@@ -406,9 +409,9 @@ impl MessageQueue {
         user_id: &str,
         server_instance_id: &str,
     ) -> Result<()> {
-        let key = format!("user:{}:server_instance_id", user_id);
-        // Set with TTL matching session TTL (30 days default)
-        let ttl_seconds = 30 * 24 * 60 * 60; // 30 days
+        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
+        // Set with TTL matching session TTL from config
+        let ttl_seconds = self.config.session_ttl_days * SECONDS_PER_DAY;
         
         let _: () = cmd("SETEX")
             .arg(&key)
@@ -428,7 +431,7 @@ impl MessageQueue {
     
     /// Phase 5: Remove user online tracking when they disconnect
     pub async fn untrack_user_online(&mut self, user_id: &str) -> Result<()> {
-        let key = format!("user:{}:server_instance_id", user_id);
+        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
         let _: () = self.client.del(&key).await?;
         
         tracing::debug!(
@@ -441,7 +444,7 @@ impl MessageQueue {
     
     /// Phase 5: Get server instance ID for an online user
     pub async fn get_user_server_instance(&mut self, user_id: &str) -> Result<Option<String>> {
-        let key = format!("user:{}:server_instance_id", user_id);
+        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
         let result: Option<String> = self.client.get(&key).await?;
         Ok(result)
     }

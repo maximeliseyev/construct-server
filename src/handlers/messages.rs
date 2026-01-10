@@ -22,9 +22,68 @@ pub async fn handle_send_message(
         Err(response) => return response,
     };
 
-    // 2. Read request body
+    // 1.5. SECURITY: Check rate limiting BEFORE reading body (DoS protection)
+    // This prevents attackers from sending large requests before rate limit check
+    {
+        let mut queue = ctx.queue.lock().await;
+        if let Ok(Some(reason)) = queue.is_user_blocked(&sender_id.to_string()).await {
+            drop(queue);
+            tracing::warn!(
+                sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+                reason = %reason,
+                "Blocked user attempted to send message"
+            );
+            return error_response(
+                StatusCode::FORBIDDEN,
+                &format!("Your account is temporarily blocked: {}", reason)
+            );
+        }
+
+        // Check message rate limit
+        match queue.increment_message_count(&sender_id.to_string()).await {
+            Ok(count) => {
+                let max_messages = ctx.config.security.max_messages_per_hour;
+                if count > max_messages {
+                    drop(queue);
+                    tracing::warn!(
+                        sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+                        count = count,
+                        limit = max_messages,
+                        "Message rate limit exceeded"
+                    );
+                    return error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        &format!("Rate limit exceeded: maximum {} messages per hour", max_messages)
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to check message rate limit");
+                // Fail open - continue but log error
+            }
+        }
+        drop(queue);
+    }
+
+    // 2. Read request body with size limit
     let body_bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
+        Ok(collected) => {
+            let bytes = collected.to_bytes();
+            // SECURITY: Validate request body size to prevent DoS
+            if bytes.len() > crate::config::MAX_REQUEST_BODY_SIZE {
+                tracing::warn!(
+                    size = bytes.len(),
+                    limit = crate::config::MAX_REQUEST_BODY_SIZE,
+                    sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+                    "Request body too large"
+                );
+                return error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    &format!("Request body exceeds maximum size of {} bytes", crate::config::MAX_REQUEST_BODY_SIZE)
+                );
+            }
+            bytes
+        }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to read request body");
             return error_response(StatusCode::BAD_REQUEST, "Failed to read request body");
@@ -40,7 +99,22 @@ pub async fn handle_send_message(
         }
     };
 
-    // 4. Validate the message
+    // 4. Validate message size
+    // SECURITY: Validate ciphertext size to prevent DoS
+    if message.ciphertext.len() > crate::config::MAX_MESSAGE_SIZE {
+        tracing::warn!(
+            size = message.ciphertext.len(),
+            limit = crate::config::MAX_MESSAGE_SIZE,
+            sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
+            "Message ciphertext too large"
+        );
+        return error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!("Message size exceeds maximum of {} bytes", crate::config::MAX_MESSAGE_SIZE)
+        );
+    }
+
+    // 5. Validate the message format
     // SECURITY: Hash sender_id for privacy in logs
     let salt = &ctx.config.logging.hash_salt;
     if let Err(e) = ServerCryptoValidator::validate_encrypted_message_v3(&message) {
@@ -52,7 +126,7 @@ pub async fn handle_send_message(
         return error_response(StatusCode::BAD_REQUEST, &e.to_string());
     }
 
-    // 5. Parse recipient_id
+    // 6. Parse recipient_id
     let recipient_id = match Uuid::parse_str(&message.recipient_id) {
         Ok(id) => id,
         Err(_) => {
@@ -182,10 +256,16 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
     let json_bytes = serde_json::to_vec(&body).unwrap_or_default();
     let mut response = Response::new(Full::new(Bytes::from(json_bytes)));
     *response.status_mut() = status;
-    response.headers_mut().insert(
-        "content-type",
-        "application/json".parse().unwrap(),
-    );
+    // SECURITY: Handle header parsing errors gracefully
+    match "application/json".parse() {
+        Ok(content_type) => {
+            response.headers_mut().insert("content-type", content_type);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to parse Content-Type header (this should never happen)");
+            // This should never happen, but if it does, we continue without the header
+        }
+    }
     response
 }
 

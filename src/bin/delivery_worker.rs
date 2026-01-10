@@ -110,10 +110,7 @@ async fn main() -> Result<()> {
     let redis_conn = Arc::new(RwLock::new(redis_conn));
 
     // Phase 4: Shadow-read mode (compare Kafka vs Redis)
-    let shadow_read_enabled = std::env::var("SHADOW_READ_ENABLED")
-        .unwrap_or_else(|_| "false".to_string())
-        .parse()
-        .unwrap_or(false);
+    let shadow_read_enabled = config.worker.shadow_read_enabled;
 
     if shadow_read_enabled {
         info!("🔍 Shadow-read mode ENABLED - will compare Kafka vs Redis offline queues");
@@ -437,7 +434,7 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     );
 
     // 1. Deduplication check: have we already processed this message?
-    let dedup_key = format!("processed_msg:{}", message_id);
+    let dedup_key = format!("{}{}", state.config.redis_key_prefixes.processed_msg, message_id);
 
     let exists_result: i64 = execute_redis_with_retry(state, "check_deduplication", |conn| {
         let key = dedup_key.clone();
@@ -458,7 +455,7 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
 
     // 2. Phase 5: Check if recipient is online by looking up their server instance
     // Instead of searching delivery_queue keys, we directly check user:{user_id}:server_instance_id
-    let user_server_key = format!("user:{}:server_instance_id", recipient_id);
+    let user_server_key = format!("{}{}:server_instance_id", state.config.redis_key_prefixes.user, recipient_id);
     
     let server_instance_id: Option<String> = execute_redis_with_retry(state, "check_user_online", |conn| {
         let key = user_server_key.clone();
@@ -487,7 +484,7 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
 
         // Phase 5: Publish message directly to delivery_message channel
         // Server will listen to this channel and deliver via WebSocket
-        let delivery_channel = format!("delivery_message:{}", server_instance_id);
+        let delivery_channel = format!("{}{}", state.config.redis_channels.delivery_message, server_instance_id);
         
         let _: i64 = execute_redis_with_retry(state, "publish_delivery_message", |conn| {
             let channel = delivery_channel.clone();
@@ -511,7 +508,8 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         
         // 3. Mark message as processed (7-day TTL)
         // Phase 5: After successful Pub/Sub publication, we commit Kafka offset
-        let ttl_seconds = state.config.message_ttl_days * 24 * 60 * 60;
+        use construct_server::config::SECONDS_PER_DAY;
+        let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
         let _: String = execute_redis_with_retry(state, "mark_message_processed", |conn| {
             let key = dedup_key.clone();
             let ttl = ttl_seconds;

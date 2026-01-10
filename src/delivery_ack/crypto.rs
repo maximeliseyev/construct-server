@@ -24,8 +24,18 @@ type HmacSha256 = Hmac<Sha256>;
 /// assert_eq!(hash.len(), 64); // 32 bytes = 64 hex chars
 /// ```
 pub fn compute_message_hash(message_id: &str, secret_key: &[u8]) -> String {
+    // SECURITY: Validate key size before use (though HMAC accepts any size, we want 32 bytes)
+    // Note: This is a defensive check - HMAC-SHA256 can technically accept any key size
+    // but using exactly 32 bytes (256 bits) provides optimal security
+    if secret_key.len() != 32 {
+        tracing::warn!(
+            key_size = secret_key.len(),
+            "DELIVERY_SECRET_KEY should be exactly 32 bytes for optimal security"
+        );
+    }
+
     let mut mac = HmacSha256::new_from_slice(secret_key)
-        .expect("HMAC can take key of any size");
+        .expect("HMAC can take key of any size (validated above)");
 
     mac.update(message_id.as_bytes());
 
@@ -76,8 +86,16 @@ pub fn verify_message_hash(message_id: &str, message_hash: &str, secret_key: &[u
 /// // Store in Redis: "sender_hash:{hash}" → "plaintext_uuid" (TTL 7 days)
 /// ```
 pub fn compute_user_id_hash(user_id: &str, secret_key: &[u8]) -> String {
+    // SECURITY: Validate key size before use (defensive check)
+    if secret_key.len() != 32 {
+        tracing::warn!(
+            key_size = secret_key.len(),
+            "DELIVERY_SECRET_KEY should be exactly 32 bytes for optimal security"
+        );
+    }
+
     let mut mac = HmacSha256::new_from_slice(secret_key)
-        .expect("HMAC can take key of any size");
+        .expect("HMAC can take key of any size (validated above)");
 
     mac.update(user_id.as_bytes());
 
