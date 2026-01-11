@@ -174,8 +174,28 @@ impl ServerCryptoValidator {
 
                 Ok(())
             }
-            // Future: Add validation for other suite IDs (e.g., PQ-hybrid)
-            _ => Err(anyhow::anyhow!("Unsupported suite_id: {}", suite.suite_id)),
+            suite_ids::PQ_HYBRID_KYBER => {
+                // Post-Quantum Hybrid: X25519+ML-KEM-768 + Ed25519+ML-DSA-65
+                #[cfg(feature = "post-quantum")]
+                {
+                    use crate::pqc::validation;
+                    validation::validate_hybrid_suite_key_material(suite)
+                }
+                #[cfg(not(feature = "post-quantum"))]
+                {
+                    Err(anyhow::anyhow!(
+                        "Post-quantum hybrid suite (suite_id={}) is not enabled. \
+                         Enable with feature flag: cargo build --features post-quantum",
+                        suite.suite_id
+                    ))
+                }
+            }
+            _ => Err(anyhow::anyhow!(
+                "Unsupported suite_id: {}. Supported: {} (CLASSIC_X25519), {} (PQ_HYBRID_KYBER)",
+                suite.suite_id,
+                suite_ids::CLASSIC_X25519,
+                suite_ids::PQ_HYBRID_KYBER
+            )),
         }
     }
 
@@ -188,29 +208,7 @@ impl ServerCryptoValidator {
     /// * `bundle` - The uploadable key bundle to validate
     /// * `allow_empty_user_id` - If true, allows empty user_id (used during registration)
     pub fn validate_uploadable_key_bundle(bundle: &UploadableKeyBundle, allow_empty_user_id: bool) -> Result<()> {
-        // 1. Validate master_identity_key format
-        let master_key_bytes = general_purpose::STANDARD
-            .decode(&bundle.master_identity_key)
-            .context("Invalid base64 in master_identity_key")?;
-
-        if master_key_bytes.len() != 32 {
-            return Err(anyhow::anyhow!(
-                "Master identity key must be 32 bytes (Ed25519)"
-            ));
-        }
-
-        // 2. Validate signature format
-        let signature_bytes = general_purpose::STANDARD
-            .decode(&bundle.signature)
-            .context("Invalid base64 in signature")?;
-
-        if signature_bytes.len() != 64 {
-            return Err(anyhow::anyhow!("Signature must be 64 bytes (Ed25519)"));
-        }
-
-        // 3. Decode and deserialize bundle_data
-        // NOTE: We decode bundle_data from base64 to get the original bytes that were signed
-        // The signature is over the canonical JSON representation of bundle_data
+        // 1. Decode bundle_data first to determine suite type
         let bundle_data_bytes = general_purpose::STANDARD
             .decode(&bundle.bundle_data)
             .context("Invalid base64 in bundle_data")?;
@@ -218,33 +216,133 @@ impl ServerCryptoValidator {
         let bundle_data: BundleData =
             serde_json::from_slice(&bundle_data_bytes).context("Invalid JSON in bundle_data")?;
 
+        // 2. Validate master_identity_key format based on suite
+        // Check if any suite uses hybrid (suite_id=2) - if so, use hybrid signature format
+        let has_hybrid_suite = bundle_data.supported_suites.iter().any(|s| s.suite_id == suite_ids::PQ_HYBRID_KYBER);
+        let is_classical_only = bundle_data.supported_suites.iter().all(|s| s.suite_id == suite_ids::CLASSIC_X25519);
+
+        let master_key_bytes = general_purpose::STANDARD
+            .decode(&bundle.master_identity_key)
+            .context("Invalid base64 in master_identity_key")?;
+
+        // 3. Validate signature format based on suite type
+        let signature_bytes = general_purpose::STANDARD
+            .decode(&bundle.signature)
+            .context("Invalid base64 in signature")?;
+
+        if has_hybrid_suite {
+            // Hybrid suite: validate hybrid signature and master key formats
+            #[cfg(feature = "post-quantum")]
+            {
+                use crate::pqc::validation;
+                validation::validate_hybrid_master_identity_key(&master_key_bytes)
+                    .context("Invalid hybrid master identity key format")?;
+                
+                validation::validate_hybrid_signature(&signature_bytes)
+                    .context("Invalid hybrid signature format")?;
+                
+                // Note: Hybrid signature verification requires both Ed25519 and ML-DSA-65
+                // This will be implemented in the hybrid module when feature is enabled
+                // For now, we only validate format
+            }
+            #[cfg(not(feature = "post-quantum"))]
+            {
+                return Err(anyhow::anyhow!(
+                    "Post-quantum hybrid suite detected but feature is not enabled. \
+                     Enable with: cargo build --features post-quantum"
+                ));
+            }
+        } else if is_classical_only {
+            // Classical suite: validate Ed25519 format
+            if master_key_bytes.len() != 32 {
+                return Err(anyhow::anyhow!(
+                    "Master identity key must be 32 bytes for classical suite (Ed25519)"
+                ));
+            }
+
+            if signature_bytes.len() != 64 {
+                return Err(anyhow::anyhow!("Signature must be 64 bytes for classical suite (Ed25519)"));
+            }
+        } else {
+            // Mixed suites (both classical and hybrid) - use hybrid format for signature
+            #[cfg(feature = "post-quantum")]
+            {
+                use crate::pqc::validation;
+                validation::validate_hybrid_master_identity_key(&master_key_bytes)
+                    .context("Invalid hybrid master identity key format (mixed suites)")?;
+                
+                validation::validate_hybrid_signature(&signature_bytes)
+                    .context("Invalid hybrid signature format (mixed suites)")?;
+            }
+            #[cfg(not(feature = "post-quantum"))]
+            {
+                return Err(anyhow::anyhow!(
+                    "Mixed suites (classical + hybrid) require post-quantum feature. \
+                     Enable with: cargo build --features post-quantum"
+                ));
+            }
+        }
+
         // 4. Validate the bundle_data content (format, lengths, etc.)
+        // Note: bundle_data was already decoded above for suite detection
         Self::validate_bundle_data(&bundle_data, allow_empty_user_id)?;
 
-        // 5. SECURITY: Verify Ed25519 signature
-        // Convert master_identity_key bytes to VerifyingKey
-        let master_key_array: [u8; 32] = master_key_bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Failed to convert master_identity_key to array"))?;
+        // 5. SECURITY: Verify signature (Ed25519 for classical, hybrid for PQ)
+        if has_hybrid_suite || !is_classical_only {
+            // Hybrid signature verification
+            #[cfg(feature = "post-quantum")]
+            {
+                // Extract Ed25519 part from hybrid signature (first 64 bytes) for backward compatibility
+                // Full hybrid verification will be implemented when hybrid module is complete
+                let ed25519_sig_bytes: [u8; 64] = signature_bytes[0..64]
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Failed to extract Ed25519 signature from hybrid signature"))?;
 
-        let verifying_key = VerifyingKey::from_bytes(&master_key_array)
-            .context("Invalid Ed25519 master_identity_key format")?;
+                // Extract Ed25519 part from hybrid master key (first 32 bytes)
+                let ed25519_key_bytes: [u8; 32] = master_key_bytes[0..32]
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Failed to extract Ed25519 key from hybrid master key"))?;
 
-        // Convert signature bytes to Signature
-        let signature_array: [u8; 64] = signature_bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Failed to convert signature to array"))?;
+                let verifying_key = VerifyingKey::from_bytes(&ed25519_key_bytes)
+                    .context("Invalid Ed25519 master_identity_key format in hybrid key")?;
 
-        let signature = Signature::from_bytes(&signature_array);
+                let signature = Signature::from_bytes(&ed25519_sig_bytes);
 
-        // CRITICAL: Verify signature over the exact bytes that were signed
-        // The signature is over bundle_data bytes (the canonical JSON representation)
-        // We use bundle_data_bytes directly, as that's what the client signed after base64 encoding
-        // This ensures we verify against the exact message that was signed
-        // Note: We already validated that bundle_data_bytes is valid JSON via deserialization above
-        verifying_key
-            .verify(&bundle_data_bytes, &signature)
-            .context("Ed25519 signature verification failed - bundle may be tampered or signed with different key")?;
+                // Verify Ed25519 signature (classical part of hybrid)
+                verifying_key
+                    .verify(&bundle_data_bytes, &signature)
+                    .context("Ed25519 signature verification failed in hybrid signature - bundle may be tampered")?;
+
+                // TODO: Verify ML-DSA-65 signature (PQ part) when hybrid module is complete
+                // This requires parsing the full hybrid signature and master key
+            }
+            #[cfg(not(feature = "post-quantum"))]
+            {
+                // Should not reach here due to validation above, but just in case
+                return Err(anyhow::anyhow!(
+                    "Post-quantum hybrid signature verification requires post-quantum feature"
+                ));
+            }
+        } else {
+            // Classical Ed25519 signature verification
+            let master_key_array: [u8; 32] = master_key_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Failed to convert master_identity_key to array"))?;
+
+            let verifying_key = VerifyingKey::from_bytes(&master_key_array)
+                .context("Invalid Ed25519 master_identity_key format")?;
+
+            let signature_array: [u8; 64] = signature_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Failed to convert signature to array"))?;
+
+            let signature = Signature::from_bytes(&signature_array);
+
+            // CRITICAL: Verify signature over the exact bytes that were signed
+            verifying_key
+                .verify(&bundle_data_bytes, &signature)
+                .context("Ed25519 signature verification failed - bundle may be tampered or signed with different key")?;
+        }
 
         Ok(())
     }
@@ -274,7 +372,33 @@ impl ServerCryptoValidator {
 
                 Ok(())
             }
-            _ => Err(anyhow::anyhow!("Unsupported suite_id: {}", msg.suite_id)),
+            suite_ids::PQ_HYBRID_KYBER => {
+                // For hybrid suite, we expect:
+                // ephemeral_hybrid_kem_public (1216 bytes) + ml_kem_ciphertext (1088 bytes) + minimal sealed_box (16 bytes)
+                #[cfg(feature = "post-quantum")]
+                {
+                    use crate::pqc::validation;
+                    let ciphertext_bytes = general_purpose::STANDARD
+                        .decode(&msg.ciphertext)
+                        .context("Invalid base64 in ciphertext")?;
+
+                    validation::validate_hybrid_ciphertext(&ciphertext_bytes)
+                }
+                #[cfg(not(feature = "post-quantum"))]
+                {
+                    Err(anyhow::anyhow!(
+                        "Post-quantum hybrid suite (suite_id={}) is not enabled. \
+                         Enable with feature flag: cargo build --features post-quantum",
+                        msg.suite_id
+                    ))
+                }
+            }
+            _ => Err(anyhow::anyhow!(
+                "Unsupported suite_id: {}. Supported: {} (CLASSIC_X25519), {} (PQ_HYBRID_KYBER)",
+                msg.suite_id,
+                suite_ids::CLASSIC_X25519,
+                suite_ids::PQ_HYBRID_KYBER
+            )),
         }
     }
 }
@@ -296,11 +420,33 @@ pub type SuiteId = u16;
 pub mod suite_ids {
     use super::SuiteId;
 
-    /// X25519 + Ed25519 + AES-256-GCM + SHA-512 (baseline classic suite)
+    /// X25519 + Ed25519 + ChaCha20-Poly1305 + HKDF-SHA256 (baseline classic suite)
     pub const CLASSIC_X25519: SuiteId = 1;
 
-    // Suite ID 2 is reserved for future PQ-hybrid implementation
-    // pub const PQ_HYBRID_KYBER: SuiteId = 2;
+    /// Post-Quantum Hybrid: X25519+ML-KEM-768 + Ed25519+ML-DSA-65 + ChaCha20-Poly1305 + HKDF-SHA256
+    /// Security: 128-bit classical + 192-bit post-quantum (hybrid approach)
+    /// Format: Both classical and PQ components are present and validated
+    #[cfg(feature = "post-quantum")]
+    pub const PQ_HYBRID_KYBER: SuiteId = 2;
+
+    /// Suite ID 2 (placeholder when post-quantum feature is disabled)
+    /// When enabled, this becomes PQ_HYBRID_KYBER
+    #[cfg(not(feature = "post-quantum"))]
+    pub const PQ_HYBRID_KYBER: SuiteId = 2;
+
+    /// Check if a suite ID is supported
+    pub fn is_supported(suite_id: SuiteId) -> bool {
+        matches!(suite_id, CLASSIC_X25519 | PQ_HYBRID_KYBER)
+    }
+
+    /// Get suite name for logging/debugging
+    pub fn suite_name(suite_id: SuiteId) -> &'static str {
+        match suite_id {
+            CLASSIC_X25519 => "CLASSIC_X25519",
+            PQ_HYBRID_KYBER => "PQ_HYBRID_KYBER",
+            _ => "UNKNOWN",
+        }
+    }
 }
 
 /// Key material for a single cipher suite
