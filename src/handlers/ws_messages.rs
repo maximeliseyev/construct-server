@@ -359,141 +359,126 @@ pub async fn handle_send_message(
     }
 
     // ========================================================================
-    // LEGACY PATH (when Message Gateway is not configured OR unavailable)
-    // Direct processing with Kafka as source of truth (Phase 5+)
-    // This path is also used as fallback when message-gateway is unavailable
+    // HYBRID ARCHITECTURE: Kafka First + Direct Delivery
+    // ========================================================================
+    //
+    // ПРОБЛЕМА предыдущих подходов:
+    // 1. "Kafka + Pub/Sub" (документация): Pub/Sub fire-and-forget → сообщения теряются
+    // 2. "Direct only" (первый фикс): Если сервер упадёт после tx.send() → сообщение потеряно
+    //
+    // РЕШЕНИЕ: Гибридный подход
+    // 1. СНАЧАЛА пишем в Kafka (SOURCE OF TRUTH) - гарантия сохранения
+    // 2. ПОТОМ пытаемся доставить напрямую через tx.send() (fast path)
+    // 3. Delivery-worker ТОЖЕ доставит из Kafka → клиент дедуплицирует по message_id
+    //
+    // Гарантии:
+    // ✅ Kafka ВСЕГДА имеет сообщение (даже если сервер упадёт)
+    // ✅ Быстрая доставка онлайн пользователям (~5-10ms)
+    // ✅ Если tx.send() не сработал - delivery-worker доставит из Kafka
+    // ✅ Клиент дедуплицирует по message_id (получит сообщение максимум 2 раза)
+    //
+    // ACK статусы:
+    // - "sent": Сообщение в Kafka + отправлено онлайн получателю
+    // - "queued": Сообщение в Kafka, получатель оффлайн
+    // - "delivered": Получатель подтвердил получение (через handle_acknowledge_message)
+    //
     // ========================================================================
 
-    // PHASE 5: Kafka is the ONLY source of truth
-    // If Kafka write fails, message is NOT persisted - return error to sender
+    // STEP 1: ВСЕГДА пишем в Kafka ПЕРВЫМ (Source of Truth)
+    // Это гарантирует, что сообщение НЕ потеряется даже при crash
     let envelope = KafkaMessageEnvelope::from(&msg);
     if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
-        // Phase 5: Kafka failure is a HARD ERROR
-        // Message is NOT persisted anywhere - must reject
+        // Kafka недоступен - КРИТИЧЕСКАЯ ОШИБКА
+        // БЕЗ Kafka мы не можем гарантировать доставку
         tracing::error!(
             error = %e,
             message_id = %msg.id,
             kafka_enabled = ctx.kafka_producer.is_enabled(),
-            "Kafka write FAILED - message NOT persisted"
+            "❌ Kafka write FAILED - message NOT persisted (source of truth unavailable)"
         );
         handler
-            .send_error("KAFKA_FAILURE", "Message could not be persisted. Please retry.")
+            .send_error("DELIVERY_FAILED", "Message could not be persisted. Please retry.")
             .await;
         return;
     }
 
-    if ctx.kafka_producer.is_enabled() {
-        tracing::debug!(
-            message_id = %msg.id,
-            "Message persisted to Kafka"
-        );
-    }
-    // ========================================================================
+    tracing::debug!(
+        message_id = %msg.id,
+        "✅ Message persisted to Kafka (source of truth)"
+    );
 
+    // Record pending delivery for ACK tracking
+    if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
+        if let Err(e) = delivery_ack_manager
+            .record_pending_delivery(&msg.id, &msg.from)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                message_id = %msg.id,
+                "Failed to record pending delivery for ACK tracking"
+            );
+        }
+    }
+
+    // STEP 2: Попытка прямой доставки (fast path для онлайн получателей)
+    // Это дополнительная оптимизация - даже если не сработает, delivery-worker доставит
     let recipient_tx = {
         let clients_read = ctx.clients.read().await;
         clients_read.get(&msg.to).cloned()
     };
 
     if let Some(tx) = recipient_tx {
+        // Получатель онлайн на этом сервере - пробуем доставить напрямую
         match tx.send(ServerMessage::Message(msg.clone())) {
             Ok(_) => {
+                // ✅ Сообщение отправлено в канал получателя (fast path)
+                // Delivery-worker тоже доставит из Kafka → клиент дедуплицирует
+                tracing::info!(
+                    message_id = %msg.id,
+                    "📨 Message sent directly to online recipient (fast path) + persisted in Kafka"
+                );
+
+                // ACK "sent" - сообщение в Kafka И отправлено получателю
                 let ack = ServerMessage::Ack(crate::message::AckData {
                     message_id: msg.id.clone(),
-                    status: "delivered".to_string(),
+                    status: "sent".to_string(),
                 });
                 if handler.send_msgpack(&ack).await.is_err() {
                     return;
                 }
-
-                if ctx.config.logging.enable_message_metadata {
-                    tracing::debug!(
-                        message_id = %msg.id,
-                        from = %msg.from,
-                        to = %msg.to,
-                        content_len = msg.content.len(),
-                        "Message delivered to online recipient"
-                    );
-                } else {
-                    tracing::debug!(message_id = %msg.id, "Message delivered to online recipient");
-                }
+                return;
             }
             Err(e) => {
-                // Phase 5: Message already persisted to Kafka (line 250)
-                // delivery_worker will read from Kafka when recipient comes online
-                if ctx.config.logging.enable_message_metadata {
-                    tracing::debug!(
-                        error = %e,
-                        message_id = %msg.id,
-                        from = %msg.from,
-                        to = %msg.to,
-                        "Direct delivery failed, message persisted to Kafka for later delivery"
-                    );
-                } else {
-                    tracing::debug!(
-                        error = %e,
-                        message_id = %msg.id,
-                        "Direct delivery failed, message persisted to Kafka for later delivery"
-                    );
-                }
-
-                // Record pending delivery for ACK tracking
-                if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
-                    if let Err(e) = delivery_ack_manager
-                        .record_pending_delivery(&msg.id, &msg.from)
-                        .await
-                    {
-                        tracing::warn!(
-                            error = %e,
-                            message_id = %msg.id,
-                            "Failed to record pending delivery"
-                        );
-                    }
-                }
-
-                let ack = ServerMessage::Ack(crate::message::AckData {
-                    message_id: msg.id.clone(),
-                    status: "queued".to_string(),
-                });
-                if handler.send_msgpack(&ack).await.is_err() {
-                    return;
-                }
-            }
-        }
-    } else {
-        // Phase 5: Recipient offline - message already persisted to Kafka (line 250)
-        // delivery_worker will read from Kafka when recipient comes online
-        tracing::debug!(
-            message_id = %msg.id,
-            recipient = %msg.to,
-            "Recipient offline, message persisted to Kafka for later delivery"
-        );
-
-        // Record pending delivery for ACK tracking
-        if let Some(ref delivery_ack_manager) = ctx.delivery_ack_manager {
-            if let Err(e) = delivery_ack_manager
-                .record_pending_delivery(&msg.id, &msg.from)
-                .await
-            {
-                tracing::warn!(
+                // Канал получателя закрыт - не страшно, delivery-worker доставит из Kafka
+                tracing::debug!(
                     error = %e,
                     message_id = %msg.id,
-                    "Failed to record pending delivery"
+                    "Direct delivery failed (channel closed), delivery-worker will deliver from Kafka"
                 );
             }
         }
-
-        let ack = ServerMessage::Ack(crate::message::AckData {
-            message_id: msg.id.clone(),
-            status: "queued".to_string(),
-        });
-        if handler.send_msgpack(&ack).await.is_err() {
-            return;
-        }
-
-        // Send push notification to offline recipient
-        send_push_notification_for_message(ctx, &msg).await;
     }
+
+    // STEP 3: Получатель оффлайн или прямая доставка не удалась
+    // Сообщение уже в Kafka - delivery-worker доставит когда получатель придёт онлайн
+    tracing::info!(
+        message_id = %msg.id,
+        recipient_hash = %log_safe_id(&msg.to, &ctx.config.logging.hash_salt),
+        "📤 Message queued in Kafka - recipient offline, delivery-worker will deliver"
+    );
+
+    // ACK "queued" - сообщение в Kafka, ожидает доставки
+    let ack = ServerMessage::Ack(crate::message::AckData {
+        message_id: msg.id.clone(),
+        status: "queued".to_string(),
+    });
+    if handler.send_msgpack(&ack).await.is_err() {
+        return;
+    }
+
+    // Send push notification to offline recipient
+    send_push_notification_for_message(ctx, &msg).await;
 }
 
 

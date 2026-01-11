@@ -1,27 +1,35 @@
-// Delivery Worker - Phase 5: Kafka-only Mode
+// Delivery Worker - Simplified Architecture (Redis Lists)
 // ============================================================================
 //
-// This worker consumes messages from Kafka and delivers them to online users.
+// This worker consumes messages from Kafka and delivers them to users via Redis Lists.
 //
-// Architecture (Phase 5 - Kafka-only):
-// 1. Kafka Consumer reads from "construct-messages" topic (partitioned by recipient_id)
-// 2. For each message:
-//    - Check if processed (Redis deduplication)
-//    - Check if recipient online via user:{user_id}:server_instance_id
-//    - If online: Publish message directly to delivery_message:{server_instance_id} Pub/Sub channel
-//    - If offline: Don't commit offset - leave message in Kafka for retry
-//    - Commit Kafka offset only after successful delivery
-// 3. Redis Pub/Sub listener triggers immediate processing when user comes online
+// УПРОЩЁННАЯ АРХИТЕКТУРА:
+// ============================================================================
 //
-// Key differences from Phase 3:
-// - NO Redis delivery_queue - messages delivered directly via Pub/Sub
-// - NO Redis offline queues - Kafka is the only storage
-// - Direct routing to server instance where user is connected
+// ПРОБЛЕМА старой архитектуры:
+// - Pub/Sub - fire-and-forget - если construct-server не слушает, сообщение ПОТЕРЯНО!
+// - Множество точек отказа: Kafka → delivery-worker → Pub/Sub → construct-server
 //
-// Guarantees:
-// - At-least-once delivery (Kafka consumer may retry)
+// РЕШЕНИЕ:
+// - Используем Redis Lists (RPUSH) вместо Pub/Sub
+// - Redis Lists persistent - сообщения НЕ теряются
+// - construct-server опрашивает delivery_queue через poll_delivery_queue
+//
+// Flow:
+// 1. Kafka Consumer читает сообщения из topic (partitioned by recipient_id)
+// 2. Для каждого сообщения:
+//    - Check deduplication (Redis processed_msg:{message_id})
+//    - Check recipient online via user:{user_id}:server_instance_id
+//    - If online: RPUSH to delivery_queue:{server_instance_id}
+//    - If offline: RPUSH to delivery_queue:offline:{recipient_id}
+//    - Commit Kafka offset
+// 3. construct-server polls delivery_queue и доставляет через WebSocket
+//
+// Гарантии:
+// - At-least-once delivery (Kafka + Redis Lists)
+// - Сообщения НЕ теряются (Redis Lists persistent)
 // - Deduplication via Redis (processed_msg:{message_id})
-// - Ordering per user (Kafka partitioning by recipient_id)
+// - Ordering per user (Kafka partitioning + Redis FIFO)
 // ============================================================================
 
 use anyhow::{Context, Result};
@@ -469,47 +477,61 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     .await
     .context("Failed to check user online status after retries")?;
 
+    // ========================================================================
+    // SIMPLIFIED ARCHITECTURE: Redis Lists instead of Pub/Sub
+    // ========================================================================
+    //
+    // ПРОБЛЕМА Pub/Sub: fire-and-forget - если никто не слушает, сообщение потеряно!
+    // РЕШЕНИЕ: Использовать Redis Lists (RPUSH) - надёжное хранение с гарантией доставки
+    //
+    // Теперь delivery-worker ВСЕГДА сохраняет сообщения в Redis List:
+    // - Пользователь онлайн: delivery_queue:{server_instance_id}
+    // - Пользователь оффлайн: delivery_queue:offline:{recipient_id}
+    //
+    // construct-server опрашивает delivery_queue:{server_instance_id} через poll_delivery_queue
+    // и доставляет сообщения клиентам через tx.send()
+    //
+    // Гарантии:
+    // - Сообщения НЕ теряются (Redis List persistent)
+    // - Periodic polling гарантирует доставку даже без Pub/Sub
+    // - construct-server может быть временно недоступен - сообщения подождут
+    // ========================================================================
+
+    use construct_server::config::SECONDS_PER_DAY;
+    let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
+    
+    // Serialize envelope to MessagePack
+    let message_bytes = rmp_serde::encode::to_vec_named(&envelope)
+        .context("Failed to serialize Kafka envelope to MessagePack")?;
+
     if let Some(server_instance_id) = server_instance_id {
-        // User is online on this server instance - deliver directly via Pub/Sub
-        info!(
-            message_id = %message_id,
-            recipient_hash = %log_safe_id(recipient_id, &state.config.logging.hash_salt),
-            server_instance_id = %server_instance_id,
-            "Recipient is online, delivering message directly via Pub/Sub"
-        );
-
-        // Serialize envelope to MessagePack
-        let message_bytes = rmp_serde::encode::to_vec_named(&envelope)
-            .context("Failed to serialize Kafka envelope to MessagePack")?;
-
-        // Phase 5: Publish message directly to delivery_message channel
-        // Server will listen to this channel and deliver via WebSocket
-        let delivery_channel = format!("{}{}", state.config.redis_channels.delivery_message, server_instance_id);
+        // User is online on this server instance - push to delivery_queue:{server_instance_id}
+        // Server's delivery listener will poll this queue and deliver via WebSocket
+        let delivery_queue_key = format!("{}{}", state.config.delivery_queue_prefix, server_instance_id);
         
-        let _: i64 = execute_redis_with_retry(state, "publish_delivery_message", |conn| {
-            let channel = delivery_channel.clone();
+        let _: i64 = execute_redis_with_retry(state, "push_to_delivery_queue", |conn| {
+            let key = delivery_queue_key.clone();
             let msg = message_bytes.clone();
+            let ttl = ttl_seconds;
             Box::pin(async move {
-                redis::cmd("PUBLISH")
-                    .arg(&channel)
-                    .arg(&msg)
-                    .query_async(conn)
-                    .await
+                // RPUSH to maintain FIFO order
+                let _: () = redis::cmd("RPUSH").arg(&key).arg(&msg).query_async(conn).await?;
+                // Refresh TTL on the key
+                let _: () = redis::cmd("EXPIRE").arg(&key).arg(ttl).query_async(conn).await?;
+                Ok::<i64, redis::RedisError>(1)
             })
         })
         .await
-        .context("Failed to publish delivery message after retries")?;
+        .context("Failed to push message to delivery queue after retries")?;
         
         info!(
             message_id = %message_id,
-            channel = %delivery_channel,
-            "Message published to delivery channel (Phase 5 - direct Pub/Sub delivery)"
+            recipient_hash = %log_safe_id(recipient_id, &state.config.logging.hash_salt),
+            queue_key = %delivery_queue_key,
+            "📤 Message pushed to delivery_queue (recipient online) - server will poll and deliver"
         );
         
-        // 3. Mark message as processed (7-day TTL)
-        // Phase 5: After successful Pub/Sub publication, we commit Kafka offset
-        use construct_server::config::SECONDS_PER_DAY;
-        let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
+        // Mark message as processed
         let _: String = execute_redis_with_retry(state, "mark_message_processed", |conn| {
             let key = dedup_key.clone();
             let ttl = ttl_seconds;
@@ -524,14 +546,6 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         })
         .await
         .context("Failed to mark message as processed after retries")?;
-        
-        // SECURITY: Hash recipient_id for privacy in production logs
-        let salt = &state.config.logging.hash_salt;
-        info!(
-            message_id = %message_id,
-            recipient_hash = %log_safe_id(recipient_id, salt),
-            "Message delivered directly via Pub/Sub (Phase 5)"
-        );
         
         return Ok(()); // Success - Kafka offset will be committed
     } else {

@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use futures_util::stream::StreamExt;
 use http_body_util::Full;
 use redis::AsyncCommands;
 use std::collections::HashMap;
@@ -310,160 +309,62 @@ fn spawn_delivery_listener(
     server_instance_id: String,
     config: Arc<Config>,
 ) {
-    let redis_url = config.redis_url.clone();
+    // ========================================================================
+    // SIMPLIFIED DELIVERY LISTENER
+    // ========================================================================
+    //
+    // АРХИТЕКТУРА: Polling Redis List (без Pub/Sub)
+    //
+    // delivery-worker сохраняет сообщения в Redis List:
+    //   delivery_queue:{server_instance_id}
+    //
+    // Этот listener периодически опрашивает очередь и доставляет сообщения
+    // клиентам через tx.send() → WebSocket
+    //
+    // Преимущества:
+    // - Нет зависимости от Pub/Sub (который был ненадёжным)
+    // - Redis Lists persistent - сообщения НЕ теряются
+    // - Простая архитектура с минимумом точек отказа
+    //
+    // ========================================================================
+
     let poll_interval = config.delivery_poll_interval_ms;
     let dead_letter_queue = config.redis_channels.dead_letter_queue.clone();
 
-    tokio::spawn(async move {
-        tracing::info!(
-            "Delivery listener started for instance: {}",
-            server_instance_id
-        );
+    let redis_url = config.redis_url.clone();
 
-        // Create a separate Redis client for the dead-letter queue
+    tracing::info!(
+        server_instance_id = %server_instance_id,
+        poll_interval_ms = poll_interval,
+        "🚀 Spawning delivery listener (simplified architecture - polling Redis List)"
+    );
+
+    tokio::spawn(async move {
+        // Create Redis connection for dead-letter queue (for malformed messages)
         let mut dlq_conn: Option<redis::aio::MultiplexedConnection> =
             match redis::Client::open(redis_url.as_str()) {
                 Ok(client) => match client.get_multiplexed_async_connection().await {
                     Ok(conn) => Some(conn),
                     Err(e) => {
-                        tracing::error!(error = %e, "Failed to get Redis connection for DLQ");
+                        tracing::warn!(error = %e, "Failed to get Redis connection for DLQ - malformed messages will be dropped");
                         None
                     }
                 },
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to create Redis client for DLQ");
+                    tracing::warn!(error = %e, "Failed to create Redis client for DLQ - malformed messages will be dropped");
                     None
                 }
             };
 
-        // Create a separate Redis client for Pub/Sub
-        let redis_client = match redis::Client::open(redis_url.as_str()) {
-            Ok(client) => client,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to create Redis client for Pub/Sub");
-                return;
-            }
-        };
-
-        let mut pubsub_conn = match redis_client.get_async_pubsub().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to connect to Redis Pub/Sub");
-                return;
-            }
-        };
-
-        // Phase 5: Subscribe to direct delivery channel (messages come directly from worker)
-        let delivery_channel = format!("{}{}", config.redis_channels.delivery_message, server_instance_id);
-        if let Err(e) = pubsub_conn.subscribe(&delivery_channel).await {
-            tracing::error!(error = %e, channel = %delivery_channel, "Failed to subscribe to delivery message channel");
-            return;
-        }
-        
-        // Legacy: Also subscribe to notification channel for backward compatibility
-        let notification_channel = format!("{}{}", config.redis_channels.delivery_notification, server_instance_id);
-        if let Err(e) = pubsub_conn.subscribe(&notification_channel).await {
-            tracing::error!(error = %e, channel = %notification_channel, "Failed to subscribe to notification channel");
-            return;
-        }
-
         tracing::info!(
-            delivery_channel = %delivery_channel,
-            notification_channel = %notification_channel,
-            "Subscribed to Redis Pub/Sub channels"
+            server_instance_id = %server_instance_id,
+            "✅ Delivery listener started - polling delivery_queue:{}", server_instance_id
         );
 
-        // Use a notify to trigger immediate polling from pub/sub
-        let notify = Arc::new(tokio::sync::Notify::new());
-        let notify_clone = notify.clone();
-
-        // Phase 5: Spawn a task to listen for direct delivery messages via Pub/Sub
-        let clients_clone = clients.clone();
-        let delivery_channel_clone = delivery_channel.clone();
-        let notification_channel_clone = notification_channel.clone();
-        let _pubsub_listener = tokio::spawn(async move {
-            let mut stream = pubsub_conn.on_message();
-            while let Some(msg) = stream.next().await {
-                let channel: String = msg.get_channel_name().to_string();
-                
-                if channel == delivery_channel_clone {
-                    // Phase 5: Direct message delivery from worker
-                    tracing::debug!("Received direct delivery message via Pub/Sub");
-                    
-                    let payload: Vec<u8> = msg.get_payload().unwrap_or_default();
-                    
-                    // Parse as KafkaMessageEnvelope (MessagePack format from worker)
-                    if let Ok(envelope) = rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(&payload) {
-                        // Convert envelope to ChatMessage for WebSocket delivery
-                        // Note: KafkaMessageEnvelope uses encrypted_payload, not content
-                        // But ChatMessage expects content field - we'll use encrypted_payload
-                        // Convert KafkaMessageEnvelope to ChatMessage
-                        let ephemeral_key = envelope.ephemeral_public_key
-                            .as_ref()
-                            .and_then(|k| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok())
-                            .unwrap_or_else(|| vec![0u8; 32]); // Default 32 bytes if decoding fails
-                        
-                        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
-                            .unwrap_or_else(chrono::Utc::now)
-                            .timestamp() as u64;
-                        
-                        let chat_msg = message::ChatMessage {
-                            id: envelope.message_id.clone(),
-                            from: envelope.sender_id.clone(),
-                            to: envelope.recipient_id.clone(),
-                            content: envelope.encrypted_payload.clone(), // Use encrypted payload as content
-                            ephemeral_public_key: ephemeral_key,
-                            message_number: envelope.message_number.unwrap_or(0),
-                            timestamp,
-                        };
-                        
-                        let clients_guard = clients_clone.read().await;
-                        if let Some(tx) = clients_guard.get(&envelope.recipient_id) {
-                            let server_msg = message::ServerMessage::Message(chat_msg.clone());
-                            if tx.send(server_msg).is_ok() {
-                                tracing::info!(
-                                    message_id = %envelope.message_id,
-                                    recipient_id = %envelope.recipient_id,
-                                    "Delivered message directly via Pub/Sub (Phase 5)"
-                                );
-                            } else {
-                                tracing::warn!(
-                                    message_id = %envelope.message_id,
-                                    recipient_id = %envelope.recipient_id,
-                                    "Failed to deliver message - client channel closed"
-                                );
-                            }
-                        } else {
-                            tracing::warn!(
-                                message_id = %envelope.message_id,
-                                recipient_id = %envelope.recipient_id,
-                                "Recipient not found in clients map"
-                            );
-                        }
-                    } else {
-                        tracing::warn!("Failed to parse direct delivery message as KafkaMessageEnvelope (MessagePack)");
-                    }
-                } else if channel == notification_channel_clone {
-                    // Legacy: Notification channel - trigger polling for delivery_queue
-                    tracing::debug!("Received delivery notification via Pub/Sub (legacy mode)");
-                    notify_clone.notify_one();
-                } else {
-                    tracing::debug!("Received message from unknown channel: {}", channel);
-                }
-            }
-            tracing::warn!("Pub/Sub stream ended unexpectedly");
-        });
-
+        // Main polling loop - simple and reliable
         loop {
-            // Wait for either pub/sub notification or periodic polling interval
-            tokio::select! {
-                _ = notify.notified() => {
-                    tracing::debug!("Triggered poll by Pub/Sub notification");
-                }
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(poll_interval)) => {
-                    tracing::trace!("Triggered poll by periodic interval");
-                }
-            }
+            // Sleep before polling (configurable interval)
+            tokio::time::sleep(tokio::time::Duration::from_millis(poll_interval)).await;
 
             // Poll the delivery queue
             let messages = {
