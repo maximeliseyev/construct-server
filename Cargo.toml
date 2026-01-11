@@ -116,7 +116,9 @@ tonic-build = "0.12"
 
 [features]
 default = []
-post-quantum = ["saorsa-pqc"]
+# post-quantum feature is defined but disabled (no dependency yet)
+# When saorsa-pqc dependency is added, uncomment: post-quantum = ["saorsa-pqc"]
+post-quantum = []
 
 [dev-dependencies]
 anyhow = "1.0"
