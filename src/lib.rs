@@ -35,6 +35,7 @@ pub mod kafka;
 pub mod message;
 pub mod message_gateway;
 pub mod metrics;
+pub mod pqc;
 pub mod queue;
 pub mod server_registry;
 pub mod user_id;

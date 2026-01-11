@@ -111,6 +111,10 @@ impl MessageProducer {
     pub async fn send_message(&self, envelope: &KafkaMessageEnvelope) -> Result<(i32, i64)> {
         // Skip if Kafka disabled (Phase 1 testing)
         if !self.enabled {
+            tracing::warn!(
+                message_id = %envelope.message_id,
+                "Kafka is DISABLED - message NOT sent to Kafka (dummy response)"
+            );
             return Ok((-1, -1)); // Dummy partition/offset
         }
 
