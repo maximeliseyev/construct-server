@@ -79,6 +79,15 @@ zeroize = "1.8"
 subtle = "2.6"
 hex = "0.4"
 
+# Post-Quantum Cryptography (FIPS 203/204)
+# TODO: Choose and integrate PQ library (saorsa-pqc, ml-kem/ml-dsa, or liboqs-rust)
+# Note: This is optional - enable with feature flag for production deployment
+# When ready, uncomment and specify the library:
+# saorsa-pqc = { version = "0.3", optional = true, default-features = false }
+# OR
+# ml-kem = { version = "0.1", optional = true }
+# ml-dsa = { version = "0.1", optional = true }
+
 # Authentication & Security
 bcrypt = "0.16"
 jsonwebtoken = "9.3"
@@ -104,6 +113,10 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [build-dependencies]
 tonic-build = "0.12"
+
+[features]
+default = []
+post-quantum = ["saorsa-pqc"]
 
 [dev-dependencies]
 anyhow = "1.0"
