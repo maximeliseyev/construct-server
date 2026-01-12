@@ -167,6 +167,27 @@ pub struct DeleteAccountData {
 }
 
 // ============================================================================
+// Media Upload Token Request/Response
+// ============================================================================
+
+/// Request for media upload token
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestMediaTokenData {
+    /// Request ID for correlation
+    pub request_id: String,
+}
+
+/// Dummy message for traffic analysis protection
+/// Server will ignore these messages but they help mask real traffic patterns
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DummyMessageData {
+    /// Base64-encoded random bytes
+    pub payload: String,
+}
+
+// ============================================================================
 // ClientMessage Enum - Internally Tagged Format
 // ============================================================================
 
@@ -187,6 +208,8 @@ pub enum ClientMessage {
     RegisterDeviceToken(RegisterDeviceTokenData),
     UnregisterDeviceToken(UnregisterDeviceTokenData),
     UpdateDeviceTokenPreferences(UpdateDeviceTokenPreferencesData),
+    RequestMediaToken(RequestMediaTokenData),
+    Dummy(DummyMessageData),  // Traffic protection: dummy message (ignored by server)
 }
 
 // ============================================================================
@@ -273,6 +296,8 @@ pub enum ServerMessage {
     DeviceTokenRegistered,
     DeviceTokenUnregistered,
     DeviceTokenPreferencesUpdated,
+    MediaToken(crate::handlers::media::MediaTokenResponse),
+    MediaTokenError(crate::handlers::media::MediaTokenError),
 }
 
 // ============================================================================

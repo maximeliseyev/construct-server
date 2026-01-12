@@ -41,8 +41,12 @@ primary_region = 'ams'
   MAX_CONNECTIONS_PER_USER = "5"
 
   # Delivery worker config
-  DELIVERY_POLL_INTERVAL_MS = "10000"
-  HEARTBEAT_INTERVAL_SECS = "90"  # How often server updates its registration
+  # OPTIMIZED: Increased polling interval from 10s to 30s to reduce Redis commands
+  # This reduces Redis command usage by ~66% while maintaining acceptable latency
+  DELIVERY_POLL_INTERVAL_MS = "30000"
+  # OPTIMIZED: Increased heartbeat from 90s to 180s (TTL is 270s, so this is safe)
+  # Reduces Redis heartbeat commands by 50%
+  HEARTBEAT_INTERVAL_SECS = "180"  # How often server updates its registration
   SERVER_REGISTRY_TTL_SECS = "270"  # TTL for delivery_queue keys (must be > HEARTBEAT_INTERVAL_SECS)
 
   # Redis prefixes

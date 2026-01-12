@@ -10,7 +10,8 @@ const DEFAULT_PORT: u16 = 8080;
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 
 // Default time intervals (in seconds)
-const DEFAULT_HEARTBEAT_INTERVAL_SECS: i64 = 90;
+// OPTIMIZED: Increased default heartbeat interval from 90s to 180s to reduce Redis commands
+const DEFAULT_HEARTBEAT_INTERVAL_SECS: i64 = 180;
 const DEFAULT_SERVER_REGISTRY_TTL_SECS: i64 = 270;
 
 // Default TTL values (in days)
@@ -19,7 +20,9 @@ const DEFAULT_SESSION_TTL_DAYS: i64 = 30;
 const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 90;
 
 // Default polling interval (in milliseconds)
-const DEFAULT_DELIVERY_POLL_INTERVAL_MS: u64 = 10000;
+// OPTIMIZED: Increased default polling interval from 10s to 30s to reduce Redis commands
+// This reduces Redis command usage by ~66% while maintaining acceptable latency for real-time messaging
+const DEFAULT_DELIVERY_POLL_INTERVAL_MS: u64 = 30000;
 
 // Time conversion constants
 pub const SECONDS_PER_MINUTE: i64 = 60;
@@ -27,8 +30,21 @@ pub const SECONDS_PER_HOUR: i64 = 3600;
 pub const SECONDS_PER_DAY: i64 = 86400;
 
 // Message size limits (in bytes)
-pub const MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024; // 1 MB
-pub const MAX_REQUEST_BODY_SIZE: usize = 2 * 1024 * 1024; // 2 MB (includes JSON overhead)
+// ============================================================================
+// ВАЖНО: Разные лимиты для разных типов контента
+// 
+// WebSocket сообщения (текст + метаданные):
+// - 64 KB достаточно для ~32K символов UTF-8 + криптографические метаданные
+// - Больший размер указывает на атаку или медиафайлы (которые идут через CDN)
+//
+// HTTP запросы:
+// - 2 MB для API endpoints (key bundles, etc.)
+// - Медиафайлы загружаются отдельно на CDN (до 100 MB)
+// ============================================================================
+pub const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024; // 64 KB - WebSocket text messages
+pub const MAX_MESSAGE_SIZE: usize = MAX_WEBSOCKET_MESSAGE_SIZE; // Alias for backward compat
+pub const MAX_REQUEST_BODY_SIZE: usize = 2 * 1024 * 1024; // 2 MB - HTTP API requests
+pub const MAX_MEDIA_FILE_SIZE: usize = 100 * 1024 * 1024; // 100 MB - Media files on CDN
 
 // ============================================================================
 // Configuration Structures
@@ -91,6 +107,9 @@ pub struct RedisKeyPrefixes {
     pub key_bundle: String,
     /// Prefix for connection tracking: "connections:{user_id}"
     pub connections: String,
+    /// Prefix for direct delivery deduplication: "delivered_direct:{message_id}"
+    /// Used to skip delivery-worker for messages already delivered via tx.send()
+    pub delivered_direct: String,
 }
 
 /// Redis channel names configuration
@@ -122,6 +141,21 @@ pub struct SecurityConfig {
     pub max_connections_per_user: u32,
     pub key_bundle_cache_hours: i64,
     pub rate_limit_block_duration_seconds: i64,
+}
+
+/// Media server configuration
+#[derive(Clone, Debug)]
+pub struct MediaConfig {
+    /// Whether media uploads are enabled
+    pub enabled: bool,
+    /// Media server base URL (e.g., "https://media.example.com")
+    pub base_url: String,
+    /// Shared secret for generating upload tokens (must match MEDIA_UPLOAD_TOKEN_SECRET on media-server)
+    pub upload_token_secret: String,
+    /// Maximum file size in bytes (default: 100MB)
+    pub max_file_size: usize,
+    /// Rate limit: uploads per hour per user
+    pub rate_limit_per_hour: u32,
 }
 
 /// Kafka configuration for reliable message delivery
@@ -250,6 +284,7 @@ pub struct Config {
     pub worker: WorkerConfig,
     pub redis_key_prefixes: RedisKeyPrefixes,
     pub redis_channels: RedisChannels,
+    pub media: MediaConfig,
 
     // Legacy aliases (for backward compatibility)
     // TODO: Remove after updating all usages to config.federation.*
@@ -701,6 +736,8 @@ impl Config {
                     .unwrap_or_else(|_| "key_bundle:".to_string()),
                 connections: std::env::var("REDIS_KEY_PREFIX_CONNECTIONS")
                     .unwrap_or_else(|_| "connections:".to_string()),
+                delivered_direct: std::env::var("REDIS_KEY_PREFIX_DELIVERED_DIRECT")
+                    .unwrap_or_else(|_| "delivered_direct:".to_string()),
             },
 
             // Redis channels configuration
@@ -711,6 +748,25 @@ impl Config {
                     .unwrap_or_else(|_| "delivery_message:".to_string()),
                 delivery_notification: std::env::var("REDIS_CHANNEL_DELIVERY_NOTIFICATION")
                     .unwrap_or_else(|_| "delivery_notification:".to_string()),
+            },
+
+            // Media server configuration
+            media: MediaConfig {
+                enabled: std::env::var("MEDIA_ENABLED")
+                    .map(|v| v.to_lowercase() == "true")
+                    .unwrap_or(false),
+                base_url: std::env::var("MEDIA_BASE_URL")
+                    .unwrap_or_else(|_| "".to_string()),
+                upload_token_secret: std::env::var("MEDIA_UPLOAD_TOKEN_SECRET")
+                    .unwrap_or_else(|_| "".to_string()),
+                max_file_size: std::env::var("MEDIA_MAX_FILE_SIZE")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(100 * 1024 * 1024), // 100MB
+                rate_limit_per_hour: std::env::var("MEDIA_RATE_LIMIT_PER_HOUR")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(50),
             },
         })
     }

@@ -279,6 +279,20 @@ impl MessageQueue {
         Ok(count)
     }
 
+    /// Generic rate limiter: increments counter for a given key with specified TTL
+    /// Returns the current count
+    pub async fn increment_rate_limit(&mut self, key: &str, ttl_seconds: i64) -> Result<i64> {
+        let full_key = format!("rate:{}", key);
+
+        let count: i64 = self.client.incr(&full_key, 1).await?;
+
+        if count == 1 {
+            let _: () = self.client.expire(&full_key, ttl_seconds).await?;
+        }
+
+        Ok(count)
+    }
+
     /// Increments failed login attempt counter for rate limiting
     /// Returns the total count of failed login attempts in the last 15 minutes
     pub async fn increment_failed_login_count(&mut self, username: &str) -> Result<u32> {
@@ -623,5 +637,55 @@ impl MessageQueue {
         tracing::debug!(queue_key = %queue_key, ttl = ttl_seconds, "Set TTL for key");
 
         Ok(())
+    }
+
+    /// Mark a message as delivered directly via tx.send() (fast path)
+    /// ========================================================================
+    /// УМНАЯ ДЕДУПЛИКАЦИЯ (Вариант D):
+    /// 
+    /// После успешного tx.send() помечаем сообщение в Redis:
+    /// SET delivered_direct:{message_id} 1 EX 3600
+    /// 
+    /// delivery-worker перед доставкой проверяет:
+    /// IF EXISTS delivered_direct:{message_id} → SKIP (уже доставлено)
+    /// 
+    /// Это позволяет:
+    /// 1. Kafka остаётся source of truth
+    /// 2. Быстрая доставка через tx.send()
+    /// 3. Нет дублирования - delivery-worker не доставляет повторно
+    /// 4. TTL 1 час - ключи автоматически очищаются
+    /// ========================================================================
+    pub async fn mark_delivered_direct(&mut self, message_id: &str) -> Result<()> {
+        let key = format!("{}{}", self.config.redis_key_prefixes.delivered_direct, message_id);
+        const DELIVERED_DIRECT_TTL: i64 = SECONDS_PER_HOUR; // 1 hour TTL
+
+        self.client
+            .set_ex::<_, _, ()>(&key, "1", DELIVERED_DIRECT_TTL as u64)
+            .await?;
+
+        tracing::debug!(
+            message_id = %message_id,
+            ttl_seconds = DELIVERED_DIRECT_TTL,
+            "Marked message as delivered directly (delivery-worker will skip)"
+        );
+
+        Ok(())
+    }
+
+    /// Check if a message was already delivered directly via tx.send()
+    /// Used by delivery-worker to skip messages already delivered
+    pub async fn is_delivered_direct(&mut self, message_id: &str) -> Result<bool> {
+        let key = format!("{}{}", self.config.redis_key_prefixes.delivered_direct, message_id);
+
+        let exists: bool = self.client.exists(&key).await?;
+
+        if exists {
+            tracing::debug!(
+                message_id = %message_id,
+                "Message was already delivered directly - skipping delivery-worker delivery"
+            );
+        }
+
+        Ok(exists)
     }
 }

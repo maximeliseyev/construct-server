@@ -107,18 +107,30 @@ pub async fn handle_send_message(
     }
     // ========================================================================
 
-    // SECURITY: Validate message size to prevent DoS
-    if msg.content.len() > crate::config::MAX_MESSAGE_SIZE {
+    // SECURITY: Validate message size to prevent DoS and resource exhaustion
+    // ========================================================================
+    // Лимит 64 KB для WebSocket сообщений:
+    // - Достаточно для ~32K символов UTF-8 + криптографические метаданные
+    // - Медиафайлы (фото, видео, документы) должны загружаться на CDN отдельно
+    // - Превышение лимита = возможная атака или неправильное использование API
+    // ========================================================================
+    let message_size = msg.content.len();
+    if message_size > crate::config::MAX_WEBSOCKET_MESSAGE_SIZE {
         tracing::warn!(
-            size = msg.content.len(),
-            limit = crate::config::MAX_MESSAGE_SIZE,
+            size_bytes = message_size,
+            size_kb = message_size / 1024,
+            limit_kb = crate::config::MAX_WEBSOCKET_MESSAGE_SIZE / 1024,
             sender_hash = %log_safe_id(&sender_id, &ctx.config.logging.hash_salt),
-            "Message content too large"
+            "Message content too large - possible abuse or media sent inline instead of via CDN"
         );
         handler
             .send_error(
                 "MESSAGE_TOO_LARGE",
-                &format!("Message size exceeds maximum of {} bytes", crate::config::MAX_MESSAGE_SIZE),
+                &format!(
+                    "Message size ({} KB) exceeds maximum of {} KB. For media files, use the media upload API.",
+                    message_size / 1024,
+                    crate::config::MAX_WEBSOCKET_MESSAGE_SIZE / 1024
+                ),
             )
             .await;
         return;
@@ -433,11 +445,24 @@ pub async fn handle_send_message(
         match tx.send(ServerMessage::Message(msg.clone())) {
             Ok(_) => {
                 // ✅ Сообщение отправлено в канал получателя (fast path)
-                // Delivery-worker тоже доставит из Kafka → клиент дедуплицирует
                 tracing::info!(
                     message_id = %msg.id,
                     "📨 Message sent directly to online recipient (fast path) + persisted in Kafka"
                 );
+
+                // УМНАЯ ДЕДУПЛИКАЦИЯ: Помечаем сообщение как доставленное напрямую
+                // delivery-worker проверит этот ключ и пропустит доставку
+                {
+                    let mut queue = ctx.queue.lock().await;
+                    if let Err(e) = queue.mark_delivered_direct(&msg.id).await {
+                        // Не критично - в худшем случае клиент получит дубликат
+                        tracing::warn!(
+                            error = %e,
+                            message_id = %msg.id,
+                            "Failed to mark message as delivered directly (client may receive duplicate)"
+                        );
+                    }
+                }
 
                 // ACK "sent" - сообщение в Kafka И отправлено получателю
                 let ack = ServerMessage::Ack(crate::message::AckData {

@@ -5,6 +5,7 @@ pub mod device_tokens;
 pub mod federation;
 mod key_rotation;
 pub mod keys;
+pub mod media;
 pub mod messages;
 pub mod session;
 mod ws_messages;
@@ -156,6 +157,22 @@ pub async fn handle_websocket(
                                     data.enabled,
                                 )
                                 .await;
+                            }
+
+                            Ok(ClientMessage::RequestMediaToken(request)) => {
+                                media::handle_media_token_request(
+                                    &mut handler,
+                                    &ctx,
+                                    request,
+                                )
+                                .await;
+                            }
+
+                            Ok(ClientMessage::Dummy(_data)) => {
+                                // Dummy messages are for traffic analysis protection
+                                // Server silently ignores them (no response needed)
+                                #[cfg(debug_assertions)]
+                                tracing::debug!("Received dummy message from {}", addr);
                             }
 
                             Err(e) => {

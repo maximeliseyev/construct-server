@@ -39,8 +39,10 @@ primary_region = 'ams'
   DB_IDLE_TIMEOUT_SECS = "600"
 
   # Delivery worker config
-  DELIVERY_POLL_INTERVAL_MS = "10000"
-  HEARTBEAT_INTERVAL_SECS = "90"
+  # OPTIMIZED: Increased polling interval from 10s to 30s to reduce Redis commands
+  DELIVERY_POLL_INTERVAL_MS = "30000"
+  # OPTIMIZED: Increased heartbeat from 90s to 180s to reduce Redis commands
+  HEARTBEAT_INTERVAL_SECS = "180"
   SERVER_REGISTRY_TTL_SECS = "270"
 
   # Redis prefixes
