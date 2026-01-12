@@ -47,9 +47,13 @@ ENV PATH="/usr/local/bin:${PATH}"
 COPY --from=builder --chmod=+x /app/target/release/construct-server /usr/local/bin/construct-server
 COPY --from=builder --chmod=+x /app/target/release/delivery-worker /usr/local/bin/delivery-worker
 COPY --from=builder --chmod=+x /app/target/release/message-gateway /usr/local/bin/message-gateway
+COPY --from=builder --chmod=+x /app/target/release/media-server /usr/local/bin/media-server
 
 # Copy migrations for the main server
 COPY migrations /app/migrations
+
+# Create data directory for media-server (will be mounted as volume in production)
+RUN mkdir -p /data/media
 
 # Expose port (used by all services)
 EXPOSE 8080

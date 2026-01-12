@@ -461,8 +461,50 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         return Ok(()); // Return success to commit offset
     }
 
-    // 2. Phase 5: Check if recipient is online by looking up their server instance
-    // Instead of searching delivery_queue keys, we directly check user:{user_id}:server_instance_id
+    // 2. УМНАЯ ДЕДУПЛИКАЦИЯ: Check if message was already delivered directly via tx.send()
+    // ========================================================================
+    // Если construct-server успешно доставил через tx.send(), он помечает:
+    // SET delivered_direct:{message_id} 1 EX 3600
+    // 
+    // Мы проверяем этот ключ и пропускаем доставку, чтобы избежать дубликатов
+    // Это снижает нагрузку на сервер и сеть
+    // ========================================================================
+    let delivered_direct_key = format!("{}{}", state.config.redis_key_prefixes.delivered_direct, message_id);
+
+    let was_delivered_direct: i64 = execute_redis_with_retry(state, "check_delivered_direct", |conn| {
+        let key = delivered_direct_key.clone();
+        Box::pin(async move { redis::cmd("EXISTS").arg(&key).query_async(conn).await })
+    })
+    .await
+    .context("Failed to check delivered_direct after retries")?;
+
+    if was_delivered_direct > 0 {
+        debug!(
+            message_id = %message_id,
+            "Message was already delivered directly via tx.send() - skipping delivery-worker delivery"
+        );
+        
+        // Mark as processed (deduplication) and commit offset
+        let _: String = execute_redis_with_retry(state, "mark_skipped_message_processed", |conn| {
+            let key = dedup_key.clone();
+            let ttl = state.config.message_ttl_days * construct_server::config::SECONDS_PER_DAY;
+            Box::pin(async move {
+                redis::cmd("SETEX")
+                    .arg(&key)
+                    .arg(ttl)
+                    .arg("1")
+                    .query_async(conn)
+                    .await
+            })
+        })
+        .await
+        .context("Failed to mark skipped message as processed")?;
+        
+        return Ok(()); // Success - commit Kafka offset
+    }
+
+    // 3. Check if recipient is online by looking up their server instance
+    // Look up user:{user_id}:server_instance_id to find which server handles this user
     let user_server_key = format!("{}{}:server_instance_id", state.config.redis_key_prefixes.user, recipient_id);
     
     let server_instance_id: Option<String> = execute_redis_with_retry(state, "check_user_online", |conn| {

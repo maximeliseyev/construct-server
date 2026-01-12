@@ -1,0 +1,79 @@
+# ============================================================================
+# Construct Media Server - Fly.io Configuration
+# ============================================================================
+#
+# Privacy-focused media storage server with:
+# - No IP logging
+# - No user tracking
+# - Auto-deletion after TTL
+# - E2E encrypted blob storage only
+#
+# Deploy: flyctl deploy --config ops/fly.media.toml
+#
+# ============================================================================
+
+app = "construct-media"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Command to run (override default CMD)
+[processes]
+  app = "media-server"
+
+[env]
+  RUST_LOG = "info"
+  MEDIA_PORT = "8080"
+  MEDIA_DATA_DIR = "/data/media"
+  MEDIA_MAX_FILE_SIZE = "104857600"  # 100MB
+  MEDIA_TTL_DAYS = "7"
+
+# Persistent storage for media files
+[mounts]
+  source = "media_data"
+  destination = "/data"
+  initial_size = "10"  # 10GB, auto-expands
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # Keep running for uploads
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]  # Link to the app process
+  
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 100
+    soft_limit = 80
+
+  # Health check
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+# ============================================================================
+# Secrets (set via flyctl secrets set):
+# ============================================================================
+#
+# Required:
+#   MEDIA_UPLOAD_TOKEN_SECRET - Shared secret with construct-server for token validation
+#                               Must be at least 32 characters
+#                               Generate: openssl rand -hex 32
+#
+# Optional:
+#   MEDIA_ADMIN_TOKEN - Token for admin operations (delete)
+#
+# Example:
+#   flyctl secrets set MEDIA_UPLOAD_TOKEN_SECRET=$(openssl rand -hex 32) --app construct-media
+#
+# ============================================================================

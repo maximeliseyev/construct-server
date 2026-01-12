@@ -1,9 +1,9 @@
-.PHONY: help build run-server run-worker run-gateway test check clean \
+.PHONY: help build run-server run-worker run-gateway run-media test check clean \
 	docker-up docker-down docker-logs docker-build docker-rebuild \
-	deploy-server deploy-worker deploy-gateway deploy-all check-before-deploy \
-	secrets-server secrets-worker secrets-gateway secrets-all \
-	logs-server logs-worker logs-gateway \
-	status-server status-worker status-gateway status-all \
+	deploy-server deploy-worker deploy-gateway deploy-media deploy-all check-before-deploy \
+	secrets-server secrets-worker secrets-gateway secrets-media secrets-all \
+	logs-server logs-worker logs-gateway logs-media \
+	status-server status-worker status-gateway status-media status-all \
 	db-migrate db-up db-down
 
 # ============================================================================
@@ -20,6 +20,7 @@ help:
 	@echo "  make run-server         Run WebSocket server locally"
 	@echo "  make run-worker         Run delivery worker locally"
 	@echo "  make run-gateway        Run message gateway locally"
+	@echo "  make run-media          Run media server locally"
 	@echo "  make test               Run all tests"
 	@echo "  make check              Check code (clippy + fmt)"
 	@echo "  make fmt                Format code"
@@ -36,21 +37,25 @@ help:
 	@echo "  make deploy-server      Deploy WebSocket server to Fly.io"
 	@echo "  make deploy-worker      Deploy delivery worker to Fly.io"
 	@echo "  make deploy-gateway     Deploy message gateway to Fly.io"
-	@echo "  make deploy-all         Deploy all services (server + worker + gateway)"
+	@echo "  make deploy-media      Deploy media server to Fly.io"
+	@echo "  make deploy-all         Deploy all services"
 	@echo ""
 	@echo "🔐 Fly.io Secrets Management:"
 	@echo "  make secrets-server     Set secrets for construct-server"
 	@echo "  make secrets-worker     Set secrets for construct-delivery-worker"
 	@echo "  make secrets-gateway    Set secrets for construct-message-gateway"
+	@echo "  make secrets-media      Set secrets for construct-media"
 	@echo "  make secrets-all        Set secrets for all services (from .env.deploy)"
 	@echo ""
 	@echo "📊 Fly.io Monitoring:"
 	@echo "  make logs-server        View WebSocket server logs"
 	@echo "  make logs-worker        View delivery worker logs"
 	@echo "  make logs-gateway       View message gateway logs"
+	@echo "  make logs-media         View media server logs"
 	@echo "  make status-server      Show construct-server status"
 	@echo "  make status-worker      Show construct-delivery-worker status"
 	@echo "  make status-gateway     Show construct-message-gateway status"
+	@echo "  make status-media       Show construct-media status"
 	@echo "  make status-all         Show status of all services"
 	@echo ""
 	@echo "🗄️  Database:"
@@ -83,6 +88,10 @@ run-worker:
 run-gateway:
 	@echo "🌐 Running message gateway locally..."
 	RUST_LOG=info cargo run --bin message-gateway
+
+run-media:
+	@echo "📸 Running media server locally..."
+	RUST_LOG=info MEDIA_UPLOAD_TOKEN_SECRET=dev-secret-minimum-32-chars-long cargo run --bin media-server
 
 test:
 	@echo "🧪 Running tests..."
@@ -145,6 +154,11 @@ deploy-gateway: check-before-deploy
 	fly deploy . --config ops/fly.gateway.toml --dockerfile ./ops/Dockerfile --app construct-message-gateway
 	@echo "✅ Gateway deployed. View logs: make logs-gateway"
 
+deploy-media: check-before-deploy
+	@echo "📸 Deploying media server to Fly.io..."
+	fly deploy . --config ops/fly.media.toml --dockerfile ./ops/Dockerfile --app construct-media
+	@echo "✅ Media server deployed. View logs: make logs-media"
+
 check-before-deploy:
 	@if [ -z "$$SKIP_CHECK" ]; then \
 		echo "🔍 Checking code compilation before deploy..."; \
@@ -159,14 +173,17 @@ deploy-all:
 	@echo ""
 	@echo "🚀 Deploying all services to Fly.io..."
 	@echo ""
-	@echo "1/3 Deploying WebSocket server..."
+	@echo "1/4 Deploying WebSocket server..."
 	@SKIP_CHECK=1 make deploy-server
 	@echo ""
-	@echo "2/3 Deploying delivery worker..."
+	@echo "2/4 Deploying delivery worker..."
 	@SKIP_CHECK=1 make deploy-worker
 	@echo ""
-	@echo "3/3 Deploying message gateway..."
+	@echo "3/4 Deploying message gateway..."
 	@SKIP_CHECK=1 make deploy-gateway
+	@echo ""
+	@echo "4/4 Deploying media server..."
+	@SKIP_CHECK=1 make deploy-media
 	@echo ""
 	@echo "✅ All services deployed!"
 
@@ -188,6 +205,14 @@ secrets-gateway:
 	@echo "🔐 Setting secrets for construct-message-gateway from .env..."
 	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
 	@bash ops/setup-fly-secrets.sh gateway
+
+secrets-media:
+	@echo "🔐 Setting secrets for construct-media..."
+	@echo "Required: MEDIA_UPLOAD_TOKEN_SECRET (must match construct-server)"
+	@echo "Optional: MEDIA_ADMIN_TOKEN"
+	@echo ""
+	@echo "Example:"
+	@echo "  fly secrets set MEDIA_UPLOAD_TOKEN_SECRET=\$$(openssl rand -hex 32) --app construct-media"
 
 secrets-all:
 	@echo "🔐 Setting secrets for all services from .env..."
@@ -211,6 +236,10 @@ logs-gateway:
 	@echo "📋 Viewing construct-message-gateway logs..."
 	fly logs -a construct-message-gateway
 
+logs-media:
+	@echo "📋 Viewing construct-media logs..."
+	fly logs -a construct-media
+
 status-server:
 	@echo "📊 construct-server status:"
 	@fly status -a construct-server
@@ -223,6 +252,10 @@ status-gateway:
 	@echo "📊 construct-message-gateway status:"
 	@fly status -a construct-message-gateway
 
+status-media:
+	@echo "📊 construct-media status:"
+	@fly status -a construct-media
+
 status-all:
 	@echo "╔════════════════════════════════════════════════════════════════╗"
 	@echo "║  Fly.io Services Status                                        ║"
@@ -233,6 +266,8 @@ status-all:
 	@make status-worker
 	@echo ""
 	@make status-gateway
+	@echo ""
+	@make status-media
 
 # ============================================================================
 # Database Management
