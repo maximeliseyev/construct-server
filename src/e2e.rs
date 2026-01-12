@@ -143,6 +143,18 @@ impl ServerCryptoValidator {
                     .decode(&suite.signed_prekey)
                     .context("Invalid base64 in signed_prekey")?;
 
+                // Validate signed_prekey_signature (required)
+                let signature_bytes = general_purpose::STANDARD
+                    .decode(&suite.signed_prekey_signature)
+                    .context("Invalid base64 in signed_prekey_signature")?;
+                
+                if signature_bytes.len() != 64 {
+                    return Err(anyhow::anyhow!(
+                        "signed_prekey_signature must be 64 bytes (Ed25519 signature) for suite {}",
+                        suite.suite_id
+                    ));
+                }
+
                 if identity_bytes.len() != 32 {
                     return Err(anyhow::anyhow!(
                         "Identity key must be 32 bytes for suite {}",
@@ -461,6 +473,10 @@ pub struct SuiteKeyMaterial {
 
     /// Base64-encoded signed prekey (length depends on suite_id)
     pub signed_prekey: String,
+
+    /// Base64-encoded Ed25519 signature for signed_prekey (64 bytes)
+    /// This signature is created with prologue (X3DH protocol + suite_id) for security
+    pub signed_prekey_signature: String,
 
     /// Optional Base64-encoded one-time prekeys
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
