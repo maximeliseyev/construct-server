@@ -274,12 +274,14 @@ fn extract_first_suite_data(bundle: &UploadableKeyBundle, username: &str) -> Res
         .ok_or("No cipher suites in bundle".to_string())?;
 
     // 4. Return data in the format expected by WebSocket clients
+    // ✅ FIX: Use signed_prekey_signature from suite, not bundle.signature
+    // bundle.signature is for bundleData canonical bytes (JSON for deterministic signing), not for signedPrekey
     Ok(PublicKeyBundleData {
         user_id: bundle_data.user_id,
         username: username.to_string(),
         identity_public: first_suite.identity_key.clone(),
         signed_prekey_public: first_suite.signed_prekey.clone(),
-        signature: bundle.signature.clone(),
+        signature: first_suite.signed_prekey_signature.clone(),
         verifying_key: bundle.master_identity_key.clone(),
     })
 }
