@@ -8,10 +8,6 @@
 //
 // ============================================================================
 
-use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use crate::e2e::SuiteKeyMaterial;
-use super::types::key_sizes;
 
 /// Validates key material for Post-Quantum Hybrid suite (suite_id = 2)
 ///

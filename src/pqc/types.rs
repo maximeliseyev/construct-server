@@ -7,7 +7,6 @@
 //
 // ============================================================================
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// Hybrid KEM (Key Encapsulation Mechanism) public key

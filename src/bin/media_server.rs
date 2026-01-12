@@ -31,11 +31,11 @@ use axum::{
     body::Body,
     extract::{Multipart, Path, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
