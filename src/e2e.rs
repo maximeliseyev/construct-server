@@ -147,7 +147,7 @@ impl ServerCryptoValidator {
                 let signature_bytes = general_purpose::STANDARD
                     .decode(&suite.signed_prekey_signature)
                     .context("Invalid base64 in signed_prekey_signature")?;
-                
+
                 if signature_bytes.len() != 64 {
                     return Err(anyhow::anyhow!(
                         "signed_prekey_signature must be 64 bytes (Ed25519 signature) for suite {}",
@@ -219,7 +219,10 @@ impl ServerCryptoValidator {
     /// # Arguments
     /// * `bundle` - The uploadable key bundle to validate
     /// * `allow_empty_user_id` - If true, allows empty user_id (used during registration)
-    pub fn validate_uploadable_key_bundle(bundle: &UploadableKeyBundle, allow_empty_user_id: bool) -> Result<()> {
+    pub fn validate_uploadable_key_bundle(
+        bundle: &UploadableKeyBundle,
+        allow_empty_user_id: bool,
+    ) -> Result<()> {
         // 1. Decode bundle_data first to determine suite type
         let bundle_data_bytes = general_purpose::STANDARD
             .decode(&bundle.bundle_data)
@@ -230,8 +233,14 @@ impl ServerCryptoValidator {
 
         // 2. Validate master_identity_key format based on suite
         // Check if any suite uses hybrid (suite_id=2) - if so, use hybrid signature format
-        let has_hybrid_suite = bundle_data.supported_suites.iter().any(|s| s.suite_id == suite_ids::PQ_HYBRID_KYBER);
-        let is_classical_only = bundle_data.supported_suites.iter().all(|s| s.suite_id == suite_ids::CLASSIC_X25519);
+        let has_hybrid_suite = bundle_data
+            .supported_suites
+            .iter()
+            .any(|s| s.suite_id == suite_ids::PQ_HYBRID_KYBER);
+        let is_classical_only = bundle_data
+            .supported_suites
+            .iter()
+            .all(|s| s.suite_id == suite_ids::CLASSIC_X25519);
 
         let master_key_bytes = general_purpose::STANDARD
             .decode(&bundle.master_identity_key)
@@ -249,10 +258,10 @@ impl ServerCryptoValidator {
                 use crate::pqc::validation;
                 validation::validate_hybrid_master_identity_key(&master_key_bytes)
                     .context("Invalid hybrid master identity key format")?;
-                
+
                 validation::validate_hybrid_signature(&signature_bytes)
                     .context("Invalid hybrid signature format")?;
-                
+
                 // Note: Hybrid signature verification requires both Ed25519 and ML-DSA-65
                 // This will be implemented in the hybrid module when feature is enabled
                 // For now, we only validate format
@@ -273,7 +282,9 @@ impl ServerCryptoValidator {
             }
 
             if signature_bytes.len() != 64 {
-                return Err(anyhow::anyhow!("Signature must be 64 bytes for classical suite (Ed25519)"));
+                return Err(anyhow::anyhow!(
+                    "Signature must be 64 bytes for classical suite (Ed25519)"
+                ));
             }
         } else {
             // Mixed suites (both classical and hybrid) - use hybrid format for signature
@@ -282,7 +293,7 @@ impl ServerCryptoValidator {
                 use crate::pqc::validation;
                 validation::validate_hybrid_master_identity_key(&master_key_bytes)
                     .context("Invalid hybrid master identity key format (mixed suites)")?;
-                
+
                 validation::validate_hybrid_signature(&signature_bytes)
                     .context("Invalid hybrid signature format (mixed suites)")?;
             }
@@ -306,14 +317,16 @@ impl ServerCryptoValidator {
             {
                 // Extract Ed25519 part from hybrid signature (first 64 bytes) for backward compatibility
                 // Full hybrid verification will be implemented when hybrid module is complete
-                let ed25519_sig_bytes: [u8; 64] = signature_bytes[0..64]
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to extract Ed25519 signature from hybrid signature"))?;
+                let ed25519_sig_bytes: [u8; 64] =
+                    signature_bytes[0..64].try_into().map_err(|_| {
+                        anyhow::anyhow!("Failed to extract Ed25519 signature from hybrid signature")
+                    })?;
 
                 // Extract Ed25519 part from hybrid master key (first 32 bytes)
-                let ed25519_key_bytes: [u8; 32] = master_key_bytes[0..32]
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to extract Ed25519 key from hybrid master key"))?;
+                let ed25519_key_bytes: [u8; 32] =
+                    master_key_bytes[0..32].try_into().map_err(|_| {
+                        anyhow::anyhow!("Failed to extract Ed25519 key from hybrid master key")
+                    })?;
 
                 let verifying_key = VerifyingKey::from_bytes(&ed25519_key_bytes)
                     .context("Invalid Ed25519 master_identity_key format in hybrid key")?;

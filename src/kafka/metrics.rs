@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use prometheus::{register_counter, register_histogram, Counter, Histogram};
+use prometheus::{Counter, Histogram, register_counter, register_histogram};
 
 /// Kafka producer success counter
 pub static KAFKA_PRODUCE_SUCCESS: Lazy<Counter> = Lazy::new(|| {
@@ -24,7 +24,9 @@ pub static KAFKA_PRODUCE_LATENCY: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "kafka_produce_latency_seconds",
         "Kafka produce operation latency in seconds",
-        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+        vec![
+            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0
+        ]
     )
     .expect("Failed to register kafka_produce_latency_seconds metric")
 });

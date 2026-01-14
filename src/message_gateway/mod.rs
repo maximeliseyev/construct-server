@@ -23,13 +23,13 @@
 // Future: Federation routing (local vs remote nodes)
 // ============================================================================
 
-pub mod validator;
+pub mod client;
+pub mod grpc;
 pub mod rate_limiter;
 pub mod router;
-pub mod grpc;
-pub mod client;
+pub mod validator;
 
-pub use validator::MessageValidator;
+pub use client::MessageGatewayClient;
 pub use rate_limiter::RateLimiter;
 pub use router::MessageRouter;
-pub use client::MessageGatewayClient;
+pub use validator::MessageValidator;

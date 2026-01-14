@@ -34,7 +34,10 @@ fn test_federated_id_format_works() {
     // Parse as UserId
     let user_id = UserId::parse(&federated_id).expect("Failed to parse federated ID");
 
-    assert!(user_id.is_federated(), "Should be recognized as federated user");
+    assert!(
+        user_id.is_federated(),
+        "Should be recognized as federated user"
+    );
     assert_eq!(user_id.domain(), Some("server.com"));
     assert_eq!(user_id.uuid(), &uuid);
     assert_eq!(user_id.to_string(), federated_id);
@@ -50,7 +53,7 @@ fn test_chat_message_validates_local_users() {
         id: Uuid::new_v4().to_string(),
         from: sender.clone(),
         to: recipient.clone(),
-        ephemeral_public_key: vec![0u8; 32],  // 32 bytes required
+        ephemeral_public_key: vec![0u8; 32], // 32 bytes required
         message_number: 1,
         content: "base64encodedcontent".to_string(),
         timestamp: chrono::Utc::now().timestamp() as u64,
@@ -114,22 +117,40 @@ fn test_invalid_formats_rejected() {
     // Test that invalid formats are properly rejected
 
     // Empty string
-    assert!(UserId::parse("").is_err(), "Empty string should be rejected");
+    assert!(
+        UserId::parse("").is_err(),
+        "Empty string should be rejected"
+    );
 
     // Not a UUID
-    assert!(UserId::parse("not-a-uuid").is_err(), "Invalid UUID should be rejected");
+    assert!(
+        UserId::parse("not-a-uuid").is_err(),
+        "Invalid UUID should be rejected"
+    );
 
     // Invalid federated format (bad UUID)
-    assert!(UserId::parse("not-a-uuid@server.com").is_err(), "Invalid UUID in federated format should be rejected");
+    assert!(
+        UserId::parse("not-a-uuid@server.com").is_err(),
+        "Invalid UUID in federated format should be rejected"
+    );
 
     // Empty domain
-    assert!(UserId::parse(&format!("{}@", Uuid::new_v4())).is_err(), "Empty domain should be rejected");
+    assert!(
+        UserId::parse(&format!("{}@", Uuid::new_v4())).is_err(),
+        "Empty domain should be rejected"
+    );
 
     // Invalid domain (no dot)
-    assert!(UserId::parse(&format!("{}@localhost", Uuid::new_v4())).is_err(), "Domain without dot should be rejected");
+    assert!(
+        UserId::parse(&format!("{}@localhost", Uuid::new_v4())).is_err(),
+        "Domain without dot should be rejected"
+    );
 
     // Domain with spaces
-    assert!(UserId::parse(&format!("{}@server .com", Uuid::new_v4())).is_err(), "Domain with spaces should be rejected");
+    assert!(
+        UserId::parse(&format!("{}@server .com", Uuid::new_v4())).is_err(),
+        "Domain with spaces should be rejected"
+    );
 }
 
 #[test]
@@ -148,7 +169,10 @@ fn test_chat_message_rejects_invalid_ids() {
         content: "content".to_string(),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
-    assert!(!msg1.is_valid(), "Message with invalid sender should be rejected");
+    assert!(
+        !msg1.is_valid(),
+        "Message with invalid sender should be rejected"
+    );
 
     // Invalid recipient ID
     let msg2 = ChatMessage {
@@ -160,7 +184,10 @@ fn test_chat_message_rejects_invalid_ids() {
         content: "content".to_string(),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
-    assert!(!msg2.is_valid(), "Message with invalid recipient should be rejected");
+    assert!(
+        !msg2.is_valid(),
+        "Message with invalid recipient should be rejected"
+    );
 }
 
 #[test]
@@ -182,8 +209,12 @@ fn test_message_serialization_compatibility() {
     let bytes = rmp_serde::to_vec(&local_msg).expect("Failed to serialize local message");
 
     // Deserialize
-    let deserialized: ChatMessage = rmp_serde::from_slice(&bytes).expect("Failed to deserialize local message");
-    assert!(deserialized.is_valid(), "Deserialized local message should be valid");
+    let deserialized: ChatMessage =
+        rmp_serde::from_slice(&bytes).expect("Failed to deserialize local message");
+    assert!(
+        deserialized.is_valid(),
+        "Deserialized local message should be valid"
+    );
     assert_eq!(deserialized.from, local_msg.from);
     assert_eq!(deserialized.to, local_msg.to);
 
@@ -202,8 +233,12 @@ fn test_message_serialization_compatibility() {
     let bytes = rmp_serde::to_vec(&federated_msg).expect("Failed to serialize federated message");
 
     // Deserialize
-    let deserialized: ChatMessage = rmp_serde::from_slice(&bytes).expect("Failed to deserialize federated message");
-    assert!(deserialized.is_valid(), "Deserialized federated message should be valid");
+    let deserialized: ChatMessage =
+        rmp_serde::from_slice(&bytes).expect("Failed to deserialize federated message");
+    assert!(
+        deserialized.is_valid(),
+        "Deserialized federated message should be valid"
+    );
     assert_eq!(deserialized.from, federated_msg.from);
     assert_eq!(deserialized.to, federated_msg.to);
 }
@@ -291,7 +326,10 @@ mod messagepack_format_tests {
 
         // Server processes sender as local user
         let sender_id = UserId::parse(&msg.from).unwrap();
-        assert!(sender_id.is_local(), "Old format should be treated as local user");
+        assert!(
+            sender_id.is_local(),
+            "Old format should be treated as local user"
+        );
     }
 
     #[test]

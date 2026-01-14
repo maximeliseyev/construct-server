@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, OsRng},
     ChaCha20Poly1305, Nonce,
+    aead::{Aead, KeyInit, OsRng},
 };
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -44,10 +44,7 @@ impl DeviceTokenEncryption {
     pub fn new(key: &[u8; 32]) -> Result<Self> {
         let cipher = ChaCha20Poly1305::new_from_slice(key)
             .map_err(|e| anyhow::anyhow!("Failed to create cipher from key: {}", e))?;
-        let encryption_key = Arc::new(EncryptionKey {
-            version: 1,
-            cipher,
-        });
+        let encryption_key = Arc::new(EncryptionKey { version: 1, cipher });
 
         let mut keys = HashMap::new();
         keys.insert(1, encryption_key);
@@ -64,8 +61,8 @@ impl DeviceTokenEncryption {
             anyhow::bail!("Device token encryption key must be 64 hex characters (32 bytes)");
         }
 
-        let key_bytes = hex::decode(hex_key)
-            .context("Invalid hex in device token encryption key")?;
+        let key_bytes =
+            hex::decode(hex_key).context("Invalid hex in device token encryption key")?;
 
         let key: [u8; 32] = key_bytes
             .try_into()
@@ -93,10 +90,7 @@ impl DeviceTokenEncryption {
         }
 
         if !keys.contains_key(&current_version) {
-            anyhow::bail!(
-                "Current version {} must exist in keys map",
-                current_version
-            );
+            anyhow::bail!("Current version {} must exist in keys map", current_version);
         }
 
         let mut encryption_keys: HashMap<u8, Arc<EncryptionKey>> = HashMap::new();
@@ -109,22 +103,21 @@ impl DeviceTokenEncryption {
                 );
             }
 
-            let key_bytes = hex::decode(&hex_key)
-                .with_context(|| format!("Invalid hex in device token encryption key version {}", version))?;
+            let key_bytes = hex::decode(&hex_key).with_context(|| {
+                format!(
+                    "Invalid hex in device token encryption key version {}",
+                    version
+                )
+            })?;
 
             let key: [u8; 32] = key_bytes
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("Key version {} must be exactly 32 bytes", version))?;
 
-            let cipher = ChaCha20Poly1305::new_from_slice(&key)
-                .map_err(|e| anyhow::anyhow!("Failed to create cipher for key version {}: {}", version, e))?;
-            encryption_keys.insert(
-                version,
-                Arc::new(EncryptionKey {
-                    version,
-                    cipher,
-                }),
-            );
+            let cipher = ChaCha20Poly1305::new_from_slice(&key).map_err(|e| {
+                anyhow::anyhow!("Failed to create cipher for key version {}: {}", version, e)
+            })?;
+            encryption_keys.insert(version, Arc::new(EncryptionKey { version, cipher }));
         }
 
         Ok(Self {
@@ -147,10 +140,12 @@ impl DeviceTokenEncryption {
     /// Returns: version (1 byte) || nonce (12 bytes) || ciphertext || tag (16 bytes)
     pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>> {
         // Get current encryption key
-        let encryption_key = self
-            .keys
-            .get(&self.current_version)
-            .ok_or_else(|| anyhow::anyhow!("Current encryption key version {} not found", self.current_version))?;
+        let encryption_key = self.keys.get(&self.current_version).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Current encryption key version {} not found",
+                self.current_version
+            )
+        })?;
 
         // Generate random nonce
         let mut nonce_bytes = [0u8; NONCE_SIZE];
@@ -179,35 +174,37 @@ impl DeviceTokenEncryption {
     /// Supports backward compatibility with older versions (legacy format without version byte).
     pub fn decrypt(&self, encrypted: &[u8]) -> Result<String> {
         if encrypted.len() < NONCE_SIZE + 16 {
-            anyhow::bail!("Encrypted data too short (expected at least {} bytes, got {})", NONCE_SIZE + 16, encrypted.len());
+            anyhow::bail!(
+                "Encrypted data too short (expected at least {} bytes, got {})",
+                NONCE_SIZE + 16,
+                encrypted.len()
+            );
         }
 
         // Detect format: if data starts with a version byte (< 10) and has enough bytes for versioned format, use versioned format
         // Otherwise, use legacy format (no version byte, assume version 1)
-        let (version, encrypted_data) = if encrypted.len() >= MIN_ENCRYPTED_SIZE && encrypted[0] < 10 {
-            // Versioned format: version (1 byte) || nonce || ciphertext || tag
-            let version = encrypted[0];
-            (version, &encrypted[VERSION_SIZE..])
-        } else {
-            // Legacy format: nonce || ciphertext || tag (no version byte, assume version 1)
-            (1, encrypted)
-        };
+        let (version, encrypted_data) =
+            if encrypted.len() >= MIN_ENCRYPTED_SIZE && encrypted[0] < 10 {
+                // Versioned format: version (1 byte) || nonce || ciphertext || tag
+                let version = encrypted[0];
+                (version, &encrypted[VERSION_SIZE..])
+            } else {
+                // Legacy format: nonce || ciphertext || tag (no version byte, assume version 1)
+                (1, encrypted)
+            };
 
         // Extract nonce and ciphertext
         let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
         let nonce = Nonce::from_slice(nonce_bytes);
 
         // Get encryption key for this version
-        let encryption_key = self
-            .keys
-            .get(&version)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Encryption key version {} not found. Active versions: {:?}",
-                    version,
-                    self.keys.keys().collect::<Vec<_>>()
-                )
-            })?;
+        let encryption_key = self.keys.get(&version).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Encryption key version {} not found. Active versions: {:?}",
+                version,
+                self.keys.keys().collect::<Vec<_>>()
+            )
+        })?;
 
         // Decrypt using version-specific key
         let plaintext = encryption_key
@@ -259,8 +256,14 @@ mod tests {
     fn test_key_versioning() {
         // Create encryption with two keys
         let mut keys = HashMap::new();
-        keys.insert(1, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
-        keys.insert(2, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string());
+        keys.insert(
+            1,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        );
+        keys.insert(
+            2,
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string(),
+        );
 
         let encryption_v1 = DeviceTokenEncryption::from_keys(keys.clone(), 1).unwrap();
         let encryption_v2 = DeviceTokenEncryption::from_keys(keys.clone(), 2).unwrap();
@@ -304,8 +307,14 @@ mod tests {
     #[test]
     fn test_reencrypt() {
         let mut keys = HashMap::new();
-        keys.insert(1, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
-        keys.insert(2, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string());
+        keys.insert(
+            1,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        );
+        keys.insert(
+            2,
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string(),
+        );
 
         let encryption = DeviceTokenEncryption::from_keys(keys, 2).unwrap();
 
@@ -314,7 +323,10 @@ mod tests {
         // Encrypt with version 1 (old key)
         let encrypted_v1 = {
             let mut keys_v1 = HashMap::new();
-            keys_v1.insert(1, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
+            keys_v1.insert(
+                1,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            );
             let enc_v1 = DeviceTokenEncryption::from_keys(keys_v1, 1).unwrap();
             enc_v1.encrypt(original).unwrap()
         };

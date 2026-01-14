@@ -50,30 +50,30 @@ pub enum AuditEventType {
 pub struct AuditEvent {
     /// Event timestamp (ISO8601)
     pub timestamp: String,
-    
+
     /// Event type
     #[serde(rename = "event_type")]
     pub event_type: AuditEventType,
-    
+
     /// User ID (hashed for privacy)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id_hash: Option<String>,
-    
+
     /// Username (hashed for privacy)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username_hash: Option<String>,
-    
+
     /// Client IP address
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_ip: Option<IpAddr>,
-    
+
     /// Success status (true = success, false = failure)
     pub success: bool,
-    
+
     /// Additional context/error message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
-    
+
     /// Session ID (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -101,7 +101,7 @@ impl AuditEvent {
             session_id,
         }
     }
-    
+
     /// Serializes audit event to JSON for logging
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
@@ -130,10 +130,10 @@ impl AuditLogger {
             details,
             session_id,
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs a logout event
     pub fn log_logout(
         user_id_hash: Option<String>,
@@ -150,10 +150,10 @@ impl AuditLogger {
             None,
             session_id,
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs a password change event
     pub fn log_password_change(
         user_id_hash: String,
@@ -172,10 +172,10 @@ impl AuditLogger {
             details,
             session_id,
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs a key rotation event
     pub fn log_key_rotation(
         user_id_hash: String,
@@ -193,10 +193,10 @@ impl AuditLogger {
             details,
             None, // Key rotation doesn't involve sessions
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs an account deletion event
     pub fn log_account_deletion(
         user_id_hash: String,
@@ -214,10 +214,10 @@ impl AuditLogger {
             details,
             None, // Account deletion revokes all sessions
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs an authentication failure (for brute force detection)
     pub fn log_authentication_failure(
         username_hash: Option<String>,
@@ -233,10 +233,10 @@ impl AuditLogger {
             details,
             None,
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs session revocation (e.g., after password change)
     pub fn log_session_revocation(
         user_id_hash: String,
@@ -253,10 +253,10 @@ impl AuditLogger {
             Some(reason),
             None, // All sessions revoked
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs a rate limit violation
     pub fn log_rate_limit_violation(
         user_id_hash: Option<String>,
@@ -266,7 +266,10 @@ impl AuditLogger {
         count: u32,
         limit: u32,
     ) {
-        let details = format!("Rate limit exceeded: {} (count={}, limit={})", limit_type, count, limit);
+        let details = format!(
+            "Rate limit exceeded: {} (count={}, limit={})",
+            limit_type, count, limit
+        );
         let event = AuditEvent::new(
             AuditEventType::RateLimitViolation,
             user_id_hash,
@@ -276,10 +279,10 @@ impl AuditLogger {
             Some(details),
             None,
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Logs a security violation (e.g., spoofing attempt)
     pub fn log_security_violation(
         user_id_hash: Option<String>,
@@ -298,17 +301,17 @@ impl AuditLogger {
             details.or(Some(full_details)),
             None,
         );
-        
+
         Self::log_event(&event);
     }
-    
+
     /// Internal function to actually log the audit event
-    /// 
+    ///
     /// Uses tracing with structured logging at INFO level
     /// The event is serialized to JSON for SIEM integration
     fn log_event(event: &AuditEvent) {
         let json = event.to_json();
-        
+
         // Log at INFO level with structured fields
         // This allows log aggregation systems to parse and index audit events
         tracing::info!(
@@ -331,7 +334,7 @@ impl AuditLogger {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
-    
+
     #[test]
     fn test_audit_event_serialization() {
         let event = AuditEvent::new(
@@ -343,14 +346,14 @@ mod tests {
             Some("Login successful".to_string()),
             Some("session-123".to_string()),
         );
-        
+
         let json = event.to_json();
         assert!(json.contains("LOGIN_ATTEMPT"));
         assert!(json.contains("abc123"));
         assert!(json.contains("127.0.0.1"));
         assert!(json.contains("true"));
     }
-    
+
     #[test]
     fn test_audit_event_no_optional_fields() {
         let event = AuditEvent::new(
@@ -362,7 +365,7 @@ mod tests {
             None,
             None,
         );
-        
+
         let json = event.to_json();
         assert!(json.contains("AUTHENTICATION_FAILURE"));
         assert!(json.contains("false"));

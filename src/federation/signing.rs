@@ -13,7 +13,7 @@
 //
 // ============================================================================
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -145,9 +145,9 @@ impl ServerSigner {
             )));
         }
 
-        let signature_array: [u8; 64] = signature_bytes
-            .try_into()
-            .map_err(|_| SigningError::InvalidSignature("Failed to convert signature".to_string()))?;
+        let signature_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
+            SigningError::InvalidSignature("Failed to convert signature".to_string())
+        })?;
 
         let signature = Signature::from_bytes(&signature_array);
 
@@ -320,9 +320,10 @@ impl PublicKeyCache {
             public_key: Option<String>,
         }
 
-        let body: WellKnownResponse = response.json().await.map_err(|e| {
-            SigningError::RemoteKeyFetch(format!("Failed to parse JSON: {}", e))
-        })?;
+        let body: WellKnownResponse = response
+            .json()
+            .await
+            .map_err(|e| SigningError::RemoteKeyFetch(format!("Failed to parse JSON: {}", e)))?;
 
         // Try top-level public_key first, then federation.public_key
         let public_key = body
@@ -406,8 +407,11 @@ mod tests {
         let wrong_seed = "YW5vdGhlci10ZXN0LXNlZWQtZm9yLWtleXMtMzI=";
         let wrong_signer =
             ServerSigner::from_seed_base64(wrong_seed, "other.konstruct.cc".to_string()).unwrap();
-        let result =
-            ServerSigner::verify_signature(&wrong_signer.public_key_base64(), &envelope, &signature);
+        let result = ServerSigner::verify_signature(
+            &wrong_signer.public_key_base64(),
+            &envelope,
+            &signature,
+        );
         assert!(result.is_err());
     }
 

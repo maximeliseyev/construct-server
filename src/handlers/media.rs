@@ -62,7 +62,9 @@ pub async fn handle_media_token_request(
             error: "Media uploads are not enabled".to_string(),
             code: "MEDIA_DISABLED".to_string(),
         };
-        let _ = handler.send_msgpack(&ServerMessage::MediaTokenError(error)).await;
+        let _ = handler
+            .send_msgpack(&ServerMessage::MediaTokenError(error))
+            .await;
         return;
     }
 
@@ -74,7 +76,9 @@ pub async fn handle_media_token_request(
             error: "Media service is not configured".to_string(),
             code: "MEDIA_NOT_CONFIGURED".to_string(),
         };
-        let _ = handler.send_msgpack(&ServerMessage::MediaTokenError(error)).await;
+        let _ = handler
+            .send_msgpack(&ServerMessage::MediaTokenError(error))
+            .await;
         return;
     }
 
@@ -87,7 +91,9 @@ pub async fn handle_media_token_request(
                 error: "Authentication required".to_string(),
                 code: "AUTH_REQUIRED".to_string(),
             };
-            let _ = handler.send_msgpack(&ServerMessage::MediaTokenError(error)).await;
+            let _ = handler
+                .send_msgpack(&ServerMessage::MediaTokenError(error))
+                .await;
             return;
         }
     };
@@ -112,7 +118,9 @@ pub async fn handle_media_token_request(
                     ),
                     code: "RATE_LIMIT_EXCEEDED".to_string(),
                 };
-                let _ = handler.send_msgpack(&ServerMessage::MediaTokenError(error)).await;
+                let _ = handler
+                    .send_msgpack(&ServerMessage::MediaTokenError(error))
+                    .await;
                 return;
             }
         }
@@ -145,15 +153,22 @@ pub async fn handle_media_token_request(
         "Generated media upload token"
     );
 
-    let _ = handler.send_msgpack(&ServerMessage::MediaToken(response)).await;
+    let _ = handler
+        .send_msgpack(&ServerMessage::MediaToken(response))
+        .await;
 }
 
 /// Generate a one-time upload token
 /// Format: {timestamp_hex}.{random_hex}.{hmac_hex}
 fn generate_upload_token(secret: &str) -> String {
+    // SECURITY: Handle system time errors gracefully (e.g., if system time is before UNIX_EPOCH)
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "System time is before UNIX_EPOCH, using fallback timestamp");
+            // Fallback to a reasonable timestamp (2020-01-01) if system time is invalid
+            std::time::Duration::from_secs(1577836800)
+        })
         .as_secs();
 
     let timestamp_hex = format!("{:x}", timestamp);
@@ -167,8 +182,8 @@ fn generate_upload_token(secret: &str) -> String {
 }
 
 fn compute_hmac(message: &str, secret: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(message.as_bytes());
 
     let result = mac.finalize();

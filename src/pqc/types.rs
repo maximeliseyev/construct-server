@@ -18,11 +18,11 @@ use serde::{Deserialize, Serialize};
 pub struct HybridKemPublicKey {
     /// Classical X25519 public key (32 bytes)
     #[serde(with = "serde_bytes")]
-    pub classical: Vec<u8>,  // X25519: 32 bytes
+    pub classical: Vec<u8>, // X25519: 32 bytes
 
     /// Post-quantum ML-KEM-768 public key (1184 bytes)
     #[serde(with = "serde_bytes")]
-    pub pq: Vec<u8>,  // ML-KEM-768: 1184 bytes
+    pub pq: Vec<u8>, // ML-KEM-768: 1184 bytes
 
     /// Key version for rotation support
     pub version: u8,
@@ -50,16 +50,16 @@ impl HybridKemPublicKey {
 
         let version = data[0];
         let classical_len = u16::from_be_bytes([data[1], data[2]]) as usize;
-        
+
         if data.len() < 1 + 2 + classical_len + 2 {
             return Err("Wire format too short for classical key".to_string());
         }
 
         let classical = data[3..3 + classical_len].to_vec();
-        
+
         let pq_start = 3 + classical_len;
         let pq_len = u16::from_be_bytes([data[pq_start], data[pq_start + 1]]) as usize;
-        
+
         if data.len() < pq_start + 2 + pq_len {
             return Err("Wire format too short for PQ key".to_string());
         }
@@ -88,11 +88,11 @@ impl HybridKemPublicKey {
 pub struct HybridSignaturePublicKey {
     /// Classical Ed25519 public key (32 bytes)
     #[serde(with = "serde_bytes")]
-    pub classical: Vec<u8>,  // Ed25519: 32 bytes
+    pub classical: Vec<u8>, // Ed25519: 32 bytes
 
     /// Post-quantum ML-DSA-65 public key (1952 bytes)
     #[serde(with = "serde_bytes")]
-    pub pq: Vec<u8>,  // ML-DSA-65: 1952 bytes
+    pub pq: Vec<u8>, // ML-DSA-65: 1952 bytes
 
     /// Key version for rotation support
     pub version: u8,
@@ -120,16 +120,16 @@ impl HybridSignaturePublicKey {
 
         let version = data[0];
         let classical_len = u16::from_be_bytes([data[1], data[2]]) as usize;
-        
+
         if data.len() < 1 + 2 + classical_len + 2 {
             return Err("Wire format too short for classical key".to_string());
         }
 
         let classical = data[3..3 + classical_len].to_vec();
-        
+
         let pq_start = 3 + classical_len;
         let pq_len = u16::from_be_bytes([data[pq_start], data[pq_start + 1]]) as usize;
-        
+
         if data.len() < pq_start + 2 + pq_len {
             return Err("Wire format too short for PQ key".to_string());
         }
@@ -158,11 +158,11 @@ impl HybridSignaturePublicKey {
 pub struct HybridSignature {
     /// Classical Ed25519 signature (64 bytes)
     #[serde(with = "serde_bytes")]
-    pub classical: Vec<u8>,  // Ed25519: 64 bytes
+    pub classical: Vec<u8>, // Ed25519: 64 bytes
 
     /// Post-quantum ML-DSA-65 signature (3293 bytes)
     #[serde(with = "serde_bytes")]
-    pub pq: Vec<u8>,  // ML-DSA-65: 3293 bytes
+    pub pq: Vec<u8>, // ML-DSA-65: 3293 bytes
 }
 
 impl HybridSignature {
@@ -185,26 +185,23 @@ impl HybridSignature {
         }
 
         let classical_len = u16::from_be_bytes([data[0], data[1]]) as usize;
-        
+
         if data.len() < 2 + classical_len + 2 {
             return Err("Wire format too short for classical signature".to_string());
         }
 
         let classical = data[2..2 + classical_len].to_vec();
-        
+
         let pq_start = 2 + classical_len;
         let pq_len = u16::from_be_bytes([data[pq_start], data[pq_start + 1]]) as usize;
-        
+
         if data.len() < pq_start + 2 + pq_len {
             return Err("Wire format too short for PQ signature".to_string());
         }
 
         let pq = data[pq_start + 2..pq_start + 2 + pq_len].to_vec();
 
-        Ok(Self {
-            classical,
-            pq,
-        })
+        Ok(Self { classical, pq })
     }
 
     /// Get total size of the hybrid signature
@@ -217,31 +214,31 @@ impl HybridSignature {
 pub mod key_sizes {
     /// X25519 public key size
     pub const X25519_PUBLIC_KEY: usize = 32;
-    
+
     /// ML-KEM-768 public key size (FIPS 203)
     pub const ML_KEM_768_PUBLIC_KEY: usize = 1184;
-    
+
     /// ML-KEM-768 ciphertext size
     pub const ML_KEM_768_CIPHERTEXT: usize = 1088;
-    
+
     /// Hybrid KEM public key total size
     pub const HYBRID_KEM_PUBLIC_KEY: usize = X25519_PUBLIC_KEY + ML_KEM_768_PUBLIC_KEY; // 1216 bytes
-    
+
     /// Ed25519 public key size
     pub const ED25519_PUBLIC_KEY: usize = 32;
-    
+
     /// Ed25519 signature size
     pub const ED25519_SIGNATURE: usize = 64;
-    
+
     /// ML-DSA-65 public key size (FIPS 204)
     pub const ML_DSA_65_PUBLIC_KEY: usize = 1952;
-    
+
     /// ML-DSA-65 signature size
     pub const ML_DSA_65_SIGNATURE: usize = 3293;
-    
+
     /// Hybrid signature public key total size
     pub const HYBRID_SIGNATURE_PUBLIC_KEY: usize = ED25519_PUBLIC_KEY + ML_DSA_65_PUBLIC_KEY; // 1984 bytes
-    
+
     /// Hybrid signature total size
     pub const HYBRID_SIGNATURE: usize = ED25519_SIGNATURE + ML_DSA_65_SIGNATURE; // 3357 bytes
 }

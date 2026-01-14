@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::Message;
+use rdkafka::consumer::{Consumer, StreamConsumer};
 use std::time::Duration;
 use tracing::{error, info};
 
-use crate::config::KafkaConfig;
 use super::config::create_client_config;
 use super::types::KafkaMessageEnvelope;
+use crate::config::KafkaConfig;
 
 /// Kafka message consumer for delivery worker
 ///
@@ -80,9 +80,7 @@ impl MessageConsumer {
         match self.consumer.recv().await {
             Ok(message) => {
                 // Parse payload
-                let payload = message
-                    .payload()
-                    .context("Message payload is empty")?;
+                let payload = message.payload().context("Message payload is empty")?;
 
                 let envelope: KafkaMessageEnvelope = serde_json::from_slice(payload)
                     .context("Failed to deserialize message envelope")?;
@@ -104,9 +102,7 @@ impl MessageConsumer {
         match self.consumer.recv().await {
             Ok(message) => {
                 // Get raw payload
-                let payload = message
-                    .payload()
-                    .context("Message payload is empty")?;
+                let payload = message.payload().context("Message payload is empty")?;
 
                 Ok(Some(payload.to_vec()))
             }

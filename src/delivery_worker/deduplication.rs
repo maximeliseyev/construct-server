@@ -29,10 +29,7 @@ use tracing::{debug, info};
 ///
 /// # Returns
 /// `true` if message was already processed, `false` otherwise
-pub async fn is_message_processed(
-    state: &WorkerState,
-    message_id: &str,
-) -> Result<bool> {
+pub async fn is_message_processed(state: &WorkerState, message_id: &str) -> Result<bool> {
     let dedup_key = format!(
         "{}{}",
         state.config.redis_key_prefixes.processed_msg, message_id
@@ -63,10 +60,7 @@ pub async fn is_message_processed(
 ///
 /// # Returns
 /// `true` if message was delivered directly, `false` otherwise
-pub async fn was_delivered_direct(
-    state: &WorkerState,
-    message_id: &str,
-) -> Result<bool> {
+pub async fn was_delivered_direct(state: &WorkerState, message_id: &str) -> Result<bool> {
     let delivered_direct_key = format!(
         "{}{}",
         state.config.redis_key_prefixes.delivered_direct, message_id
@@ -147,11 +141,11 @@ pub async fn should_skip_message(
             message_id = %message_id,
             "Message was already delivered directly via tx.send() - skipping delivery-worker delivery"
         );
-        
+
         // Mark as processed (deduplication) so we don't check again
         let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
         mark_message_processed(state, message_id, ttl_seconds).await?;
-        
+
         return Ok(Some("delivered_direct"));
     }
 

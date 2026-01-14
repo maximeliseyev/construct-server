@@ -38,10 +38,22 @@ pub async fn apple_app_site_association(
         }
     });
 
+    // SECURITY: Handle JSON serialization errors gracefully
+    let json_body = match serde_json::to_string_pretty(&aasa) {
+        Ok(body) => body,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to serialize Apple App Site Association JSON");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to generate configuration".to_string(),
+            ).into_response();
+        }
+    };
+
     (
         StatusCode::OK,
         [("Content-Type", "application/json")],
-        serde_json::to_string_pretty(&aasa).unwrap(),
+        json_body,
     ).into_response()
 }
 
@@ -62,10 +74,22 @@ pub async fn android_asset_links(
         }
     }]);
 
+    // SECURITY: Handle JSON serialization errors gracefully
+    let json_body = match serde_json::to_string_pretty(&asset_links) {
+        Ok(body) => body,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to serialize Android Asset Links JSON");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to generate configuration".to_string(),
+            ).into_response();
+        }
+    };
+
     (
         StatusCode::OK,
         [("Content-Type", "application/json")],
-        serde_json::to_string_pretty(&asset_links).unwrap(),
+        json_body,
     ).into_response()
 }
 

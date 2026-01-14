@@ -150,8 +150,8 @@ impl DeliveryAckConfig {
         let secret_key_hex = std::env::var("DELIVERY_SECRET_KEY")
             .context("DELIVERY_SECRET_KEY required when DELIVERY_ACK_MODE is enabled")?;
 
-        let secret_key = hex::decode(&secret_key_hex)
-            .context("DELIVERY_SECRET_KEY must be valid hex")?;
+        let secret_key =
+            hex::decode(&secret_key_hex).context("DELIVERY_SECRET_KEY must be valid hex")?;
 
         if secret_key.len() != 32 {
             anyhow::bail!("DELIVERY_SECRET_KEY must be 32 bytes (64 hex chars)");

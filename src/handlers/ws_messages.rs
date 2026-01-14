@@ -47,10 +47,10 @@
 use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
-use crate::utils::log_safe_id;
 use crate::handlers::device_tokens;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::message::{ChatMessage, ServerMessage};
+use crate::utils::log_safe_id;
 use base64::Engine;
 use sqlx::Row;
 
@@ -73,7 +73,10 @@ pub async fn handle_send_message(
             // This should ideally not be reached if the connection logic is sound
             tracing::error!("Unauthenticated user attempted to send a message");
             handler
-                .send_error("AUTH_REQUIRED", "Authentication is required to send messages")
+                .send_error(
+                    "AUTH_REQUIRED",
+                    "Authentication is required to send messages",
+                )
                 .await;
             return;
         }
@@ -89,9 +92,12 @@ pub async fn handle_send_message(
             None,
             client_ip,
             "message_spoofing".to_string(),
-            Some(format!("Authenticated user (hash={}) attempted to send message as different user (hash={})", user_id_hash, message_sender_hash)),
+            Some(format!(
+                "Authenticated user (hash={}) attempted to send message as different user (hash={})",
+                user_id_hash, message_sender_hash
+            )),
         );
-        
+
         tracing::warn!(
             authenticated_user = %sender_id,
             message_sender = %msg.from,
@@ -219,7 +225,7 @@ pub async fn handle_send_message(
                     count,
                     max_messages,
                 );
-                
+
                 let block_duration = ctx.config.security.rate_limit_block_duration_seconds;
                 if let Err(e) = queue
                     .block_user_temporarily(&msg.from, block_duration, "Rate limit exceeded")
@@ -247,7 +253,7 @@ pub async fn handle_send_message(
                     count,
                     max_messages,
                 );
-                
+
                 // SECURITY: Always use hashed user_id in logs
                 tracing::warn!(
                     user_hash = %user_id_hash,
@@ -270,11 +276,11 @@ pub async fn handle_send_message(
 
     // Validate ChatMessage structure
     if !msg.is_valid() {
-                // SECURITY: Always use hashed user_id in logs
-                tracing::warn!(
-                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
-                    "Invalid chat message format"
-                );
+        // SECURITY: Always use hashed user_id in logs
+        tracing::warn!(
+            user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+            "Invalid chat message format"
+        );
         handler
             .send_error("INVALID_MESSAGE_FORMAT", "Message validation failed")
             .await;
@@ -283,11 +289,11 @@ pub async fn handle_send_message(
 
     // Additional validation: check ephemeral_public_key length
     if msg.ephemeral_public_key.len() != 32 {
-                // SECURITY: Always use hashed user_id in logs
-                tracing::warn!(
-                    user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
-                    "Invalid ephemeral public key size"
-                );
+        // SECURITY: Always use hashed user_id in logs
+        tracing::warn!(
+            user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
+            "Invalid ephemeral public key size"
+        );
         handler
             .send_error(
                 "INVALID_MESSAGE_FORMAT",
@@ -328,7 +334,7 @@ pub async fn handle_send_message(
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                
+
                 // Check if this is a connection/unavailability error (should fallback)
                 let is_connection_error = error_msg.contains("Failed to connect")
                     || error_msg.contains("gRPC call failed")
@@ -409,7 +415,10 @@ pub async fn handle_send_message(
             "❌ Kafka write FAILED - message NOT persisted (source of truth unavailable)"
         );
         handler
-            .send_error("DELIVERY_FAILED", "Message could not be persisted. Please retry.")
+            .send_error(
+                "DELIVERY_FAILED",
+                "Message could not be persisted. Please retry.",
+            )
             .await;
         return;
     }
@@ -506,7 +515,6 @@ pub async fn handle_send_message(
     send_push_notification_for_message(ctx, &msg).await;
 }
 
-
 /// Send push notification for a message to an offline recipient
 /// Implements Phase 1 (Silent Push) and Phase 2 (Visible Push with filters)
 async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage) {
@@ -553,7 +561,11 @@ async fn send_push_notification_for_message(ctx: &AppContext, msg: &ChatMessage)
                 // Phase 2: Visible push (user notification)
                 // TODO: Add logic to differentiate between DM and group messages
                 ctx.apns_client
-                    .send_visible_push(&device.device_token, &sender_username, Some(msg.from.clone()))
+                    .send_visible_push(
+                        &device.device_token,
+                        &sender_username,
+                        Some(msg.from.clone()),
+                    )
                     .await
             }
             "visible_mentions" | "visible_contacts" => {
@@ -599,12 +611,10 @@ async fn get_username_for_push(ctx: &AppContext, user_id: &str) -> Result<String
         )))
     })?;
 
-    let result = sqlx::query(
-        r#"SELECT username FROM users WHERE id = $1"#,
-    )
-    .bind(user_uuid)
-    .fetch_optional(&*ctx.db_pool)
-    .await?;
+    let result = sqlx::query(r#"SELECT username FROM users WHERE id = $1"#)
+        .bind(user_uuid)
+        .fetch_optional(&*ctx.db_pool)
+        .await?;
 
     Ok(result
         .and_then(|row| row.try_get("username").ok())
@@ -730,4 +740,3 @@ pub async fn handle_acknowledge_message(
         );
     }
 }
-

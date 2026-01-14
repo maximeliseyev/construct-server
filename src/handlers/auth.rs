@@ -55,7 +55,9 @@ pub async fn handle_register(
     // Allow empty user_id during registration since it will be set after user creation
     if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&key_bundle, true) {
         tracing::warn!("Key bundle validation failed: {}", e);
-        handler.send_error("INVALID_KEY_BUNDLE", &e.to_string()).await;
+        handler
+            .send_error("INVALID_KEY_BUNDLE", &e.to_string())
+            .await;
         return;
     }
 
@@ -69,7 +71,9 @@ pub async fn handle_register(
                 Ok(bytes) => bytes,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to decode bundle_data");
-                    handler.send_error("SERVER_ERROR", "Failed to process key bundle").await;
+                    handler
+                        .send_error("SERVER_ERROR", "Failed to process key bundle")
+                        .await;
                     return;
                 }
             };
@@ -79,7 +83,9 @@ pub async fn handle_register(
                 Ok(data) => data,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to parse bundle_data");
-                    handler.send_error("SERVER_ERROR", "Failed to process key bundle").await;
+                    handler
+                        .send_error("SERVER_ERROR", "Failed to process key bundle")
+                        .await;
                     return;
                 }
             };
@@ -92,16 +98,22 @@ pub async fn handle_register(
                 Ok(json) => json,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to serialize bundle_data");
-                    handler.send_error("SERVER_ERROR", "Failed to process key bundle").await;
+                    handler
+                        .send_error("SERVER_ERROR", "Failed to process key bundle")
+                        .await;
                     return;
                 }
             };
             updated_bundle.bundle_data = BASE64.encode(updated_json.as_bytes());
 
             // Store the updated key bundle
-            if let Err(e) = crate::db::store_key_bundle(&ctx.db_pool, &user.id, &updated_bundle).await {
+            if let Err(e) =
+                crate::db::store_key_bundle(&ctx.db_pool, &user.id, &updated_bundle).await
+            {
                 tracing::error!(error = %e, "Failed to store key bundle during registration");
-                handler.send_error("SERVER_ERROR", "Failed to store encryption keys").await;
+                handler
+                    .send_error("SERVER_ERROR", "Failed to store encryption keys")
+                    .await;
                 return;
             }
 
@@ -113,23 +125,30 @@ pub async fn handle_register(
 
             match ctx.auth_manager.create_token(&user.id) {
                 Ok((token, jti, expires)) => {
-                    if let Err(e_msg) = establish_session_and_set_user(handler, ctx, &user, &jti).await {
+                    if let Err(e_msg) =
+                        establish_session_and_set_user(handler, ctx, &user, &jti).await
+                    {
                         tracing::error!(error = %e_msg, "Failed to establish session");
-                        handler.send_error("SESSION_CREATION_FAILED", "Could not create session").await;
+                        handler
+                            .send_error("SESSION_CREATION_FAILED", "Could not create session")
+                            .await;
                         return;
                     }
 
-                    let response = ServerMessage::RegisterSuccess(crate::message::RegisterSuccessData {
-                        user_id: user.id.to_string(),
-                        username: user.username.clone(),
-                        session_token: token,
-                        expires,
-                    });
+                    let response =
+                        ServerMessage::RegisterSuccess(crate::message::RegisterSuccessData {
+                            user_id: user.id.to_string(),
+                            username: user.username.clone(),
+                            session_token: token,
+                            expires,
+                        });
                     if handler.send_msgpack(&response).await.is_err() {}
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create token");
-                    handler.send_error("TOKEN_CREATION_FAILED", "Could not create session token").await;
+                    handler
+                        .send_error("TOKEN_CREATION_FAILED", "Could not create session token")
+                        .await;
                 }
             }
         }
@@ -191,12 +210,12 @@ pub async fn handle_login(
                     tracing::warn!(error = %e, "Failed to reset login counter");
                 }
                 drop(queue);
-                
+
                 // AUDIT: Log successful login
                 let user_id_hash = log_safe_id(&user.id.to_string(), &ctx.config.logging.hash_salt);
                 let username_hash = log_safe_id(&username, &ctx.config.logging.hash_salt);
                 let client_ip = Some(handler.addr().ip());
-                
+
                 // SECURITY: Always use hashed identifiers in logs
                 tracing::info!(
                     user_hash = %user_id_hash,
@@ -224,7 +243,7 @@ pub async fn handle_login(
                             Some("Login successful".to_string()),
                             Some(jti.clone()),
                         );
-                        
+
                         let response =
                             ServerMessage::LoginSuccess(crate::message::LoginSuccessData {
                                 user_id: user.id.to_string(),
@@ -244,7 +263,7 @@ pub async fn handle_login(
                             Some(format!("Token creation failed: {}", e)),
                             None,
                         );
-                        
+
                         tracing::error!(error = %e, "Failed to create token");
                         handler
                             .send_error("TOKEN_CREATION_FAILED", "Could not create session token")
@@ -260,7 +279,7 @@ pub async fn handle_login(
                     client_ip,
                     Some("Invalid password".to_string()),
                 );
-                
+
                 // SECURITY: Always use hashed username in logs, never log plain username
                 tracing::warn!(
                     user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
@@ -280,7 +299,7 @@ pub async fn handle_login(
                 client_ip,
                 Some("User not found".to_string()),
             );
-            
+
             // SECURITY: Always use hashed username in logs
             tracing::warn!(
                 user_hash = %log_safe_id(&username, &ctx.config.logging.hash_salt),
@@ -412,7 +431,10 @@ pub async fn handle_change_password(
 
     // 2.5. Rate limiting check for password changes
     let mut queue = ctx.queue.lock().await;
-    let change_count = match queue.increment_password_change_count(&user_id.to_string()).await {
+    let change_count = match queue
+        .increment_password_change_count(&user_id.to_string())
+        .await
+    {
         Ok(count) => count,
         Err(e) => {
             tracing::error!(error = %e, "Failed to check password change rate limit");
@@ -434,7 +456,7 @@ pub async fn handle_change_password(
             change_count,
             max_changes,
         );
-        
+
         // SECURITY: Always use hashed user_id in logs
         tracing::warn!(
             user_hash = %user_id_hash,
@@ -472,7 +494,7 @@ pub async fn handle_change_password(
     // 4. Verify old password is correct
     let user_id_hash = log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt);
     let client_ip = Some(handler.addr().ip());
-    
+
     match db::verify_password(&user, &old_password).await {
         Ok(true) => {}
         Ok(false) => {
@@ -485,7 +507,7 @@ pub async fn handle_change_password(
                 Some("Invalid old password".to_string()),
                 Some(claims.jti.clone()),
             );
-            
+
             // SECURITY: Always use hashed user_id in logs
             tracing::warn!(
                 user_hash = %user_id_hash,
@@ -506,7 +528,7 @@ pub async fn handle_change_password(
                 Some(format!("Password verification error: {}", e)),
                 Some(claims.jti.clone()),
             );
-            
+
             tracing::error!(error = %e, "Error verifying old password");
             handler
                 .send_error("SERVER_ERROR", "Failed to verify password")
@@ -546,7 +568,7 @@ pub async fn handle_change_password(
             Some(format!("Weak password: {}", error_msg)),
             Some(claims.jti.clone()),
         );
-        
+
         tracing::warn!(
             user_hash = %user_id_hash,
             "Password change rejected: weak password"
@@ -557,7 +579,7 @@ pub async fn handle_change_password(
 
     // 8. Update password in database
     // user_id_hash and client_ip already defined above
-    
+
     if let Err(e) = db::update_user_password(&ctx.db_pool, &user_id, &new_password).await {
         // AUDIT: Log failed password change (database error)
         AuditLogger::log_password_change(
@@ -568,7 +590,7 @@ pub async fn handle_change_password(
             Some(format!("Database error: {}", e)),
             Some(claims.jti.clone()),
         );
-        
+
         tracing::error!(
             error = %e,
             user_hash = %user_id_hash,
@@ -607,7 +629,7 @@ pub async fn handle_change_password(
         Some("Password changed successfully".to_string()),
         Some(claims.jti.clone()),
     );
-    
+
     // AUDIT: Log session revocation after password change
     AuditLogger::log_session_revocation(
         user_id_hash.clone(),
@@ -643,7 +665,7 @@ pub async fn handle_logout(
         if let Err(e) = queue_lock.revoke_session(&claims.jti, &claims.sub).await {
             tracing::warn!(error = %e, "Failed to revoke session on logout");
         }
-        
+
         // Phase 5: Untrack user online status
         if let Err(e) = queue_lock.untrack_user_online(&claims.sub).await {
             tracing::warn!(
@@ -663,7 +685,7 @@ pub async fn handle_logout(
             client_ip,
             Some(claims.jti.clone()),
         );
-        
+
         handler.disconnect(&ctx.clients).await;
     }
     if handler
@@ -774,7 +796,7 @@ pub async fn handle_delete_account(
         );
     }
     drop(queue_lock);
-    
+
     // 8. Disconnect user from WebSocket clients
     handler.disconnect(&ctx.clients).await;
 

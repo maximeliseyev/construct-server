@@ -64,8 +64,10 @@ impl AppContext {
             .signing_key_seed
             .as_ref()
             .and_then(|seed| {
-                match ServerSigner::from_seed_base64(seed, config.federation.instance_domain.clone())
-                {
+                match ServerSigner::from_seed_base64(
+                    seed,
+                    config.federation.instance_domain.clone(),
+                ) {
                     Ok(signer) => Some(Arc::new(signer)),
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to initialize server signer");
@@ -84,7 +86,7 @@ impl AppContext {
             apns_client,
             token_encryption,
             server_instance_id,
-            gateway_client: None, // Legacy mode by default
+            gateway_client: None,       // Legacy mode by default
             delivery_ack_manager: None, // Disabled by default
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
@@ -111,8 +113,10 @@ impl AppContext {
             .signing_key_seed
             .as_ref()
             .and_then(|seed| {
-                match ServerSigner::from_seed_base64(seed, config.federation.instance_domain.clone())
-                {
+                match ServerSigner::from_seed_base64(
+                    seed,
+                    config.federation.instance_domain.clone(),
+                ) {
                     Ok(signer) => Some(Arc::new(signer)),
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to initialize server signer");

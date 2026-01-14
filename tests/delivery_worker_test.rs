@@ -11,9 +11,7 @@
 // ============================================================================
 
 use construct_server::config::{Config, RedisKeyPrefixes};
-use construct_server::delivery_worker::{
-    deduplication, redis_streams, state::WorkerState,
-};
+use construct_server::delivery_worker::{deduplication, redis_streams, state::WorkerState};
 use redis::cmd;
 use serial_test::serial;
 use std::collections::HashMap;
@@ -23,11 +21,10 @@ use std::sync::Arc;
 /// Helper to create test WorkerState with test prefixes
 /// Uses same pattern as queue_test.rs for consistency
 async fn create_test_state() -> WorkerState {
-    let redis_url = env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-    let client = redis::Client::open(redis_url.as_str())
-        .expect("Failed to create Redis client for tests");
+    let client =
+        redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client for tests");
 
     let conn = client
         .get_multiplexed_async_connection()
@@ -190,9 +187,11 @@ async fn test_deduplication_mark_and_check() {
     cleanup_test_keys(&state, "test_processed_msg:*").await;
 
     // Message should not be processed initially
-    assert!(!deduplication::is_message_processed(&state, message_id)
-        .await
-        .unwrap());
+    assert!(
+        !deduplication::is_message_processed(&state, message_id)
+            .await
+            .unwrap()
+    );
 
     // Mark as processed
     deduplication::mark_message_processed(&state, message_id, 3600)
@@ -200,9 +199,11 @@ async fn test_deduplication_mark_and_check() {
         .unwrap();
 
     // Message should now be processed
-    assert!(deduplication::is_message_processed(&state, message_id)
-        .await
-        .unwrap());
+    assert!(
+        deduplication::is_message_processed(&state, message_id)
+            .await
+            .unwrap()
+    );
 
     // Cleanup after test
     cleanup_test_keys(&state, "test_processed_msg:*").await;
@@ -220,10 +221,12 @@ async fn test_deduplication_should_skip() {
     cleanup_test_keys(&state, "test_delivered_direct:*").await;
 
     // New message should not be skipped
-    assert!(deduplication::should_skip_message(&state, message_id)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        deduplication::should_skip_message(&state, message_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Mark as processed
     deduplication::mark_message_processed(&state, message_id, 3600)
@@ -295,10 +298,12 @@ async fn test_redis_streams_check_user_online() {
     cleanup_test_keys(&state, "test_user:*").await;
 
     // User should be offline initially
-    assert!(redis_streams::check_user_online(&state, user_id)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        redis_streams::check_user_online(&state, user_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Set user online
     let mut conn = state.redis_conn.write().await;

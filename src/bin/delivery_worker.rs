@@ -140,7 +140,9 @@ async fn main() -> Result<()> {
         run_kafka_consumer_mode(state).await
     } else {
         error!("Redis-only mode is not supported. Please enable KAFKA_ENABLED=true");
-        Err(anyhow::anyhow!("Redis-only mode is deprecated. Use Kafka mode instead."))
+        Err(anyhow::anyhow!(
+            "Redis-only mode is deprecated. Use Kafka mode instead."
+        ))
     }
 }
 
@@ -179,7 +181,7 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
     // Main Kafka consumer loop
     let mut offline_message_count: u64 = 0;
     let mut last_offline_log_time = std::time::Instant::now();
-    
+
     loop {
         match consumer.poll(std::time::Duration::from_secs(1)).await {
             Ok(Some(envelope)) => {
@@ -196,17 +198,17 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>) -> Result<()> {
                     }
                     Err(e) => {
                         let error_msg = e.to_string();
-                        
+
                         // Phase 5: User offline is EXPECTED behavior - don't log as ERROR
                         if error_msg.contains("Recipient is offline") {
                             offline_message_count += 1;
-                            
+
                             // Log summary every 10 seconds to avoid log spam
                             // First offline message logs immediately, then every 10 seconds
                             let now = std::time::Instant::now();
-                            let should_log = offline_message_count == 1 || 
-                                now.duration_since(last_offline_log_time).as_secs() >= 10;
-                            
+                            let should_log = offline_message_count == 1
+                                || now.duration_since(last_offline_log_time).as_secs() >= 10;
+
                             if should_log {
                                 let salt = &state.config.logging.hash_salt;
                                 if offline_message_count == 1 {
@@ -350,7 +352,7 @@ where
 /// because offsets were not committed (messages remained in Kafka)
 async fn run_user_online_notification_listener(state: Arc<WorkerState>) -> Result<()> {
     let client = state.redis_client.clone();
-    
+
     loop {
         let mut pubsub_conn = match client.get_async_pubsub().await {
             Ok(conn) => conn,
@@ -362,7 +364,10 @@ async fn run_user_online_notification_listener(state: Arc<WorkerState>) -> Resul
         };
 
         // Subscribe to user online notifications
-        if let Err(e) = pubsub_conn.subscribe(state.config.online_channel.as_str()).await {
+        if let Err(e) = pubsub_conn
+            .subscribe(state.config.online_channel.as_str())
+            .await
+        {
             error!(error = %e, channel = %state.config.online_channel, "Failed to subscribe to user online notifications, retrying in 5s...");
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             continue;
@@ -442,7 +447,10 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     );
 
     // 1. Deduplication check: have we already processed this message?
-    let dedup_key = format!("{}{}", state.config.redis_key_prefixes.processed_msg, message_id);
+    let dedup_key = format!(
+        "{}{}",
+        state.config.redis_key_prefixes.processed_msg, message_id
+    );
 
     let exists_result: i64 = execute_redis_with_retry(state, "check_deduplication", |conn| {
         let key = dedup_key.clone();
@@ -465,25 +473,29 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     // ========================================================================
     // Если construct-server успешно доставил через tx.send(), он помечает:
     // SET delivered_direct:{message_id} 1 EX 3600
-    // 
+    //
     // Мы проверяем этот ключ и пропускаем доставку, чтобы избежать дубликатов
     // Это снижает нагрузку на сервер и сеть
     // ========================================================================
-    let delivered_direct_key = format!("{}{}", state.config.redis_key_prefixes.delivered_direct, message_id);
+    let delivered_direct_key = format!(
+        "{}{}",
+        state.config.redis_key_prefixes.delivered_direct, message_id
+    );
 
-    let was_delivered_direct: i64 = execute_redis_with_retry(state, "check_delivered_direct", |conn| {
-        let key = delivered_direct_key.clone();
-        Box::pin(async move { redis::cmd("EXISTS").arg(&key).query_async(conn).await })
-    })
-    .await
-    .context("Failed to check delivered_direct after retries")?;
+    let was_delivered_direct: i64 =
+        execute_redis_with_retry(state, "check_delivered_direct", |conn| {
+            let key = delivered_direct_key.clone();
+            Box::pin(async move { redis::cmd("EXISTS").arg(&key).query_async(conn).await })
+        })
+        .await
+        .context("Failed to check delivered_direct after retries")?;
 
     if was_delivered_direct > 0 {
         debug!(
             message_id = %message_id,
             "Message was already delivered directly via tx.send() - skipping delivery-worker delivery"
         );
-        
+
         // Mark as processed (deduplication) and commit offset
         let _: String = execute_redis_with_retry(state, "mark_skipped_message_processed", |conn| {
             let key = dedup_key.clone();
@@ -499,25 +511,24 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         })
         .await
         .context("Failed to mark skipped message as processed")?;
-        
+
         return Ok(()); // Success - commit Kafka offset
     }
 
     // 3. Check if recipient is online by looking up their server instance
     // Look up user:{user_id}:server_instance_id to find which server handles this user
-    let user_server_key = format!("{}{}:server_instance_id", state.config.redis_key_prefixes.user, recipient_id);
-    
-    let server_instance_id: Option<String> = execute_redis_with_retry(state, "check_user_online", |conn| {
-        let key = user_server_key.clone();
-        Box::pin(async move {
-            redis::cmd("GET")
-                .arg(&key)
-                .query_async(conn)
-                .await
+    let user_server_key = format!(
+        "{}{}:server_instance_id",
+        state.config.redis_key_prefixes.user, recipient_id
+    );
+
+    let server_instance_id: Option<String> =
+        execute_redis_with_retry(state, "check_user_online", |conn| {
+            let key = user_server_key.clone();
+            Box::pin(async move { redis::cmd("GET").arg(&key).query_async(conn).await })
         })
-    })
-    .await
-    .context("Failed to check user online status after retries")?;
+        .await
+        .context("Failed to check user online status after retries")?;
 
     // ========================================================================
     // SIMPLIFIED ARCHITECTURE: Redis Lists instead of Pub/Sub
@@ -541,7 +552,7 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
 
     use construct_server::config::SECONDS_PER_DAY;
     let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
-    
+
     // Serialize envelope to MessagePack
     let message_bytes = rmp_serde::encode::to_vec_named(&envelope)
         .context("Failed to serialize Kafka envelope to MessagePack")?;
@@ -549,30 +560,41 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
     if let Some(server_instance_id) = server_instance_id {
         // User is online on this server instance - push to delivery_queue:{server_instance_id}
         // Server's delivery listener will poll this queue and deliver via WebSocket
-        let delivery_queue_key = format!("{}{}", state.config.delivery_queue_prefix, server_instance_id);
-        
+        let delivery_queue_key = format!(
+            "{}{}",
+            state.config.delivery_queue_prefix, server_instance_id
+        );
+
         let _: i64 = execute_redis_with_retry(state, "push_to_delivery_queue", |conn| {
             let key = delivery_queue_key.clone();
             let msg = message_bytes.clone();
             let ttl = ttl_seconds;
             Box::pin(async move {
                 // RPUSH to maintain FIFO order
-                let _: () = redis::cmd("RPUSH").arg(&key).arg(&msg).query_async(conn).await?;
+                let _: () = redis::cmd("RPUSH")
+                    .arg(&key)
+                    .arg(&msg)
+                    .query_async(conn)
+                    .await?;
                 // Refresh TTL on the key
-                let _: () = redis::cmd("EXPIRE").arg(&key).arg(ttl).query_async(conn).await?;
+                let _: () = redis::cmd("EXPIRE")
+                    .arg(&key)
+                    .arg(ttl)
+                    .query_async(conn)
+                    .await?;
                 Ok::<i64, redis::RedisError>(1)
             })
         })
         .await
         .context("Failed to push message to delivery queue after retries")?;
-        
+
         info!(
             message_id = %message_id,
             recipient_hash = %log_safe_id(recipient_id, &state.config.logging.hash_salt),
             queue_key = %delivery_queue_key,
             "📤 Message pushed to delivery_queue (recipient online) - server will poll and deliver"
         );
-        
+
         // Mark message as processed
         let _: String = execute_redis_with_retry(state, "mark_message_processed", |conn| {
             let key = dedup_key.clone();
@@ -588,7 +610,7 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         })
         .await
         .context("Failed to mark message as processed after retries")?;
-        
+
         return Ok(()); // Success - Kafka offset will be committed
     } else {
         // CRITICAL FIX: User is offline - save message to Redis delivery_queue for later delivery
@@ -596,20 +618,23 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
         // If we do continue, next poll() will return the NEXT message, and current message is LOST.
         // Solution: Save message to Redis delivery_queue with recipient_id as key, so it can be
         // delivered when user comes online via the delivery listener mechanism.
-        
+
         // Get all active server instances to find where to queue the message
         // We'll queue it to a special key that will be processed when user comes online
         // Format: delivery_queue:offline:{recipient_id} -> list of messages
-        let offline_queue_key = format!("{}offline:{}", state.config.delivery_queue_prefix, recipient_id);
-        
+        let offline_queue_key = format!(
+            "{}offline:{}",
+            state.config.delivery_queue_prefix, recipient_id
+        );
+
         // Serialize envelope to MessagePack for Redis storage
         let message_bytes = rmp_serde::encode::to_vec_named(envelope)
             .context("Failed to serialize Kafka envelope to MessagePack for offline queue")?;
-        
+
         // Save to Redis list with TTL (will be cleaned up after delivery or TTL expiry)
         use construct_server::config::SECONDS_PER_DAY;
         let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
-        
+
         let _: i64 = execute_redis_with_retry(state, "save_offline_message", |conn| {
             let key = offline_queue_key.clone();
             let msg = message_bytes.clone();
@@ -617,39 +642,48 @@ async fn process_kafka_message(state: &WorkerState, envelope: &KafkaMessageEnvel
             Box::pin(async move {
                 // Use RPUSH to add message to list (FIFO order - oldest first)
                 // This maintains order when messages are later moved to delivery_queue
-                let _: () = redis::cmd("RPUSH").arg(&key).arg(&msg).query_async(conn).await?;
+                let _: () = redis::cmd("RPUSH")
+                    .arg(&key)
+                    .arg(&msg)
+                    .query_async(conn)
+                    .await?;
                 // Set TTL on the key (messages will expire if not delivered)
-                let _: () = redis::cmd("EXPIRE").arg(&key).arg(ttl).query_async(conn).await?;
+                let _: () = redis::cmd("EXPIRE")
+                    .arg(&key)
+                    .arg(ttl)
+                    .query_async(conn)
+                    .await?;
                 Ok::<i64, redis::RedisError>(1)
             })
         })
         .await
         .context("Failed to save offline message to Redis after retries")?;
-        
+
         // Mark message as processed to prevent duplicate delivery when user comes online
         // (the message is saved in Redis, so it will be delivered via delivery listener)
-        let _: String = execute_redis_with_retry(state, "mark_message_processed_for_offline", |conn| {
-            let key = dedup_key.clone();
-            let ttl = ttl_seconds;
-            Box::pin(async move {
-                redis::cmd("SETEX")
-                    .arg(&key)
-                    .arg(ttl)
-                    .arg("1")
-                    .query_async(conn)
-                    .await
+        let _: String =
+            execute_redis_with_retry(state, "mark_message_processed_for_offline", |conn| {
+                let key = dedup_key.clone();
+                let ttl = ttl_seconds;
+                Box::pin(async move {
+                    redis::cmd("SETEX")
+                        .arg(&key)
+                        .arg(ttl)
+                        .arg("1")
+                        .query_async(conn)
+                        .await
+                })
             })
-        })
-        .await
-        .context("Failed to mark offline message as processed after retries")?;
-        
+            .await
+            .context("Failed to mark offline message as processed after retries")?;
+
         info!(
             message_id = %message_id,
             recipient_hash = %log_safe_id(recipient_id, &state.config.logging.hash_salt),
             queue_key = %offline_queue_key,
             "Recipient is offline - message saved to Redis delivery_queue for later delivery"
         );
-        
+
         // Return success to commit offset - message is safely stored in Redis
         // When user comes online, delivery listener will process messages from delivery_queue
         return Ok(());

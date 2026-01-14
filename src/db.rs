@@ -23,12 +23,16 @@ pub async fn create_pool(database_url: &str, db_config: &DbConfig) -> Result<DbP
     // connect_timeout недоступен в 0.8, используем acquire_timeout и idle_timeout
     let pool = PgPoolOptions::new()
         .max_connections(db_config.max_connections)
-        .acquire_timeout(std::time::Duration::from_secs(db_config.acquire_timeout_secs))
-        .idle_timeout(Some(std::time::Duration::from_secs(db_config.idle_timeout_secs)))
+        .acquire_timeout(std::time::Duration::from_secs(
+            db_config.acquire_timeout_secs,
+        ))
+        .idle_timeout(Some(std::time::Duration::from_secs(
+            db_config.idle_timeout_secs,
+        )))
         .test_before_acquire(true) // Test connections before returning from pool
         .connect(database_url)
         .await?;
-    
+
     Ok(pool)
 }
 
@@ -78,8 +82,6 @@ pub async fn get_user_by_id(pool: &DbPool, user_id: &Uuid) -> Result<Option<User
     Ok(user)
 }
 
-
-
 pub async fn verify_password(user: &User, password: &str) -> Result<bool> {
     Ok(bcrypt::verify(password, &user.password_hash)?)
 }
@@ -101,11 +103,7 @@ pub async fn delete_user_account(pool: &DbPool, user_id: &Uuid) -> Result<()> {
 }
 
 /// Updates user password (requires valid old password)
-pub async fn update_user_password(
-    pool: &DbPool,
-    user_id: &Uuid,
-    new_password: &str,
-) -> Result<()> {
+pub async fn update_user_password(pool: &DbPool, user_id: &Uuid, new_password: &str) -> Result<()> {
     let new_password_hash = hash(new_password, DEFAULT_COST)?;
 
     sqlx::query(
@@ -220,12 +218,14 @@ pub async fn get_key_bundle(
     .fetch_optional(pool)
     .await?;
 
-    Ok(record.map(|r| (
-        UploadableKeyBundle {
-            master_identity_key: BASE64.encode(r.master_identity_key),
-            bundle_data: BASE64.encode(r.bundle_data),
-            signature: BASE64.encode(r.signature),
-        },
-        r.username
-    )))
+    Ok(record.map(|r| {
+        (
+            UploadableKeyBundle {
+                master_identity_key: BASE64.encode(r.master_identity_key),
+                bundle_data: BASE64.encode(r.bundle_data),
+                signature: BASE64.encode(r.signature),
+            },
+            r.username,
+        )
+    }))
 }

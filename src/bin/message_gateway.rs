@@ -25,15 +25,12 @@ use construct_server::config::Config;
 use construct_server::kafka::MessageProducer;
 use construct_server::message::ChatMessage;
 use construct_server::message_gateway::{
-    grpc::*,
-    rate_limiter::RateLimiter,
-    router::MessageRouter,
-    validator::MessageValidator,
+    grpc::*, rate_limiter::RateLimiter, router::MessageRouter, validator::MessageValidator,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -52,7 +49,8 @@ impl MessageGatewayServiceImpl {
         config: Arc<Config>,
     ) -> Self {
         // Initialize MessageRouter with mTLS configuration if federation is enabled
-        let router = if config.federation_enabled && !config.federation.mtls.pinned_certs.is_empty() {
+        let router = if config.federation_enabled && !config.federation.mtls.pinned_certs.is_empty()
+        {
             // Use mTLS configuration with pinned certificates
             let mtls_config = Arc::new(config.federation.mtls.clone());
             // Clone kafka_producer since it's Arc inside and cheap to clone
@@ -102,7 +100,8 @@ impl MessageGatewayService for MessageGatewayServiceImpl {
 
         // Convert gRPC request to ChatMessage
         // Note: ciphertext arrives as Vec<u8> via gRPC, but ChatMessage expects base64 String
-        let content_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &req.ciphertext);
+        let content_base64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &req.ciphertext);
 
         let msg = ChatMessage {
             id: req.message_id.clone(),
@@ -138,7 +137,10 @@ impl MessageGatewayService for MessageGatewayServiceImpl {
         }
 
         // Step 2: Verify sender (anti-spoofing)
-        if let Err(e) = self.validator.verify_sender(&msg, &req.authenticated_user_id) {
+        if let Err(e) = self
+            .validator
+            .verify_sender(&msg, &req.authenticated_user_id)
+        {
             warn!(
                 message_id = %msg.id,
                 authenticated_user = %req.authenticated_user_id,
@@ -372,8 +374,8 @@ async fn main() -> Result<()> {
 
     // Initialize Kafka producer
     info!("Initializing Kafka producer...");
-    let kafka_producer = MessageProducer::new(&config.kafka)
-        .context("Failed to initialize Kafka producer")?;
+    let kafka_producer =
+        MessageProducer::new(&config.kafka).context("Failed to initialize Kafka producer")?;
     info!("Kafka producer initialized");
 
     // Create gRPC service

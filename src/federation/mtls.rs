@@ -135,7 +135,10 @@ impl FederationTrustStore {
     }
 
     /// Get certificate metadata for a domain (for monitoring/debugging)
-    pub fn get_cert_metadata(&self, domain: &str) -> Option<(String, std::time::Instant, std::time::Instant)> {
+    pub fn get_cert_metadata(
+        &self,
+        domain: &str,
+    ) -> Option<(String, std::time::Instant, std::time::Instant)> {
         let store = match self.trusted_fingerprints.read() {
             Ok(store) => store,
             Err(e) => {
@@ -143,9 +146,9 @@ impl FederationTrustStore {
                 return None;
             }
         };
-        store.get(domain).map(|t| {
-            (t.fingerprint.clone(), t.first_seen, t.last_verified)
-        })
+        store
+            .get(domain)
+            .map(|t| (t.fingerprint.clone(), t.first_seen, t.last_verified))
     }
 
     /// Trust on first use (TOFU) - trust a new certificate if none is pinned

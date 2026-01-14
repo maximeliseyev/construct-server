@@ -3,7 +3,7 @@ use serial_test::serial;
 use uuid::Uuid;
 
 mod test_utils;
-use test_utils::{spawn_app, TestClient};
+use test_utils::{TestClient, spawn_app};
 
 #[tokio::test]
 #[serial]

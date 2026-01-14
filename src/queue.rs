@@ -104,7 +104,10 @@ impl MessageQueue {
 
     /// @deprecated Phase 5+: Use Kafka consumer for message delivery
     /// This method is kept for backward compatibility with legacy flows
-    #[deprecated(since = "0.5.0", note = "Use Kafka consumer for message delivery (Phase 5+)")]
+    #[deprecated(
+        since = "0.5.0",
+        note = "Use Kafka consumer for message delivery (Phase 5+)"
+    )]
     #[allow(dead_code)]
     pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
@@ -215,7 +218,10 @@ impl MessageQueue {
             return Ok(false); // Сообщение уже было
         }
 
-        let _: () = self.client.set_ex(&key, "1", SECONDS_PER_DAY as u64).await?;
+        let _: () = self
+            .client
+            .set_ex(&key, "1", SECONDS_PER_DAY as u64)
+            .await?;
 
         Ok(true) // Сообщение уникальное
     }
@@ -442,50 +448,59 @@ impl MessageQueue {
         user_id: &str,
         server_instance_id: &str,
     ) -> Result<()> {
-        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
+        let key = format!(
+            "{}{}:server_instance_id",
+            self.config.redis_key_prefixes.user, user_id
+        );
         // Set with TTL matching session TTL from config
         let ttl_seconds = self.config.session_ttl_days * SECONDS_PER_DAY;
-        
+
         let _: () = cmd("SETEX")
             .arg(&key)
             .arg(ttl_seconds)
             .arg(server_instance_id)
             .query_async(&mut self.client)
             .await?;
-        
+
         tracing::debug!(
             user_id = %user_id,
             server_instance_id = %server_instance_id,
             "Tracked user online status"
         );
-        
+
         Ok(())
     }
-    
+
     /// Phase 5: Remove user online tracking when they disconnect
     pub async fn untrack_user_online(&mut self, user_id: &str) -> Result<()> {
-        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
+        let key = format!(
+            "{}{}:server_instance_id",
+            self.config.redis_key_prefixes.user, user_id
+        );
         let _: () = self.client.del(&key).await?;
-        
+
         tracing::debug!(
             user_id = %user_id,
             "Removed user online tracking"
         );
-        
+
         Ok(())
     }
-    
+
     /// Phase 5: Get server instance ID for an online user
     pub async fn get_user_server_instance(&mut self, user_id: &str) -> Result<Option<String>> {
-        let key = format!("{}{}:server_instance_id", self.config.redis_key_prefixes.user, user_id);
+        let key = format!(
+            "{}{}:server_instance_id",
+            self.config.redis_key_prefixes.user, user_id
+        );
         let result: Option<String> = self.client.get(&key).await?;
         Ok(result)
     }
-    
+
     /// Process offline messages for a user when they come online
     /// Moves messages from delivery_queue:offline:{user_id} to delivery_queue:{server_instance_id}
     /// so they can be delivered via the delivery listener mechanism
-    /// 
+    ///
     /// Messages are moved in FIFO order (oldest first) to maintain message ordering
     pub async fn process_offline_messages_for_user(
         &mut self,
@@ -494,7 +509,7 @@ impl MessageQueue {
     ) -> Result<usize> {
         let offline_queue_key = format!("{}offline:{}", self.delivery_queue_prefix, user_id);
         let delivery_queue_key = format!("{}{}", self.delivery_queue_prefix, server_instance_id);
-        
+
         // Use Lua script to atomically get all messages from offline queue and move to delivery queue
         // This ensures atomicity and maintains FIFO order
         let script = redis::Script::new(
@@ -513,13 +528,13 @@ impl MessageQueue {
             return #messages
             ",
         );
-        
+
         let message_count: usize = script
             .key(&offline_queue_key)
             .key(&delivery_queue_key)
             .invoke_async(&mut self.client)
             .await?;
-        
+
         if message_count > 0 {
             tracing::info!(
                 user_id = %user_id,
@@ -528,7 +543,7 @@ impl MessageQueue {
                 "Processed offline messages for user - moved to delivery queue (FIFO order maintained)"
             );
         }
-        
+
         Ok(message_count)
     }
 
@@ -642,13 +657,13 @@ impl MessageQueue {
     /// Mark a message as delivered directly via tx.send() (fast path)
     /// ========================================================================
     /// УМНАЯ ДЕДУПЛИКАЦИЯ (Вариант D):
-    /// 
+    ///
     /// После успешного tx.send() помечаем сообщение в Redis:
     /// SET delivered_direct:{message_id} 1 EX 3600
-    /// 
+    ///
     /// delivery-worker перед доставкой проверяет:
     /// IF EXISTS delivered_direct:{message_id} → SKIP (уже доставлено)
-    /// 
+    ///
     /// Это позволяет:
     /// 1. Kafka остаётся source of truth
     /// 2. Быстрая доставка через tx.send()
@@ -656,7 +671,10 @@ impl MessageQueue {
     /// 4. TTL 1 час - ключи автоматически очищаются
     /// ========================================================================
     pub async fn mark_delivered_direct(&mut self, message_id: &str) -> Result<()> {
-        let key = format!("{}{}", self.config.redis_key_prefixes.delivered_direct, message_id);
+        let key = format!(
+            "{}{}",
+            self.config.redis_key_prefixes.delivered_direct, message_id
+        );
         const DELIVERED_DIRECT_TTL: i64 = SECONDS_PER_HOUR; // 1 hour TTL
 
         self.client
@@ -675,7 +693,10 @@ impl MessageQueue {
     /// Check if a message was already delivered directly via tx.send()
     /// Used by delivery-worker to skip messages already delivered
     pub async fn is_delivered_direct(&mut self, message_id: &str) -> Result<bool> {
-        let key = format!("{}{}", self.config.redis_key_prefixes.delivered_direct, message_id);
+        let key = format!(
+            "{}{}",
+            self.config.redis_key_prefixes.delivered_direct, message_id
+        );
 
         let exists: bool = self.client.exists(&key).await?;
 

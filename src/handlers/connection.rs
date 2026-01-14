@@ -1,16 +1,16 @@
 use crate::message::ServerMessage;
 use futures_util::stream::SplitSink;
-use futures_util::{Stream, Sink};
+use futures_util::{Sink, Stream};
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, RwLock};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio::sync::{RwLock, mpsc};
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 // Support both direct TCP and upgraded HTTP connections
 pub enum WebSocketStreamType {
