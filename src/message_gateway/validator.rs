@@ -12,7 +12,7 @@
 // ============================================================================
 
 use crate::message::ChatMessage;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64::Engine;
 
 pub struct MessageValidator;

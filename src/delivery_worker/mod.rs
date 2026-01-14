@@ -22,12 +22,12 @@
 //
 // ============================================================================
 
-pub mod state;
-pub mod retry;
-pub mod redis_streams;
 pub mod deduplication;
 pub mod processor;
+pub mod redis_streams;
+pub mod retry;
+pub mod state;
 
 // Re-export commonly used types and functions
-pub use state::WorkerState;
 pub use processor::process_kafka_message;
+pub use state::WorkerState;

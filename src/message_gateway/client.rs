@@ -16,7 +16,7 @@
 
 use crate::message::ChatMessage;
 use crate::message_gateway::grpc::*;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 
@@ -70,11 +70,9 @@ impl MessageGatewayClient {
 
         // Convert ChatMessage to gRPC request
         // Note: content is base64 in ChatMessage, need to decode to bytes for gRPC
-        let ciphertext = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &msg.content,
-        )
-        .map_err(|e| anyhow!("Failed to decode message content: {}", e))?;
+        let ciphertext =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &msg.content)
+                .map_err(|e| anyhow!("Failed to decode message content: {}", e))?;
 
         let request = tonic::Request::new(SubmitMessageRequest {
             message_id: msg.id.clone(),

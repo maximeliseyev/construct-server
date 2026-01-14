@@ -54,7 +54,8 @@ impl RateLimiter {
         reason: &str,
     ) -> Result<()> {
         let block_key = format!("user_block:{}", user_id);
-        let _: () = self.redis_conn
+        let _: () = self
+            .redis_conn
             .set_ex(&block_key, reason, duration_seconds as u64)
             .await?;
         Ok(())
@@ -74,7 +75,8 @@ impl RateLimiter {
     /// Sets a key with TTL matching message retention policy
     pub async fn mark_message_processed(&mut self, dedup_key: &str, ttl_days: i64) -> Result<()> {
         let ttl_seconds = ttl_days * 24 * 60 * 60;
-        let _: () = self.redis_conn
+        let _: () = self
+            .redis_conn
             .set_ex(dedup_key, "1", ttl_seconds as u64)
             .await?;
         Ok(())
@@ -138,10 +140,7 @@ mod tests {
         assert!(is_new);
 
         // Mark as processed
-        limiter
-            .mark_message_processed(dedup_key, 7)
-            .await
-            .unwrap();
+        limiter.mark_message_processed(dedup_key, 7).await.unwrap();
 
         // Second check: should be replay
         let is_new = limiter.check_message_replay(dedup_key).await.unwrap();

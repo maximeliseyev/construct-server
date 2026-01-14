@@ -121,27 +121,19 @@ pub async fn push_to_offline_stream(
 ///
 /// # Returns
 /// Server instance ID if user is online, None if offline
-pub async fn check_user_online(
-    state: &WorkerState,
-    user_id: &str,
-) -> Result<Option<String>> {
+pub async fn check_user_online(state: &WorkerState, user_id: &str) -> Result<Option<String>> {
     let user_server_key = format!(
         "{}{}:server_instance_id",
         state.config.redis_key_prefixes.user, user_id
     );
 
-    let server_instance_id: Option<String> = execute_redis_with_retry(
-        state,
-        "check_user_online",
-        |conn| {
+    let server_instance_id: Option<String> =
+        execute_redis_with_retry(state, "check_user_online", |conn| {
             let key = user_server_key.clone();
-            Box::pin(async move {
-                cmd("GET").arg(&key).query_async(conn).await
-            })
-        },
-    )
-    .await
-    .context("Failed to check user online status")?;
+            Box::pin(async move { cmd("GET").arg(&key).query_async(conn).await })
+        })
+        .await
+        .context("Failed to check user online status")?;
 
     Ok(server_instance_id)
 }

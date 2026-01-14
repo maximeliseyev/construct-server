@@ -8,7 +8,6 @@
 //
 // ============================================================================
 
-
 /// Validates key material for Post-Quantum Hybrid suite (suite_id = 2)
 ///
 /// Validates:
@@ -85,7 +84,8 @@ pub fn validate_hybrid_suite_key_material(suite: &SuiteKeyMaterial) -> Result<()
 /// Note: This function is only called when post-quantum feature is enabled.
 #[cfg(feature = "post-quantum")]
 pub fn validate_hybrid_ciphertext(ciphertext: &[u8]) -> Result<()> {
-    const MIN_HYBRID_CIPHERTEXT_SIZE: usize = key_sizes::HYBRID_KEM_PUBLIC_KEY + key_sizes::ML_KEM_768_CIPHERTEXT + 16; // 1216 + 1088 + 16 = 2320
+    const MIN_HYBRID_CIPHERTEXT_SIZE: usize =
+        key_sizes::HYBRID_KEM_PUBLIC_KEY + key_sizes::ML_KEM_768_CIPHERTEXT + 16; // 1216 + 1088 + 16 = 2320
 
     if ciphertext.len() < MIN_HYBRID_CIPHERTEXT_SIZE {
         return Err(anyhow::anyhow!(
@@ -154,9 +154,7 @@ mod tests {
             suite_id: 2, // PQ_HYBRID_KYBER
             identity_key: BASE64.encode(&vec![0u8; key_sizes::HYBRID_SIGNATURE_PUBLIC_KEY]),
             signed_prekey: BASE64.encode(&vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY]),
-            one_time_prekeys: vec![
-                BASE64.encode(&vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY]),
-            ],
+            one_time_prekeys: vec![BASE64.encode(&vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY])],
         };
 
         assert!(validate_hybrid_suite_key_material(&suite).is_ok());

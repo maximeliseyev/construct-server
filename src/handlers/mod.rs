@@ -20,11 +20,7 @@ use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
-pub async fn handle_websocket(
-    ws_stream: WebSocketStreamType,
-    addr: SocketAddr,
-    ctx: AppContext,
-) {
+pub async fn handle_websocket(ws_stream: WebSocketStreamType, addr: SocketAddr, ctx: AppContext) {
     metrics::CONNECTIONS_TOTAL.inc();
     let span = tracing::info_span!("websocket_connection", addr = %addr);
     let _enter = span.enter();
@@ -214,7 +210,7 @@ pub async fn handle_websocket(
             tracing::warn!(error = %e, user_id = %user_id, "Failed to untrack user online status");
         }
     }
-    
+
     handler.disconnect(&ctx.clients).await;
     tracing::info!("Connection closed: {}", addr);
 }

@@ -30,7 +30,10 @@ mod security_tests {
 
         // Different input → different hash (collision resistant)
         let hash2 = compute_message_hash(message_id_2, secret);
-        assert_ne!(hash1a, hash2, "Similar messages must produce different hashes");
+        assert_ne!(
+            hash1a, hash2,
+            "Similar messages must produce different hashes"
+        );
 
         // Hash is 64 hex chars (32 bytes SHA256)
         assert_eq!(hash1a.len(), 64, "Hash must be 64 hex characters");
@@ -46,7 +49,10 @@ mod security_tests {
         let hash1 = compute_message_hash(message_id, secret1);
         let hash2 = compute_message_hash(message_id, secret2);
 
-        assert_ne!(hash1, hash2, "Different secrets must produce different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different secrets must produce different hashes"
+        );
     }
 
     /// Test 3: Verify hash is one-way (cannot reverse engineer)
@@ -57,11 +63,17 @@ mod security_tests {
         let hash = compute_message_hash(message_id, secret);
 
         // Hash should not contain any part of the message_id
-        assert!(!hash.contains("550e8400"), "Hash must not contain plaintext ID");
+        assert!(
+            !hash.contains("550e8400"),
+            "Hash must not contain plaintext ID"
+        );
         assert!(!hash.contains("e29b"), "Hash must not contain plaintext ID");
 
         // Hash should be hex-encoded
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "Hash must be hex");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "Hash must be hex"
+        );
     }
 
     /// Test 4: Verify user ID hashing works identically
@@ -74,8 +86,14 @@ mod security_tests {
 
         // Same properties as message hash
         assert_eq!(hash.len(), 64, "User ID hash must be 64 hex characters");
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "Hash must be hex");
-        assert!(!hash.contains("550e8400"), "Hash must not contain plaintext ID");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "Hash must be hex"
+        );
+        assert!(
+            !hash.contains("550e8400"),
+            "Hash must not contain plaintext ID"
+        );
     }
 
     /// Test 5: Verify DeliveryAckEvent validates hash format
@@ -88,7 +106,10 @@ mod security_tests {
             "b".repeat(64),
             "c".repeat(64),
         );
-        assert!(valid_event.validate().is_ok(), "Valid event must pass validation");
+        assert!(
+            valid_event.validate().is_ok(),
+            "Valid event must pass validation"
+        );
 
         // Invalid event (short hash)
         let invalid_event = DeliveryAckEvent {
@@ -212,10 +233,7 @@ mod security_tests {
         }
 
         let config = DeliveryAckConfig::from_env();
-        assert!(
-            config.is_ok(),
-            "Disabled mode must not require secret key"
-        );
+        assert!(config.is_ok(), "Disabled mode must not require secret key");
         assert_eq!(config.unwrap().mode, DeliveryAckMode::Disabled);
 
         // Clean up
@@ -266,8 +284,14 @@ mod security_tests {
             env::remove_var("DELIVERY_ACK_ENABLE_BATCHING");
         }
         let config = DeliveryAckConfig::from_env().unwrap();
-        assert!(config.enable_batching, "Batching must be enabled by default");
-        assert_eq!(config.batch_buffer_secs, 5, "Default buffer must be 5 seconds");
+        assert!(
+            config.enable_batching,
+            "Batching must be enabled by default"
+        );
+        assert_eq!(
+            config.batch_buffer_secs, 5,
+            "Default buffer must be 5 seconds"
+        );
 
         // Batching can be disabled
         unsafe {
@@ -286,7 +310,10 @@ mod security_tests {
             env::set_var("DELIVERY_ACK_BATCH_BUFFER_SECS", "10");
         }
         let config = DeliveryAckConfig::from_env().unwrap();
-        assert_eq!(config.batch_buffer_secs, 10, "Custom buffer must be configurable");
+        assert_eq!(
+            config.batch_buffer_secs, 10,
+            "Custom buffer must be configurable"
+        );
 
         // Clean up
         unsafe {

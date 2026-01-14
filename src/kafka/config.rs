@@ -39,9 +39,11 @@ pub fn create_client_config(config: &KafkaConfig) -> Result<ClientConfig> {
     }
 
     // Configure SASL if a mechanism is provided
-    if let (Some(mechanism), Some(username), Some(password)) =
-        (&config.sasl_mechanism, &config.sasl_username, &config.sasl_password)
-    {
+    if let (Some(mechanism), Some(username), Some(password)) = (
+        &config.sasl_mechanism,
+        &config.sasl_username,
+        &config.sasl_password,
+    ) {
         info!(sasl_mechanism = %mechanism, "Configuring SASL authentication");
         client_config
             .set("sasl.mechanism", mechanism)

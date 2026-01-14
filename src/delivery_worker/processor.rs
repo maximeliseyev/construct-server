@@ -16,7 +16,9 @@
 
 use crate::config::SECONDS_PER_DAY;
 use crate::delivery_worker::deduplication::{mark_message_processed, should_skip_message};
-use crate::delivery_worker::redis_streams::{check_user_online, push_to_delivery_stream, push_to_offline_stream};
+use crate::delivery_worker::redis_streams::{
+    check_user_online, push_to_delivery_stream, push_to_offline_stream,
+};
 use crate::delivery_worker::state::WorkerState;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::utils::log_safe_id;
@@ -67,7 +69,8 @@ pub async fn process_kafka_message(
     }
 
     // 2. Check if recipient is online
-    let server_instance_id = check_user_online(state, recipient_id).await
+    let server_instance_id = check_user_online(state, recipient_id)
+        .await
         .context("Failed to check user online status")?;
 
     // 3. Serialize envelope to MessagePack for Redis storage
@@ -79,8 +82,11 @@ pub async fn process_kafka_message(
     // 4. Route message based on online status
     if let Some(server_instance_id) = server_instance_id {
         // User is online - push to delivery stream for this server instance
-        let stream_key = format!("{}{}", state.config.delivery_queue_prefix, server_instance_id);
-        
+        let stream_key = format!(
+            "{}{}",
+            state.config.delivery_queue_prefix, server_instance_id
+        );
+
         push_to_delivery_stream(
             state,
             &stream_key,
@@ -90,7 +96,7 @@ pub async fn process_kafka_message(
         )
         .await
         .context("Failed to push message to delivery stream")?;
-        
+
         info!(
             message_id = %message_id,
             recipient_hash = %log_safe_id(recipient_id, salt),
@@ -108,7 +114,7 @@ pub async fn process_kafka_message(
         )
         .await
         .context("Failed to push message to offline stream")?;
-        
+
         info!(
             message_id = %message_id,
             recipient_hash = %log_safe_id(recipient_id, salt),
@@ -117,7 +123,8 @@ pub async fn process_kafka_message(
     }
 
     // 5. Mark message as processed (deduplication)
-    mark_message_processed(state, message_id, ttl_seconds).await
+    mark_message_processed(state, message_id, ttl_seconds)
+        .await
         .context("Failed to mark message as processed")?;
 
     Ok(())

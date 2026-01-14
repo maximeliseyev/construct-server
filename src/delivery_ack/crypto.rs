@@ -1,6 +1,6 @@
 use hex;
-use sha2::Sha256;
 use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -60,7 +60,10 @@ pub fn verify_message_hash(message_id: &str, message_hash: &str, secret_key: &[u
 
     // Constant-time comparison to prevent timing attacks
     use subtle::ConstantTimeEq;
-    computed_hash.as_bytes().ct_eq(message_hash.as_bytes()).into()
+    computed_hash
+        .as_bytes()
+        .ct_eq(message_hash.as_bytes())
+        .into()
 }
 
 /// Computes HMAC-SHA256 hash of user ID for anonymous ACK routing

@@ -12,5 +12,7 @@ pub mod proto {
 
 // Re-export with clear naming to avoid conflicts
 pub use proto::message_gateway_client::MessageGatewayClient as MessageGatewayClient_;
-pub use proto::message_gateway_server::{MessageGateway as MessageGatewayService, MessageGatewayServer};
+pub use proto::message_gateway_server::{
+    MessageGateway as MessageGatewayService, MessageGatewayServer,
+};
 pub use proto::*;

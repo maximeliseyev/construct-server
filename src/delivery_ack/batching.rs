@@ -18,12 +18,12 @@
 // ============================================================================
 
 use anyhow::Result;
-use rand::seq::SliceRandom;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 use crate::kafka::producer::MessageProducer;
 use crate::kafka::types::DeliveryAckEvent;
@@ -106,9 +106,13 @@ impl AckBatcher {
 
         // PRIVACY: Randomize order to prevent timing correlation
         // Use StdRng with time-based seed for Send compatibility
+        // SECURITY: Handle system time errors gracefully
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "System time is before UNIX_EPOCH, using fallback timestamp");
+                std::time::Duration::from_secs(1577836800) // 2020-01-01 fallback
+            })
             .as_nanos() as u64;
         let mut rng = StdRng::seed_from_u64(seed);
         events.shuffle(&mut rng);
@@ -144,10 +148,7 @@ impl AckBatcher {
                 "ACK batch completed with some failures"
             );
         } else {
-            tracing::info!(
-                batch_size = batch_size,
-                "ACK batch flushed successfully"
-            );
+            tracing::info!(batch_size = batch_size, "ACK batch flushed successfully");
         }
 
         Ok(())

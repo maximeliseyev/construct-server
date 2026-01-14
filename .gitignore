@@ -32,3 +32,4 @@ target/
 *.swp
 *.swo
 .DS_Store
+.docs-cache

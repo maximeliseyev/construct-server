@@ -21,7 +21,10 @@ pub async fn handle_register_device_token(
         Some(id) => id,
         None => {
             handler
-                .send_error("UNAUTHORIZED", "You must be authenticated to register device token")
+                .send_error(
+                    "UNAUTHORIZED",
+                    "You must be authenticated to register device token",
+                )
                 .await;
             return;
         }
@@ -37,12 +40,21 @@ pub async fn handle_register_device_token(
 
     // Validate notification filter
     let filter = notification_filter.unwrap_or_else(|| "silent".to_string());
-    let valid_filters = ["silent", "visible_all", "visible_dm", "visible_mentions", "visible_contacts"];
+    let valid_filters = [
+        "silent",
+        "visible_all",
+        "visible_dm",
+        "visible_mentions",
+        "visible_contacts",
+    ];
     if !valid_filters.contains(&filter.as_str()) {
         handler
             .send_error(
                 "INVALID_FILTER",
-                &format!("Invalid notification filter. Must be one of: {:?}", valid_filters),
+                &format!(
+                    "Invalid notification filter. Must be one of: {:?}",
+                    valid_filters
+                ),
             )
             .await;
         return;
@@ -118,7 +130,9 @@ pub async fn handle_register_device_token(
                 "Device token registered successfully for user_id={}, filter={}",
                 user_id, filter
             );
-            let _ = handler.send_msgpack(&ServerMessage::DeviceTokenRegistered).await;
+            let _ = handler
+                .send_msgpack(&ServerMessage::DeviceTokenRegistered)
+                .await;
         }
         Err(e) => {
             error!("Failed to register device token: {:?}", e);
@@ -177,8 +191,13 @@ pub async fn handle_unregister_device_token(
     match query_result {
         Ok(result) => {
             if result.rows_affected() > 0 {
-                info!("Device token unregistered successfully for user_id={}", user_id);
-                let _ = handler.send_msgpack(&ServerMessage::DeviceTokenUnregistered).await;
+                info!(
+                    "Device token unregistered successfully for user_id={}",
+                    user_id
+                );
+                let _ = handler
+                    .send_msgpack(&ServerMessage::DeviceTokenUnregistered)
+                    .await;
             } else {
                 warn!("Device token not found for user_id={}", user_id);
                 handler
@@ -215,12 +234,21 @@ pub async fn handle_update_device_token_preferences(
     };
 
     // Validate notification filter
-    let valid_filters = ["silent", "visible_all", "visible_dm", "visible_mentions", "visible_contacts"];
+    let valid_filters = [
+        "silent",
+        "visible_all",
+        "visible_dm",
+        "visible_mentions",
+        "visible_contacts",
+    ];
     if !valid_filters.contains(&notification_filter.as_str()) {
         handler
             .send_error(
                 "INVALID_FILTER",
-                &format!("Invalid notification filter. Must be one of: {:?}", valid_filters),
+                &format!(
+                    "Invalid notification filter. Must be one of: {:?}",
+                    valid_filters
+                ),
             )
             .await;
         return;
@@ -267,7 +295,9 @@ pub async fn handle_update_device_token_preferences(
                     "Device token preferences updated successfully for user_id={}",
                     user_id
                 );
-                let _ = handler.send_msgpack(&ServerMessage::DeviceTokenPreferencesUpdated).await;
+                let _ = handler
+                    .send_msgpack(&ServerMessage::DeviceTokenPreferencesUpdated)
+                    .await;
             } else {
                 warn!("Device token not found for user_id={}", user_id);
                 handler

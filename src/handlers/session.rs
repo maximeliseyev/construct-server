@@ -3,7 +3,7 @@ use crate::db::User;
 use crate::message::ServerMessage;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 pub type Clients = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<ServerMessage>>>>;
 
@@ -44,11 +44,14 @@ pub async fn establish_session(
                 "Failed to track user online status"
             );
         }
-        
+
         // CRITICAL FIX: Process offline messages when user comes online
         // Move messages from delivery_queue:offline:{user_id} to delivery_queue:{server_instance_id}
         // so they can be delivered via the delivery listener
-        match queue_lock.process_offline_messages_for_user(&uid_str, &ctx.server_instance_id).await {
+        match queue_lock
+            .process_offline_messages_for_user(&uid_str, &ctx.server_instance_id)
+            .await
+        {
             Ok(count) => {
                 if count > 0 {
                     tracing::info!(
@@ -67,11 +70,15 @@ pub async fn establish_session(
                 );
             }
         }
-        
+
         // Publish notification that user came online
         // This triggers the Delivery Worker to process offline messages from Kafka
         if let Err(e) = queue_lock
-            .publish_user_online(&uid_str, &ctx.server_instance_id, &ctx.config.online_channel)
+            .publish_user_online(
+                &uid_str,
+                &ctx.server_instance_id,
+                &ctx.config.online_channel,
+            )
             .await
         {
             tracing::error!(

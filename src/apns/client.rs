@@ -1,4 +1,7 @@
-use a2::{Client, ClientConfig, Endpoint, DefaultNotificationBuilder, NotificationBuilder, NotificationOptions, Priority};
+use a2::{
+    Client, ClientConfig, DefaultNotificationBuilder, Endpoint, NotificationBuilder,
+    NotificationOptions, Priority,
+};
 use anyhow::{Context, Result};
 use hex;
 use std::fs::File;
@@ -7,8 +10,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{ApnsConfig, ApnsEnvironment};
 use super::types::{ApnsPayload, NotificationPriority, PushType};
+use crate::config::{ApnsConfig, ApnsEnvironment};
 
 /// APNs client wrapper
 #[derive(Clone)]
@@ -33,7 +36,10 @@ impl ApnsClient {
             return Ok(());
         }
 
-        info!("Initializing APNs client (environment: {:?})", self.config.environment);
+        info!(
+            "Initializing APNs client (environment: {:?})",
+            self.config.environment
+        );
 
         // Open .p8 key file
         let key_file = File::open(&self.config.key_path)
@@ -85,15 +91,19 @@ impl ApnsClient {
             .ok_or_else(|| anyhow::anyhow!("APNs client not initialized"))?;
 
         // Serialize payload
-        let payload_json = serde_json::to_string(&payload)
-            .with_context(|| "Failed to serialize APNs payload")?;
+        let payload_json =
+            serde_json::to_string(&payload).with_context(|| "Failed to serialize APNs payload")?;
 
         // SECURITY: Hash device token for logging (never log full token)
         use crate::apns::DeviceTokenEncryption;
         let token_hash_bytes = DeviceTokenEncryption::hash_token(device_token);
         let token_hash_hex = hex::encode(&token_hash_bytes);
-        debug!("Sending APNs notification: device_token_hash={}, push_type={:?}, priority={:?}",
-            &token_hash_hex[..8], push_type, priority);
+        debug!(
+            "Sending APNs notification: device_token_hash={}, push_type={:?}, priority={:?}",
+            &token_hash_hex[..8],
+            push_type,
+            priority
+        );
         debug!("APNs payload: {}", payload_json);
 
         // Create notification options
@@ -129,7 +139,10 @@ impl ApnsClient {
                         use crate::apns::DeviceTokenEncryption;
                         let token_hash_bytes = DeviceTokenEncryption::hash_token(device_token);
                         let token_hash_hex = hex::encode(&token_hash_bytes);
-                        warn!("Device token may be invalid or unregistered: device_token_hash={}", &token_hash_hex[..8]);
+                        warn!(
+                            "Device token may be invalid or unregistered: device_token_hash={}",
+                            &token_hash_hex[..8]
+                        );
                         // TODO: Remove device token from database
                     }
                     _ => {}

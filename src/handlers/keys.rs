@@ -1,68 +1,64 @@
+use crate::IncomingBody;
 use crate::context::AppContext;
 use crate::db;
 use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
-use crate::utils::add_security_headers;
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::{body::Incoming as IncomingBody, HeaderMap, Response, StatusCode};
-use serde_json::json;
-use uuid::Uuid;
+use crate::error::AppError;
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::{PublicKeyBundleData, ServerMessage};
+use crate::utils::add_security_headers;
+use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{Response, StatusCode};
+use serde_json::json;
+use uuid::Uuid;
 
 /// POST /keys/upload
 /// Uploads or updates a user's key bundle
 pub async fn handle_upload_keys(
     ctx: &AppContext,
-    headers: &HeaderMap,
+    headers: HeaderMap,
     body: IncomingBody,
-) -> Response<Full<Bytes>> {
+) -> Result<Response<Full<Bytes>>, AppError> {
     // 1. Extract and verify JWT token
-    let user_id = match extract_user_id_from_jwt(ctx, headers) {
-        Ok(id) => id,
-        Err(response) => return response,
-    };
+    let user_id = extract_user_id_from_jwt(ctx, &headers)?;
 
     // 2. Read request body
-    let body_bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(e) => {
+    let body_bytes = body
+        .collect()
+        .await
+        .map_err(|e| {
             tracing::warn!(error = %e, "Failed to read request body");
-            return error_response(StatusCode::BAD_REQUEST, "Failed to read request body");
-        }
-    };
+            AppError::Hyper(e.to_string())
+        })?
+        .to_bytes()
+        .to_vec();
 
     // 3. Parse JSON to UploadableKeyBundle
-    let bundle: UploadableKeyBundle = match serde_json::from_slice(&body_bytes) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(error = %e, "Invalid JSON in request body");
-            return error_response(StatusCode::BAD_REQUEST, "Invalid JSON format");
-        }
-    };
+    let bundle: UploadableKeyBundle = serde_json::from_slice(&body_bytes).map_err(|e| {
+        tracing::warn!(error = %e, "Invalid JSON in request body");
+        AppError::Json(e)
+    })?;
 
     // 4. Validate the bundle
     // Don't allow empty user_id for key updates (user must already exist)
-    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false) {
+    ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false).map_err(|e| {
         tracing::warn!(
             error = %e,
             user_id = %user_id,
             "Key bundle validation failed"
         );
-        return error_response(StatusCode::BAD_REQUEST, &e.to_string());
-    }
+        AppError::Validation(e.to_string())
+    })?;
 
     // 4.5. SECURITY: Verify that user_id in bundle matches authenticated user
     use crate::e2e::BundleData;
 
-    let bundle_data_bytes = match BASE64.decode(&bundle.bundle_data) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to decode bundle_data");
-            return error_response(StatusCode::BAD_REQUEST, "Invalid bundle_data encoding");
-        }
-    };
+    let bundle_data_bytes = BASE64.decode(&bundle.bundle_data).map_err(|e| {
+        tracing::warn!(error = %e, "Failed to decode bundle_data");
+        AppError::Validation("Invalid bundle_data encoding".to_string())
+    })?;
 
     let bundle_data: BundleData = match serde_json::from_slice(&bundle_data_bytes) {
         Ok(data) => data,
@@ -79,25 +75,29 @@ pub async fn handle_upload_keys(
             bundle_user_id = %bundle_data.user_id,
             "user_id mismatch: authenticated user attempting to upload bundle for different user"
         );
-        return error_response(
-            StatusCode::FORBIDDEN,
-            "user_id in bundle does not match authenticated user"
-        );
+        return Err(AppError::Auth(
+            "user_id in bundle does not match authenticated user".to_string(),
+        ));
     }
 
     // 5. Store in database
-    if let Err(e) = db::store_key_bundle(&ctx.db_pool, &user_id, &bundle).await {
-        tracing::error!(
-            error = %e,
-            user_id = %user_id,
-            "Failed to store key bundle"
-        );
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to store key bundle");
-    }
+    db::store_key_bundle(&ctx.db_pool, &user_id, &bundle)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                error = %e,
+                user_id = %user_id,
+                "Failed to store key bundle"
+            );
+            AppError::Unknown(e)
+        })?;
 
     // 6. Invalidate cache
     let mut queue = ctx.queue.lock().await;
-    if let Err(e) = queue.invalidate_key_bundle_cache(&user_id.to_string()).await {
+    if let Err(e) = queue
+        .invalidate_key_bundle_cache(&user_id.to_string())
+        .await
+    {
         tracing::warn!(error = %e, "Failed to invalidate key bundle cache");
     }
     drop(queue);
@@ -116,20 +116,20 @@ pub async fn handle_upload_keys(
 /// Retrieves a user's public key bundle
 pub async fn handle_get_keys(
     ctx: &AppContext,
-    headers: &HeaderMap,
+    headers: HeaderMap,
     user_id_str: &str,
-) -> Response<Full<Bytes>> {
+) -> Result<Response<Full<Bytes>>, AppError> {
     // 1. Verify JWT token (must be authenticated to get keys)
-    let authenticated_user_id = match extract_user_id_from_jwt(ctx, headers) {
-        Ok(id) => id,
-        Err(response) => return response,
-    };
+    let authenticated_user_id = extract_user_id_from_jwt(ctx, &headers)?;
 
     // 1.5. SECURITY: Rate limiting to prevent enumeration attacks
     // Check rate limit before parsing user_id (DoS protection)
     {
         let mut queue = ctx.queue.lock().await;
-        match queue.increment_message_count(&authenticated_user_id.to_string()).await {
+        match queue
+            .increment_message_count(&authenticated_user_id.to_string())
+            .await
+        {
             Ok(count) => {
                 let max_messages = ctx.config.security.max_messages_per_hour;
                 if count > max_messages {
@@ -142,7 +142,10 @@ pub async fn handle_get_keys(
                     );
                     return error_response(
                         StatusCode::TOO_MANY_REQUESTS,
-                        &format!("Rate limit exceeded: maximum {} requests per hour", max_messages)
+                        &format!(
+                            "Rate limit exceeded: maximum {} requests per hour",
+                            max_messages
+                        ),
                     );
                 }
             }
@@ -170,7 +173,7 @@ pub async fn handle_get_keys(
                 target_user_hash = %crate::utils::log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
                 "Key bundle retrieved"
             );
-            json_response(StatusCode::OK, json!(bundle))
+            Ok(json_response(StatusCode::OK, json!(bundle))?)
         }
         Ok(None) => {
             // SECURITY: Always use hashed user_id in logs
@@ -200,36 +203,34 @@ pub async fn handle_get_keys(
 fn extract_user_id_from_jwt(
     ctx: &AppContext,
     headers: &HeaderMap,
-) -> Result<Uuid, Response<Full<Bytes>>> {
+) -> Result<Uuid, crate::error::AppError> {
     // Extract Authorization header
     let auth_header = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Missing authorization header"))?;
+        .ok_or_else(|| AppError::Auth("Missing authorization header".to_string()))?;
 
     // Extract token from "Bearer <token>"
     let token = auth_header
         .strip_prefix("Bearer ")
-        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Invalid authorization format"))?;
+        .ok_or_else(|| AppError::Auth("Invalid authorization format".to_string()))?;
 
     // Verify and decode JWT
     let claims = ctx
         .auth_manager
         .verify_token(token)
-        .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?;
+        .map_err(|_| AppError::Auth("Invalid or expired token".to_string()))?;
 
     // Parse user_id from claims
-    Uuid::parse_str(&claims.sub).map_err(|_| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Invalid user ID in token",
-        )
-    })
+    Uuid::parse_str(&claims.sub).map_err(AppError::Uuid)
 }
 
 /// Creates a JSON response
-fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<Bytes>> {
-    let json_bytes = serde_json::to_vec(&body).unwrap_or_default();
+fn json_response(
+    status: StatusCode,
+    body: serde_json::Value,
+) -> Result<Response<Full<Bytes>>, AppError> {
+    let json_bytes = serde_json::to_vec(&body).map_err(AppError::Json)?;
     let mut response = Response::new(Full::new(Bytes::from(json_bytes)));
     *response.status_mut() = status;
     // SECURITY: Handle header parsing errors gracefully
@@ -242,22 +243,25 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
             // This should never happen, but if it does, we continue without the header
         }
     }
-    
+
     // SECURITY: Add security headers to protect against XSS, clickjacking, etc.
     // For API endpoints, assume HTTPS in production (can be made configurable)
     add_security_headers(response.headers_mut(), true);
-    
-    response
+
+    Ok(response)
 }
 
 /// Creates an error JSON response
-fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
+fn error_response(status: StatusCode, message: &str) -> Result<Response<Full<Bytes>>, AppError> {
     json_response(status, json!({"error": message}))
 }
 
 /// Helper function to extract PublicKeyBundleData from UploadableKeyBundle
 /// Decodes the bundle_data and extracts the first cipher suite's keys
-fn extract_first_suite_data(bundle: &UploadableKeyBundle, username: &str) -> Result<PublicKeyBundleData, String> {
+fn extract_first_suite_data(
+    bundle: &UploadableKeyBundle,
+    username: &str,
+) -> Result<PublicKeyBundleData, String> {
     // 1. Decode bundle_data from base64
     let bundle_data_bytes = BASE64
         .decode(&bundle.bundle_data)

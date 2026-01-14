@@ -85,14 +85,14 @@ impl DeliveryPendingStorage for PostgresDeliveryStorage {
         .await
         .context("Failed to find delivery pending record")?;
 
-        Ok(record.map(|(message_hash, sender_id, expires_at, created_at)| {
-            DeliveryPending {
+        Ok(record.map(
+            |(message_hash, sender_id, expires_at, created_at)| DeliveryPending {
                 message_hash,
                 sender_id,
                 expires_at,
                 created_at,
-            }
-        }))
+            },
+        ))
     }
 
     async fn delete_by_hash(&self, message_hash: &str) -> Result<()> {
@@ -227,7 +227,8 @@ impl DeliveryPendingStorage for KafkaDeliveryStorage {
 
         // Save to Redis with TTL
         let mut conn = self.redis_client.clone();
-        let _: () = conn.set_ex(&key, json_str, self.ttl_seconds as u64)
+        let _: () = conn
+            .set_ex(&key, json_str, self.ttl_seconds as u64)
             .await
             .context("Failed to save delivery ACK mapping to Redis")?;
 
@@ -269,10 +270,14 @@ impl DeliveryPendingStorage for KafkaDeliveryStorage {
                     .context("Missing created_at in Redis data")?;
 
                 use chrono::TimeZone;
-                let expires_at = Utc.timestamp_opt(expires_at_ts, 0).single()
+                let expires_at = Utc
+                    .timestamp_opt(expires_at_ts, 0)
+                    .single()
                     .context("Invalid expires_at timestamp")?;
 
-                let created_at = Utc.timestamp_opt(created_at_ts, 0).single()
+                let created_at = Utc
+                    .timestamp_opt(created_at_ts, 0)
+                    .single()
                     .context("Invalid created_at timestamp")?;
 
                 Ok(Some(DeliveryPending {
@@ -292,7 +297,8 @@ impl DeliveryPendingStorage for KafkaDeliveryStorage {
         let key = self.redis_key(message_hash);
         let mut conn = self.redis_client.clone();
 
-        let _: () = conn.del(&key)
+        let _: () = conn
+            .del(&key)
             .await
             .context("Failed to delete delivery ACK mapping from Redis")?;
 
@@ -341,10 +347,8 @@ impl DeliveryPendingStorage for KafkaDeliveryStorage {
 
         // Check each key's sender_id and delete if matches
         for key in keys {
-            let mapping_json: Option<String> = conn
-                .get(&key)
-                .await
-                .context("Failed to get ACK mapping")?;
+            let mapping_json: Option<String> =
+                conn.get(&key).await.context("Failed to get ACK mapping")?;
 
             if let Some(json) = mapping_json {
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(&json) {

@@ -67,13 +67,9 @@ impl UserId {
             })
         } else {
             // Local format: just UUID
-            let uuid = Uuid::parse_str(s)
-                .map_err(|_| UserIdError::InvalidUuid(s.to_string()))?;
+            let uuid = Uuid::parse_str(s).map_err(|_| UserIdError::InvalidUuid(s.to_string()))?;
 
-            Ok(UserId {
-                uuid,
-                domain: None,
-            })
+            Ok(UserId { uuid, domain: None })
         }
     }
 
@@ -130,9 +126,9 @@ impl UserId {
         }
 
         // Check for invalid characters
-        domain.chars().all(|c| {
-            c.is_alphanumeric() || c == '.' || c == '-'
-        })
+        domain
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
     }
 }
 

@@ -32,7 +32,7 @@ pub const SECONDS_PER_DAY: i64 = 86400;
 // Message size limits (in bytes)
 // ============================================================================
 // ВАЖНО: Разные лимиты для разных типов контента
-// 
+//
 // WebSocket сообщения (текст + метаданные):
 // - 64 KB достаточно для ~32K символов UTF-8 + криптографические метаданные
 // - Больший размер указывает на атаку или медиафайлы (которые идут через CDN)
@@ -312,8 +312,9 @@ impl Config {
             redis_url: std::env::var("REDIS_URL")?,
             jwt_secret: {
                 // Check if RSA keys are provided (RS256 mode)
-                let has_rsa_keys = std::env::var("JWT_PRIVATE_KEY").is_ok() && std::env::var("JWT_PUBLIC_KEY").is_ok();
-                
+                let has_rsa_keys = std::env::var("JWT_PRIVATE_KEY").is_ok()
+                    && std::env::var("JWT_PUBLIC_KEY").is_ok();
+
                 let secret = if has_rsa_keys {
                     // JWT_SECRET is optional when using RS256 (for backward compatibility with old tokens)
                     std::env::var("JWT_SECRET").unwrap_or_default()
@@ -321,15 +322,20 @@ impl Config {
                     // JWT_SECRET is required when using HS256 (legacy mode)
                     let secret = std::env::var("JWT_SECRET")?;
                     if secret.len() < 32 {
-                        anyhow::bail!("JWT_SECRET must be at least 32 characters long, or use JWT_PRIVATE_KEY/JWT_PUBLIC_KEY for RS256");
+                        anyhow::bail!(
+                            "JWT_SECRET must be at least 32 characters long, or use JWT_PRIVATE_KEY/JWT_PUBLIC_KEY for RS256"
+                        );
                     }
                     // SECURITY: Validate secret strength (entropy, patterns)
                     if let Err(e) = crate::utils::validate_secret_strength(&secret, 32) {
-                        anyhow::bail!("JWT_SECRET is too weak: {}. Please use a random secret generated with: openssl rand -base64 32, or use JWT_PRIVATE_KEY/JWT_PUBLIC_KEY for RS256", e);
+                        anyhow::bail!(
+                            "JWT_SECRET is too weak: {}. Please use a random secret generated with: openssl rand -base64 32, or use JWT_PRIVATE_KEY/JWT_PUBLIC_KEY for RS256",
+                            e
+                        );
                     }
                     secret
                 };
-                
+
                 secret
             },
             jwt_private_key: {
@@ -342,15 +348,14 @@ impl Config {
                             key
                         } else {
                             // File path - read the file
-                            std::fs::read_to_string(&key)
-                                .unwrap_or_else(|e| {
-                                    tracing::warn!(
-                                        error = %e,
-                                        path = %key,
-                                        "Failed to read JWT_PRIVATE_KEY from file, using as-is"
-                                    );
-                                    key
-                                })
+                            std::fs::read_to_string(&key).unwrap_or_else(|e| {
+                                tracing::warn!(
+                                    error = %e,
+                                    path = %key,
+                                    "Failed to read JWT_PRIVATE_KEY from file, using as-is"
+                                );
+                                key
+                            })
                         }
                     } else {
                         // Assume it's a PEM string in environment variable
@@ -368,15 +373,14 @@ impl Config {
                             key
                         } else {
                             // File path - read the file
-                            std::fs::read_to_string(&key)
-                                .unwrap_or_else(|e| {
-                                    tracing::warn!(
-                                        error = %e,
-                                        path = %key,
-                                        "Failed to read JWT_PUBLIC_KEY from file, using as-is"
-                                    );
-                                    key
-                                })
+                            std::fs::read_to_string(&key).unwrap_or_else(|e| {
+                                tracing::warn!(
+                                    error = %e,
+                                    path = %key,
+                                    "Failed to read JWT_PUBLIC_KEY from file, using as-is"
+                                );
+                                key
+                            })
                         }
                     } else {
                         // Assume it's a PEM string in environment variable
@@ -700,8 +704,7 @@ impl Config {
 
             // Deep links configuration
             deeplinks: DeepLinksConfig {
-                apple_team_id: std::env::var("APPLE_TEAM_ID")
-                    .unwrap_or_else(|_| String::new()),
+                apple_team_id: std::env::var("APPLE_TEAM_ID").unwrap_or_else(|_| String::new()),
                 android_package_name: std::env::var("ANDROID_PACKAGE_NAME")
                     .unwrap_or_else(|_| "com.konstruct.messenger".to_string()),
                 android_cert_fingerprint: std::env::var("ANDROID_CERT_FINGERPRINT")
@@ -755,8 +758,7 @@ impl Config {
                 enabled: std::env::var("MEDIA_ENABLED")
                     .map(|v| v.to_lowercase() == "true")
                     .unwrap_or(false),
-                base_url: std::env::var("MEDIA_BASE_URL")
-                    .unwrap_or_else(|_| "".to_string()),
+                base_url: std::env::var("MEDIA_BASE_URL").unwrap_or_else(|_| "".to_string()),
                 upload_token_secret: std::env::var("MEDIA_UPLOAD_TOKEN_SECRET")
                     .unwrap_or_else(|_| "".to_string()),
                 max_file_size: std::env::var("MEDIA_MAX_FILE_SIZE")

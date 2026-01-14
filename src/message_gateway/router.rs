@@ -8,8 +8,8 @@
 //
 // ============================================================================
 
-use crate::federation::{FederationClient, ServerSigner};
 use crate::federation::mtls::MtlsConfig;
+use crate::federation::{FederationClient, ServerSigner};
 use crate::kafka::MessageProducer;
 use crate::message::ChatMessage;
 use crate::user_id::UserId;
@@ -81,12 +81,8 @@ impl MessageRouter {
     ) -> Result<Self> {
         let federation_client = if federation_enabled {
             Some(
-                FederationClient::new_with_mtls(
-                    server_signer,
-                    local_domain.clone(),
-                    mtls_config,
-                )
-                .context("Failed to create FederationClient with mTLS configuration")?
+                FederationClient::new_with_mtls(server_signer, local_domain.clone(), mtls_config)
+                    .context("Failed to create FederationClient with mTLS configuration")?,
             )
         } else {
             None
@@ -123,11 +119,19 @@ impl MessageRouter {
             self.route_to_local_kafka(msg).await?;
         } else if self.federation_enabled {
             // Remote delivery via federation
-            self.route_to_remote_instance(msg, recipient.domain().unwrap()).await?;
+            // SECURITY: Handle case where domain() returns None
+            let domain = recipient.domain().ok_or_else(|| {
+                anyhow::anyhow!("Federated recipient has no domain (internal error)")
+            })?;
+            self.route_to_remote_instance(msg, domain).await?;
         } else {
+            // SECURITY: Handle case where domain() returns None
+            let domain = recipient.domain().ok_or_else(|| {
+                anyhow::anyhow!("Federated recipient has no domain (internal error)")
+            })?;
             anyhow::bail!(
                 "Cannot route to remote instance {} - federation is disabled",
-                recipient.domain().unwrap()
+                domain
             );
         }
 
@@ -150,7 +154,9 @@ impl MessageRouter {
 
     /// Route to remote instance via federation
     async fn route_to_remote_instance(&self, msg: &ChatMessage, target_domain: &str) -> Result<()> {
-        let client = self.federation_client.as_ref()
+        let client = self
+            .federation_client
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Federation client not initialized"))?;
 
         client.send_message(target_domain, msg).await?;

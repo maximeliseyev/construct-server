@@ -13,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::{collections::HashMap, sync::Arc};
 use tokio::{net::TcpListener, sync::Mutex, sync::RwLock};
-use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage, WebSocketStream};
+use tokio_tungstenite::{WebSocketStream, connect_async, tungstenite::Message as WsMessage};
 use uuid::Uuid;
 
 pub struct TestApp {
@@ -42,11 +42,19 @@ pub async fn spawn_app() -> TestApp {
     );
     config.redis_url = "redis://127.0.0.1:6379".to_string(); // Point to local Redis
 
-    let mut connection = PgConnection::connect("postgres://construct:construct_dev_password@localhost:5432/postgres")
-        .await
-        .expect("Failed to connect to Postgres");
+    let mut connection = PgConnection::connect(
+        "postgres://construct:construct_dev_password@localhost:5432/postgres",
+    )
+    .await
+    .expect("Failed to connect to Postgres");
     connection
-        .execute(format!(r#"CREATE DATABASE "{}";"#, config.database_url.split('/').last().unwrap()).as_str())
+        .execute(
+            format!(
+                r#"CREATE DATABASE "{}";"#,
+                config.database_url.split('/').last().unwrap()
+            )
+            .as_str(),
+        )
         .await
         .expect("Failed to create database.");
 
@@ -74,7 +82,7 @@ pub async fn spawn_app() -> TestApp {
 
     // Initialize device token encryption
     let token_encryption = Arc::new(
-        DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key).unwrap()
+        DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key).unwrap(),
     );
 
     let app_context = AppContext::new(
@@ -89,15 +97,9 @@ pub async fn spawn_app() -> TestApp {
         server_instance_id,
     );
 
-    tokio::spawn(construct_server::run_unified_server(
-        app_context,
-        listener,
-    ));
+    tokio::spawn(construct_server::run_unified_server(app_context, listener));
 
-    TestApp {
-        address,
-        db_pool,
-    }
+    TestApp { address, db_pool }
 }
 
 impl TestClient {
@@ -137,8 +139,8 @@ impl TestClient {
         // Create dummy key material for suite 1 (CLASSIC_X25519)
         let suite_material = SuiteKeyMaterial {
             suite_id: 1,
-            identity_key: BASE64.encode(vec![0u8; 32]),      // 32 bytes for X25519
-            signed_prekey: BASE64.encode(vec![1u8; 32]),     // 32 bytes for X25519
+            identity_key: BASE64.encode(vec![0u8; 32]), // 32 bytes for X25519
+            signed_prekey: BASE64.encode(vec![1u8; 32]), // 32 bytes for X25519
             one_time_prekeys: vec![],
         };
 
@@ -155,9 +157,9 @@ impl TestClient {
 
         // Create UploadableKeyBundle
         let uploadable_bundle = UploadableKeyBundle {
-            master_identity_key: BASE64.encode(vec![2u8; 32]),  // 32 bytes for Ed25519
+            master_identity_key: BASE64.encode(vec![2u8; 32]), // 32 bytes for Ed25519
             bundle_data: bundle_data_base64,
-            signature: BASE64.encode(vec![3u8; 64]),             // 64 bytes for Ed25519 signature
+            signature: BASE64.encode(vec![3u8; 64]), // 64 bytes for Ed25519 signature
         };
 
         // Use native UploadableKeyBundle directly (no additional encoding needed)
@@ -174,7 +176,9 @@ impl TestClient {
                 self.session_token = Some(data.session_token);
                 Ok(())
             }
-            Some(ServerMessage::Error(e)) => Err(anyhow::anyhow!("Registration failed: {}", e.message)),
+            Some(ServerMessage::Error(e)) => {
+                Err(anyhow::anyhow!("Registration failed: {}", e.message))
+            }
             _ => Err(anyhow::anyhow!("Unexpected response")),
         }
     }

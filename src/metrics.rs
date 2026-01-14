@@ -9,7 +9,7 @@ pub static CONNECTIONS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
         "construct_connections_total",
         "Total number of client connections"
     ))
-    .unwrap()
+    .expect("Failed to register CONNECTIONS_TOTAL metric - this should only happen if the metric is registered twice")
 });
 
 pub static MESSAGES_SENT_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
@@ -17,7 +17,7 @@ pub static MESSAGES_SENT_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
         "construct_messages_sent_total",
         "Total number of messages sent"
     ))
-    .unwrap()
+    .expect("Failed to register MESSAGES_SENT_TOTAL metric - this should only happen if the metric is registered twice")
 });
 
 #[allow(dead_code)]
@@ -26,7 +26,7 @@ pub static MESSAGE_DELIVERY_TIME: Lazy<Histogram> = Lazy::new(|| {
         "construct_message_delivery_time_seconds",
         "Histogram of message delivery times"
     )
-    .unwrap()
+    .expect("Failed to register MESSAGE_DELIVERY_TIME metric - this should only happen if the metric is registered twice")
 });
 
 // ============================================================================
@@ -39,7 +39,7 @@ pub static SHADOW_READ_MATCHES: Lazy<IntCounter> = Lazy::new(|| {
         "shadow_read_matches_total",
         "Messages that matched between Kafka and Redis offline queue"
     ))
-    .unwrap()
+    .expect("Failed to register SHADOW_READ_MATCHES metric - this should only happen if the metric is registered twice")
 });
 
 /// Messages that differed between Kafka and Redis
@@ -48,7 +48,7 @@ pub static SHADOW_READ_DISCREPANCIES: Lazy<IntCounter> = Lazy::new(|| {
         "shadow_read_discrepancies_total",
         "Messages that differed between Kafka and Redis offline queue"
     ))
-    .unwrap()
+    .expect("Failed to register SHADOW_READ_DISCREPANCIES metric - this should only happen if the metric is registered twice")
 });
 
 /// Messages found in Kafka but not in Redis
@@ -57,7 +57,7 @@ pub static SHADOW_READ_KAFKA_ONLY: Lazy<IntCounter> = Lazy::new(|| {
         "shadow_read_kafka_only_total",
         "Messages present in Kafka but not in Redis offline queue"
     ))
-    .unwrap()
+    .expect("Failed to register SHADOW_READ_KAFKA_ONLY metric - this should only happen if the metric is registered twice")
 });
 
 /// Messages found in Redis but not in Kafka (reverse-check)
@@ -66,7 +66,7 @@ pub static SHADOW_READ_REDIS_ONLY: Lazy<IntCounter> = Lazy::new(|| {
         "shadow_read_redis_only_total",
         "Messages present in Redis offline queue but not seen in Kafka"
     ))
-    .unwrap()
+    .expect("Failed to register SHADOW_READ_REDIS_ONLY metric - this should only happen if the metric is registered twice")
 });
 
 /// Total messages processed in shadow-read mode
@@ -75,7 +75,7 @@ pub static SHADOW_READ_PROCESSED: Lazy<IntCounter> = Lazy::new(|| {
         "shadow_read_processed_total",
         "Total messages processed in shadow-read mode"
     ))
-    .unwrap()
+    .expect("Failed to register SHADOW_READ_PROCESSED metric - this should only happen if the metric is registered twice")
 });
 
 pub fn gather_metrics() -> Result<String> {

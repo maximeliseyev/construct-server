@@ -210,8 +210,8 @@ impl MessageProducer {
         event.validate().context("Invalid delivery ACK event")?;
 
         // Serialize to JSON
-        let payload = serde_json::to_vec(event)
-            .context("Failed to serialize delivery ACK event")?;
+        let payload =
+            serde_json::to_vec(event).context("Failed to serialize delivery ACK event")?;
 
         // Partition key: message_hash (ensures same partition for retries)
         // NOTE: Using message_hash (not user ID hash) for partitioning
@@ -222,9 +222,7 @@ impl MessageProducer {
         let ack_topic = format!("{}-delivery-ack", self.topic);
 
         // Create Kafka record
-        let record = FutureRecord::to(&ack_topic)
-            .key(key)
-            .payload(&payload);
+        let record = FutureRecord::to(&ack_topic).key(key).payload(&payload);
 
         // Send with timeout
         let start = std::time::Instant::now();
@@ -267,7 +265,10 @@ impl MessageProducer {
                     "Failed to send delivery ACK event to Kafka"
                 );
 
-                Err(anyhow::anyhow!("Kafka delivery ACK send failed: {}", kafka_err))
+                Err(anyhow::anyhow!(
+                    "Kafka delivery ACK send failed: {}",
+                    kafka_err
+                ))
             }
         }
     }

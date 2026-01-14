@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::client::conn::http1::handshake;
-use hyper::{header, Request, StatusCode};
+use hyper::{Request, StatusCode, header};
 use hyper_util::rt::TokioIo;
 use serial_test::serial;
 use std::net::SocketAddr;

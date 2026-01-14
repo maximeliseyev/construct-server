@@ -1,8 +1,8 @@
 use crate::audit::AuditLogger;
 use crate::context::AppContext;
+use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
 use crate::handlers::connection::ConnectionHandler;
 use crate::message::ServerMessage;
-use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
 use crate::utils::log_safe_id;
 use uuid::Uuid;
 
@@ -22,7 +22,9 @@ pub async fn handle_rotate_prekey(
         Ok(u) => u,
         Err(_) => {
             tracing::warn!(user_id = %user_id, "Invalid user ID format for key rotation");
-            handler.send_error("INVALID_USER_ID", "Invalid user ID format").await;
+            handler
+                .send_error("INVALID_USER_ID", "Invalid user ID format")
+                .await;
             return;
         }
     };
@@ -47,10 +49,12 @@ pub async fn handle_rotate_prekey(
             "Key update rate limit exceeded"
         );
         drop(queue);
-        handler.send_error(
-            "RATE_LIMIT_EXCEEDED",
-            &format!("Too many key updates. Limit: {}/day", max_updates),
-        ).await;
+        handler
+            .send_error(
+                "RATE_LIMIT_EXCEEDED",
+                &format!("Too many key updates. Limit: {}/day", max_updates),
+            )
+            .await;
         return;
     }
     drop(queue);
@@ -68,25 +72,29 @@ pub async fn handle_rotate_prekey(
             false,
             Some(format!("Validation failed: {}", e)),
         );
-        
+
         tracing::warn!(
             error = %e,
             user_hash = %user_id_hash,
             "Invalid key bundle after rotation"
         );
-        handler.send_error("INVALID_KEY_BUNDLE", &e.to_string()).await;
+        handler
+            .send_error("INVALID_KEY_BUNDLE", &e.to_string())
+            .await;
         return;
     }
 
     // 5.5. SECURITY: Verify that user_id in bundle matches the authenticated user
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use crate::e2e::BundleData;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     let bundle_data_bytes = match BASE64.decode(&bundle.bundle_data) {
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to decode bundle_data during key rotation");
-            handler.send_error("INVALID_BUNDLE", "Invalid bundle_data encoding").await;
+            handler
+                .send_error("INVALID_BUNDLE", "Invalid bundle_data encoding")
+                .await;
             return;
         }
     };
@@ -95,7 +103,9 @@ pub async fn handle_rotate_prekey(
         Ok(data) => data,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to parse bundle_data during key rotation");
-            handler.send_error("INVALID_BUNDLE", "Invalid bundle_data format").await;
+            handler
+                .send_error("INVALID_BUNDLE", "Invalid bundle_data format")
+                .await;
             return;
         }
     };
@@ -110,18 +120,23 @@ pub async fn handle_rotate_prekey(
             None,
             client_ip,
             "user_id mismatch during key rotation".to_string(),
-            Some(format!("Attempted to rotate keys for different user: {}", bundle_data.user_id)),
+            Some(format!(
+                "Attempted to rotate keys for different user: {}",
+                bundle_data.user_id
+            )),
         );
-        
+
         tracing::warn!(
             authenticated_user = %user_id,
             bundle_user_id = %bundle_data.user_id,
             "user_id mismatch during key rotation: user attempting to rotate keys for different user"
         );
-        handler.send_error(
-            "FORBIDDEN",
-            "user_id in bundle does not match authenticated user"
-        ).await;
+        handler
+            .send_error(
+                "FORBIDDEN",
+                "user_id in bundle does not match authenticated user",
+            )
+            .await;
         return;
     }
 
@@ -137,13 +152,15 @@ pub async fn handle_rotate_prekey(
             false,
             Some(format!("Database error: {}", e)),
         );
-        
+
         tracing::error!(
             error = %e,
             user_hash = %user_id_hash,
             "Failed to store rotated key bundle"
         );
-        handler.send_error("SERVER_ERROR", "Failed to update key").await;
+        handler
+            .send_error("SERVER_ERROR", "Failed to update key")
+            .await;
         return;
     }
 
@@ -166,10 +183,14 @@ pub async fn handle_rotate_prekey(
     );
 
     // 8. Send success response
-    if handler.send_msgpack(&ServerMessage::KeyRotationSuccess).await.is_err() {
+    if handler
+        .send_msgpack(&ServerMessage::KeyRotationSuccess)
+        .await
+        .is_err()
+    {
         return;
     }
-    
+
     tracing::info!(
         user_hash = %user_id_hash,
         "Key bundle updated successfully"

@@ -12,8 +12,8 @@
 //
 // ============================================================================
 
-use crate::federation::signing::{FederatedEnvelope, ServerSigner};
 use crate::federation::mtls::{FederationTrustStore, MtlsConfig};
+use crate::federation::signing::{FederatedEnvelope, ServerSigner};
 use crate::message::ChatMessage;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -77,9 +77,9 @@ impl FederationClient {
                 pinned_count = mtls_config.pinned_certs.len(),
                 "Initializing FederationTrustStore with pinned certificates"
             );
-            
+
             let store = Arc::new(FederationTrustStore::new());
-            
+
             // Add all pinned certificates to trust store
             for (domain, fingerprint) in &mtls_config.pinned_certs {
                 // Normalize fingerprint format (remove colons if present, then add back)
@@ -94,7 +94,7 @@ impl FederationClient {
                         .collect::<Vec<_>>()
                         .join(":")
                         .to_uppercase();
-                    
+
                     store.trust_fingerprint(domain, &colon_fp);
                     tracing::info!(
                         domain = %domain,
@@ -109,7 +109,7 @@ impl FederationClient {
                     );
                 }
             }
-            
+
             Some(store)
         } else {
             None
@@ -197,7 +197,9 @@ impl FederationClient {
                 // For now, we rely on standard TLS verification and log that pinning is configured
                 // Future enhancement: Use rustls with custom ServerCertVerifier to verify fingerprint during TLS handshake
                 // This would require: reqwest with rustls-tls feature and implementing ServerCertVerifier trait
-            } else if self.mtls_config.verify_server_cert && !self.mtls_config.pinned_certs.is_empty() {
+            } else if self.mtls_config.verify_server_cert
+                && !self.mtls_config.pinned_certs.is_empty()
+            {
                 // SECURITY: Pinned certs are configured but not for this domain
                 // In production, this should be treated as an error to prevent TOFU MITM attacks
                 if self.mtls_config.required {

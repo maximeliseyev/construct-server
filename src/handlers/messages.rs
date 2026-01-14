@@ -1,10 +1,13 @@
+use crate::IncomingBody;
 use crate::context::AppContext;
 use crate::e2e::{EncryptedMessageV3, ServerCryptoValidator};
+use crate::error::AppError;
 use crate::kafka::types::{KafkaMessageEnvelope, MessageType};
-use crate::utils::{log_safe_id, add_security_headers};
+use crate::utils::{add_security_headers, log_safe_id};
+use axum::http::HeaderMap;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::{body::Incoming as IncomingBody, HeaderMap, Response, StatusCode};
+use hyper::{Response, StatusCode};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -13,14 +16,11 @@ use uuid::Uuid;
 /// Sends an E2E-encrypted message
 pub async fn handle_send_message(
     ctx: &AppContext,
-    headers: &HeaderMap,
+    headers: HeaderMap,
     body: IncomingBody,
-) -> Response<Full<Bytes>> {
+) -> Result<Response<Full<Bytes>>, AppError> {
     // 1. Extract and verify JWT token
-    let sender_id = match extract_user_id_from_jwt(ctx, headers) {
-        Ok(id) => id,
-        Err(response) => return response,
-    };
+    let sender_id = extract_user_id_from_jwt(ctx, &headers)?;
 
     // 1.5. SECURITY: Check rate limiting BEFORE reading body (DoS protection)
     // This prevents attackers from sending large requests before rate limit check
@@ -33,10 +33,10 @@ pub async fn handle_send_message(
                 reason = %reason,
                 "Blocked user attempted to send message"
             );
-            return error_response(
-                StatusCode::FORBIDDEN,
-                &format!("Your account is temporarily blocked: {}", reason)
-            );
+            return Err(AppError::Auth(format!(
+                "Your account is temporarily blocked: {}",
+                reason
+            )));
         }
 
         // Check message rate limit
@@ -51,10 +51,10 @@ pub async fn handle_send_message(
                         limit = max_messages,
                         "Message rate limit exceeded"
                     );
-                    return error_response(
-                        StatusCode::TOO_MANY_REQUESTS,
-                        &format!("Rate limit exceeded: maximum {} messages per hour", max_messages)
-                    );
+                    return Err(AppError::Validation(format!(
+                        "Rate limit exceeded: maximum {} messages per hour",
+                        max_messages
+                    )));
                 }
             }
             Err(e) => {
@@ -69,24 +69,27 @@ pub async fn handle_send_message(
     let body_bytes = match body.collect().await {
         Ok(collected) => {
             let bytes = collected.to_bytes();
+            let bytes_vec = bytes.to_vec();
             // SECURITY: Validate request body size to prevent DoS
-            if bytes.len() > crate::config::MAX_REQUEST_BODY_SIZE {
+            if bytes_vec.len() > crate::config::MAX_REQUEST_BODY_SIZE {
                 tracing::warn!(
-                    size = bytes.len(),
+                    size = bytes_vec.len(),
                     limit = crate::config::MAX_REQUEST_BODY_SIZE,
                     sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
                     "Request body too large"
                 );
-                return error_response(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    &format!("Request body exceeds maximum size of {} bytes", crate::config::MAX_REQUEST_BODY_SIZE)
-                );
+                return Err(AppError::Validation(format!(
+                    "Request body exceeds maximum size of {} bytes",
+                    crate::config::MAX_REQUEST_BODY_SIZE
+                )));
             }
-            bytes
+            bytes_vec
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to read request body");
-            return error_response(StatusCode::BAD_REQUEST, "Failed to read request body");
+            return Err(AppError::Validation(
+                "Failed to read request body".to_string(),
+            ));
         }
     };
 
@@ -95,7 +98,7 @@ pub async fn handle_send_message(
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(error = %e, "Invalid JSON in request body");
-            return error_response(StatusCode::BAD_REQUEST, "Invalid JSON format");
+            return Err(AppError::Validation("Invalid JSON format".to_string()));
         }
     };
 
@@ -108,10 +111,10 @@ pub async fn handle_send_message(
             sender_hash = %log_safe_id(&sender_id.to_string(), &ctx.config.logging.hash_salt),
             "Message ciphertext too large"
         );
-        return error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            &format!("Message size exceeds maximum of {} bytes", crate::config::MAX_MESSAGE_SIZE)
-        );
+        return Err(AppError::Validation(format!(
+            "Message size exceeds maximum of {} bytes",
+            crate::config::MAX_MESSAGE_SIZE
+        )));
     }
 
     // 5. Validate the message format
@@ -123,20 +126,24 @@ pub async fn handle_send_message(
             sender_hash = %log_safe_id(&sender_id.to_string(), salt),
             "Message validation failed"
         );
-        return error_response(StatusCode::BAD_REQUEST, &e.to_string());
+        return Err(AppError::Validation(e.to_string()));
     }
 
     // 6. Parse recipient_id
     let recipient_id = match Uuid::parse_str(&message.recipient_id) {
         Ok(id) => id,
         Err(_) => {
-            return error_response(StatusCode::BAD_REQUEST, "Invalid recipient ID format");
+            return Err(AppError::Validation(
+                "Invalid recipient ID format".to_string(),
+            ));
         }
     };
 
     // 6. Security check: prevent sending to self
     if sender_id == recipient_id {
-        return error_response(StatusCode::BAD_REQUEST, "Cannot send message to self");
+        return Err(AppError::Validation(
+            "Cannot send message to self".to_string(),
+        ));
     }
 
     // 7. Create Kafka envelope for message (Phase 5+)
@@ -178,7 +185,7 @@ pub async fn handle_send_message(
             kafka_enabled = ctx.kafka_producer.is_enabled(),
             "Kafka write FAILED - message NOT persisted (REST API v3)"
         );
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue message");
+        return Err(AppError::Internal("Failed to queue message".to_string()));
     }
 
     tracing::debug!(
@@ -206,14 +213,14 @@ pub async fn handle_send_message(
     }
 
     // 10. Return success (202 Accepted - message is queued for delivery)
-    json_response(
+    Ok(json_response(
         StatusCode::ACCEPTED,
         json!({
             "status": "accepted",
             "message_id": message_id,
             "message": "Message queued for delivery"
         }),
-    )
+    ))
 }
 
 // ============================================================================
@@ -221,34 +228,27 @@ pub async fn handle_send_message(
 // ============================================================================
 
 /// Extracts user_id from JWT token in Authorization header
-fn extract_user_id_from_jwt(
-    ctx: &AppContext,
-    headers: &HeaderMap,
-) -> Result<Uuid, Response<Full<Bytes>>> {
+fn extract_user_id_from_jwt(ctx: &AppContext, headers: &HeaderMap) -> Result<Uuid, AppError> {
     // Extract Authorization header
     let auth_header = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Missing authorization header"))?;
+        .ok_or_else(|| AppError::Auth("Missing authorization header".to_string()))?;
 
     // Extract token from "Bearer <token>"
     let token = auth_header
         .strip_prefix("Bearer ")
-        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Invalid authorization format"))?;
+        .ok_or_else(|| AppError::Auth("Invalid authorization format".to_string()))?;
 
     // Verify and decode JWT
     let claims = ctx
         .auth_manager
         .verify_token(token)
-        .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?;
+        .map_err(|_| AppError::Auth("Invalid or expired token".to_string()))?;
 
     // Parse user_id from claims
-    Uuid::parse_str(&claims.sub).map_err(|_| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Invalid user ID in token",
-        )
-    })
+    Uuid::parse_str(&claims.sub)
+        .map_err(|_| AppError::Internal("Invalid user ID in token".to_string()))
 }
 
 /// Creates a JSON response
@@ -266,11 +266,11 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
             // This should never happen, but if it does, we continue without the header
         }
     }
-    
+
     // SECURITY: Add security headers to protect against XSS, clickjacking, etc.
     // For API endpoints, assume HTTPS in production (can be made configurable)
     add_security_headers(response.headers_mut(), true);
-    
+
     response
 }
 

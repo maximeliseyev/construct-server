@@ -1,18 +1,18 @@
-use construct_server::e2e::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use construct_server::e2e::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
 
 mod test_utils;
-use test_utils::{spawn_app, TestClient};
 use construct_server::message::ClientMessage;
 use serial_test::serial;
+use test_utils::{TestClient, spawn_app};
 
 /// Helper function to create a valid test UploadableKeyBundle
 fn create_test_bundle(user_id: &str) -> UploadableKeyBundle {
     // Create key material for suite 1 (CLASSIC_X25519)
     let suite_material = SuiteKeyMaterial {
         suite_id: 1,
-        identity_key: BASE64.encode(vec![0u8; 32]),      // 32 bytes for X25519
-        signed_prekey: BASE64.encode(vec![1u8; 32]),     // 32 bytes for X25519
+        identity_key: BASE64.encode(vec![0u8; 32]), // 32 bytes for X25519
+        signed_prekey: BASE64.encode(vec![1u8; 32]), // 32 bytes for X25519
         one_time_prekeys: vec![],
     };
 
@@ -30,9 +30,9 @@ fn create_test_bundle(user_id: &str) -> UploadableKeyBundle {
     // Create and return UploadableKeyBundle directly
     // No need for additional JSON/Base64 encoding - MessagePack handles serialization
     UploadableKeyBundle {
-        master_identity_key: BASE64.encode(vec![2u8; 32]),  // 32 bytes for Ed25519
+        master_identity_key: BASE64.encode(vec![2u8; 32]), // 32 bytes for Ed25519
         bundle_data: bundle_data_base64,
-        signature: BASE64.encode(vec![3u8; 64]),             // 64 bytes for Ed25519 signature
+        signature: BASE64.encode(vec![3u8; 64]), // 64 bytes for Ed25519 signature
     }
 }
 

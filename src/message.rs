@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use crate::e2e::UploadableKeyBundle;
 use crate::user_id::UserId;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 // ============================================================================
 // ChatMessage (formerly Message) - Updated for Double Ratchet Protocol
@@ -59,7 +59,7 @@ impl ChatMessage {
             && self.ephemeral_public_key.len() == 32
             && Uuid::parse_str(&self.id).is_ok()
             && UserId::parse(&self.from).is_ok()  // Support both local UUID and federated userid@domain
-            && UserId::parse(&self.to).is_ok()    // Support both local UUID and federated userid@domain
+            && UserId::parse(&self.to).is_ok() // Support both local UUID and federated userid@domain
     }
 }
 
@@ -88,7 +88,6 @@ pub struct LoginData {
 pub struct ConnectData {
     pub session_token: String,
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -209,7 +208,7 @@ pub enum ClientMessage {
     UnregisterDeviceToken(UnregisterDeviceTokenData),
     UpdateDeviceTokenPreferences(UpdateDeviceTokenPreferencesData),
     RequestMediaToken(RequestMediaTokenData),
-    Dummy(DummyMessageData),  // Traffic protection: dummy message (ignored by server)
+    Dummy(DummyMessageData), // Traffic protection: dummy message (ignored by server)
 }
 
 // ============================================================================
@@ -240,7 +239,6 @@ pub struct ConnectSuccessData {
     pub user_id: String,
     pub username: String,
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

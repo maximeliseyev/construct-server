@@ -3,7 +3,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use redis::AsyncCommands;
 use std::collections::HashMap;
-use std::convert::Infallible;
+
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
@@ -16,8 +16,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode, body::Incoming as IncomingBody};
+use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+
+// Re-export IncomingBody for use in handlers
+pub use hyper::body::Incoming as IncomingBody;
 
 pub mod apns;
 pub mod audit;
@@ -27,6 +30,7 @@ pub mod context;
 pub mod db;
 pub mod delivery_ack;
 pub mod e2e;
+pub mod error;
 pub mod federation;
 pub mod handlers;
 pub mod health;
@@ -47,11 +51,12 @@ use auth::AuthManager;
 use config::Config;
 use context::AppContext;
 use db::DbPool;
+use error::AppError;
 use handlers::{handle_websocket, session::Clients};
 use kafka::MessageProducer;
 use queue::MessageQueue;
 
-type HttpResult = Result<Response<Full<Bytes>>, Infallible>;
+type HttpResult = Result<Response<Full<Bytes>>, crate::error::AppError>;
 
 async fn http_handler(
     req: Request<IncomingBody>,
@@ -70,26 +75,32 @@ async fn http_handler(
 
     let response = match (method.as_str(), path.as_str()) {
         ("GET", "/health") => match health::health_check(&db_pool, queue, kafka_producer).await {
-            Ok(_) => Response::new(Full::new(Bytes::from("OK"))),
+            Ok(_) => {
+                Ok::<Response<Full<Bytes>>, AppError>(Response::new(Full::new(Bytes::from("OK"))))
+            }
             Err(e) => {
                 tracing::error!("Health check failed: {}", e);
                 let mut res = Response::new(Full::new(Bytes::from("Service Unavailable")));
                 *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-                res
+                Ok::<Response<Full<Bytes>>, AppError>(res)
             }
         },
         ("GET", "/metrics") => match metrics::gather_metrics() {
             Ok(metrics_data) => {
                 let mut res = Response::new(Full::new(Bytes::from(metrics_data)));
-                res.headers_mut()
-                    .insert("Content-Type", "text/plain; version=0.0.4".parse().unwrap());
-                res
+                res.headers_mut().insert(
+                    "Content-Type",
+                    "text/plain; version=0.0.4"
+                        .parse()
+                        .map_err(AppError::HttpHeader)?,
+                );
+                Ok::<Response<Full<Bytes>>, AppError>(res)
             }
             Err(e) => {
                 tracing::error!("Failed to gather metrics: {}", e);
                 let mut res = Response::new(Full::new(Bytes::from("Internal Server Error")));
                 *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                res
+                Ok::<Response<Full<Bytes>>, AppError>(res)
             }
         },
 
@@ -107,7 +118,7 @@ async fn http_handler(
                 server_instance_id,
             );
             let (parts, body) = req.into_parts();
-            handlers::keys::handle_upload_keys(&ctx, &parts.headers, body).await
+            Ok(handlers::keys::handle_upload_keys(&ctx, parts.headers, body).await?)
         }
         ("GET", p) if p.starts_with("/keys/") => {
             let user_id = p.trim_start_matches("/keys/");
@@ -123,7 +134,7 @@ async fn http_handler(
                 server_instance_id,
             );
             let (parts, _) = req.into_parts();
-            handlers::keys::handle_get_keys(&ctx, &parts.headers, user_id).await
+            Ok(handlers::keys::handle_get_keys(&ctx, parts.headers, user_id).await?)
         }
         ("POST", "/messages/send") => {
             let ctx = AppContext::new(
@@ -138,7 +149,7 @@ async fn http_handler(
                 server_instance_id,
             );
             let (parts, body) = req.into_parts();
-            handlers::messages::handle_send_message(&ctx, &parts.headers, body).await
+            handlers::messages::handle_send_message(&ctx, parts.headers, body).await
         }
 
         // Federation routes
@@ -154,7 +165,7 @@ async fn http_handler(
                 token_encryption,
                 server_instance_id,
             );
-            handlers::federation::well_known_konstruct(ctx).await
+            handlers::federation::well_known_konstruct(&ctx).await
         }
         ("GET", "/federation/health") => {
             let ctx = AppContext::new(
@@ -168,7 +179,7 @@ async fn http_handler(
                 token_encryption,
                 server_instance_id,
             );
-            handlers::federation::federation_health(ctx).await
+            handlers::federation::federation_health(&ctx).await
         }
         ("POST", "/federation/v1/messages") => {
             let ctx = AppContext::new(
@@ -189,10 +200,10 @@ async fn http_handler(
         _ => {
             let mut not_found = Response::new(Full::new(Bytes::from("Not Found")));
             *not_found.status_mut() = StatusCode::NOT_FOUND;
-            not_found
+            Ok(not_found)
         }
     };
-    Ok(response)
+    Ok(response?)
 }
 
 pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) {
@@ -262,15 +273,31 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
                         let derived_key = tungstenite::handshake::derive_accept_key(key.as_bytes());
                         let mut res = Response::new(Full::new(Bytes::new()));
                         *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-                        res.headers_mut()
-                            .insert(hyper::header::UPGRADE, "websocket".parse().unwrap());
-                        res.headers_mut()
-                            .insert(hyper::header::CONNECTION, "Upgrade".parse().unwrap());
+
+                        // SECURITY: Replace unwrap() with proper error handling
+                        // These header values are static and should never fail, but we handle errors gracefully
+                        res.headers_mut().insert(
+                            hyper::header::UPGRADE,
+                            "websocket".parse().map_err(|e| {
+                                tracing::error!(error = %e, "Failed to parse UPGRADE header (this should never happen)");
+                                AppError::HttpHeader(e)
+                            })?,
+                        );
+                        res.headers_mut().insert(
+                            hyper::header::CONNECTION,
+                            "Upgrade".parse().map_err(|e| {
+                                tracing::error!(error = %e, "Failed to parse CONNECTION header (this should never happen)");
+                                AppError::HttpHeader(e)
+                            })?,
+                        );
                         res.headers_mut().insert(
                             hyper::header::SEC_WEBSOCKET_ACCEPT,
-                            derived_key.parse().unwrap(),
+                            derived_key.parse().map_err(|e| {
+                                tracing::error!(error = %e, "Failed to parse SEC_WEBSOCKET_ACCEPT header");
+                                AppError::HttpHeader(e)
+                            })?,
                         );
-                        Ok(res)
+                        Ok::<Response<Full<Bytes>>, AppError>(res)
                     } else {
                         // Handle regular HTTP
                         http_handler(
@@ -341,20 +368,21 @@ fn spawn_delivery_listener(
 
     tokio::spawn(async move {
         // Create Redis connection for dead-letter queue (for malformed messages)
-        let mut dlq_conn: Option<redis::aio::MultiplexedConnection> =
-            match redis::Client::open(redis_url.as_str()) {
-                Ok(client) => match client.get_multiplexed_async_connection().await {
-                    Ok(conn) => Some(conn),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to get Redis connection for DLQ - malformed messages will be dropped");
-                        None
-                    }
-                },
+        let mut dlq_conn: Option<redis::aio::MultiplexedConnection> = match redis::Client::open(
+            redis_url.as_str(),
+        ) {
+            Ok(client) => match client.get_multiplexed_async_connection().await {
+                Ok(conn) => Some(conn),
                 Err(e) => {
-                    tracing::warn!(error = %e, "Failed to create Redis client for DLQ - malformed messages will be dropped");
+                    tracing::warn!(error = %e, "Failed to get Redis connection for DLQ - malformed messages will be dropped");
                     None
                 }
-            };
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to create Redis client for DLQ - malformed messages will be dropped");
+                None
+            }
+        };
 
         tracing::info!(
             server_instance_id = %server_instance_id,
@@ -391,17 +419,24 @@ fn spawn_delivery_listener(
             for message_bytes in messages {
                 // Try to parse as KafkaMessageEnvelope (Phase 5 format from delivery-worker)
                 // This is the format used when messages are saved to offline queue
-                if let Ok(envelope) = rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(&message_bytes) {
+                if let Ok(envelope) =
+                    rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(&message_bytes)
+                {
                     // Convert KafkaMessageEnvelope to ChatMessage for WebSocket delivery
-                    let ephemeral_key = envelope.ephemeral_public_key
+                    let ephemeral_key = envelope
+                        .ephemeral_public_key
                         .as_ref()
-                        .and_then(|k| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok())
+                        .and_then(|k| {
+                            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k)
+                                .ok()
+                        })
                         .unwrap_or_else(|| vec![0u8; 32]);
-                    
-                    let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
-                        .unwrap_or_else(chrono::Utc::now)
-                        .timestamp() as u64;
-                    
+
+                    let timestamp =
+                        chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
+                            .unwrap_or_else(chrono::Utc::now)
+                            .timestamp() as u64;
+
                     let chat_msg = message::ChatMessage {
                         id: envelope.message_id.clone(),
                         from: envelope.sender_id.clone(),
@@ -411,7 +446,7 @@ fn spawn_delivery_listener(
                         message_number: envelope.message_number.unwrap_or(0),
                         timestamp,
                     };
-                    
+
                     let clients_guard = clients.read().await;
                     if let Some(tx) = clients_guard.get(&envelope.recipient_id) {
                         let server_msg = message::ServerMessage::Message(chat_msg.clone());
@@ -437,9 +472,10 @@ fn spawn_delivery_listener(
                     }
                     continue;
                 }
-                
+
                 // Try to parse as ChatMessage (old format)
-                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes) {
+                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes)
+                {
                     // Old format: send to the recipient via WebSocket
                     let clients_guard = clients.read().await;
                     if let Some(tx) = clients_guard.get(&chat_msg.to) {
@@ -464,7 +500,7 @@ fn spawn_delivery_listener(
                     }
                     continue;
                 }
-                
+
                 // Try to parse as JSON (v3 format)
                 if let Ok(json_str) = std::str::from_utf8(&message_bytes) {
                     if let Ok(v3_msg) = serde_json::from_str::<e2e::EncryptedMessageV3>(json_str) {
@@ -492,14 +528,13 @@ fn spawn_delivery_listener(
                         continue;
                     }
                 }
-                
+
                 // If none of the formats match, move to dead-letter queue
                 tracing::error!(
                     "Failed to parse message from delivery_queue. Expected KafkaMessageEnvelope (MessagePack), ChatMessage (MessagePack), or EncryptedMessageV3 (JSON). Moving to dead-letter queue."
                 );
                 if let Some(conn) = &mut dlq_conn {
-                    let _: Result<(), _> =
-                        conn.lpush(&dead_letter_queue, &message_bytes).await;
+                    let _: Result<(), _> = conn.lpush(&dead_letter_queue, &message_bytes).await;
                 }
             }
         }
@@ -513,7 +548,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize tracing using config
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(app_config.rust_log.clone()))
+        .with(tracing_subscriber::EnvFilter::new(
+            app_config.rust_log.clone(),
+        ))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -582,15 +619,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Initializing device token encryption...");
     let token_encryption = {
         use std::collections::HashMap;
-        
+
         // Start with primary key (version 1) - backward compatibility
         let mut keys = HashMap::new();
         keys.insert(1, app_config.apns.device_token_encryption_key.clone());
-        
+
         // Load additional key versions from environment variables
         // Format: APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V2, APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V3, etc.
         let mut current_version = 1u8;
-        
+
         for version in 2..=10 {
             let env_var = format!("APNS_DEVICE_TOKEN_ENCRYPTION_KEY_V{}", version);
             if let Ok(key) = std::env::var(&env_var) {
@@ -603,7 +640,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     continue;
                 }
-                
+
                 if key == "0000000000000000000000000000000000000000000000000000000000000000" {
                     tracing::warn!(
                         version = version,
@@ -613,7 +650,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     continue;
                 }
-                
+
                 keys.insert(version, key);
                 current_version = version; // Use highest version as current
                 tracing::info!(
@@ -623,7 +660,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        
+
         if keys.len() > 1 {
             tracing::info!(
                 active_versions = ?keys.keys().collect::<Vec<_>>(),
