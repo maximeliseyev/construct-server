@@ -273,8 +273,3 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
 
     response
 }
-
-/// Creates an error JSON response
-fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
-    json_response(status, json!({"error": message}))
-}
