@@ -15,12 +15,12 @@
 // ============================================================================
 
 use axum::{
-    extract::State,
-    http::{header::SET_COOKIE, HeaderMap, HeaderValue},
-    response::IntoResponse,
     Json,
+    extract::State,
+    http::{HeaderMap, HeaderValue, header::SET_COOKIE},
+    response::IntoResponse,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, Mac};
 use serde_json::json;
 use sha2::Sha256;
@@ -48,8 +48,8 @@ pub fn generate_csrf_token(config: &CsrfConfig, user_id: &str) -> String {
 
     // Create HMAC signature
     let message = format!("{}:{}", timestamp, user_id);
-    let mut mac =
-        HmacSha256::new_from_slice(config.secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(config.secret.as_bytes())
+        .expect("HMAC can take key of any size");
     mac.update(message.as_bytes());
     let signature = mac.finalize().into_bytes();
     let signature_hex = hex::encode(signature);
@@ -72,9 +72,7 @@ pub fn validate_csrf_token(
     expected_user_id: &str,
 ) -> Result<(), String> {
     // Decode base64
-    let token_bytes = BASE64
-        .decode(token)
-        .map_err(|_| "Invalid token encoding")?;
+    let token_bytes = BASE64.decode(token).map_err(|_| "Invalid token encoding")?;
 
     let token_str = String::from_utf8(token_bytes).map_err(|_| "Invalid token encoding")?;
 
@@ -105,8 +103,8 @@ pub fn validate_csrf_token(
 
     // Verify HMAC signature
     let message = format!("{}:{}", timestamp, user_id);
-    let mut mac =
-        HmacSha256::new_from_slice(config.secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(config.secret.as_bytes())
+        .expect("HMAC can take key of any size");
     mac.update(message.as_bytes());
     let expected_signature = mac.finalize().into_bytes();
     let expected_hex = hex::encode(expected_signature);
@@ -121,7 +119,11 @@ pub fn validate_csrf_token(
 }
 
 /// Check if the Origin header matches allowed origins
-pub fn validate_origin(headers: &HeaderMap, instance_domain: &str, allowed_origins: &[String]) -> bool {
+pub fn validate_origin(
+    headers: &HeaderMap,
+    instance_domain: &str,
+    allowed_origins: &[String],
+) -> bool {
     // Get Origin header first (preferred)
     let origin = headers
         .get("origin")
@@ -191,7 +193,11 @@ pub fn has_custom_header(headers: &HeaderMap) -> bool {
 }
 
 /// Extract CSRF token from request (header or cookie)
-pub fn extract_csrf_token(headers: &HeaderMap, header_name: &str, cookie_name: &str) -> Option<String> {
+pub fn extract_csrf_token(
+    headers: &HeaderMap,
+    header_name: &str,
+    cookie_name: &str,
+) -> Option<String> {
     // First try header
     if let Some(token) = headers
         .get(header_name)
@@ -233,16 +239,12 @@ pub async fn get_csrf_token(
     let cookie_value = if is_https {
         format!(
             "{}={}; SameSite=Strict; Secure; HttpOnly; Path=/; Max-Age={}",
-            app_context.config.csrf.cookie_name,
-            token,
-            app_context.config.csrf.token_ttl_secs
+            app_context.config.csrf.cookie_name, token, app_context.config.csrf.token_ttl_secs
         )
     } else {
         format!(
             "{}={}; SameSite=Strict; HttpOnly; Path=/; Max-Age={}",
-            app_context.config.csrf.cookie_name,
-            token,
-            app_context.config.csrf.token_ttl_secs
+            app_context.config.csrf.cookie_name, token, app_context.config.csrf.token_ttl_secs
         )
     };
 

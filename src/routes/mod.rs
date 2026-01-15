@@ -51,15 +51,24 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         // Authentication endpoints
         .route("/auth/refresh", post(auth::refresh_token))
         .route("/auth/logout", post(auth::logout))
+        // Phase 2.5: REST API authentication endpoints
+        .route("/api/v1/auth/register", post(auth::register))
+        .route("/api/v1/auth/login", post(auth::login))
         // Account management (CSRF protected, authenticated)
         .route("/api/v1/account", get(account::get_account))
         .route("/api/v1/account", put(account::update_account))
         .route("/api/v1/account", delete(account::delete_account))
         // Keys management (CSRF protected)
-        .route("/keys/upload", post(keys::upload_keys))
-        .route("/keys/:user_id", get(keys::get_keys))
+        .route("/keys/upload", post(keys::upload_keys)) // Legacy
+        .route("/keys/:user_id", get(keys::get_keys)) // Legacy
+        // Phase 2.5.4: Migrated endpoints under /api/v1/
+        .route("/api/v1/keys/upload", post(keys::upload_keys))
+        .route("/api/v1/users/:id/public-key", get(keys::get_keys_v1))
         // Messages (CSRF protected)
-        .route("/messages/send", post(messages::send_message))
+        .route("/messages/send", post(messages::send_message)) // Legacy
+        // Phase 2.5: REST API for messages
+        .route("/api/v1/messages", post(messages::send_message)) // Phase 2.5.4: Migrated
+        .route("/api/v1/messages", get(messages::get_messages)) // Phase 2.5.1: Long polling
         // Federation (no CSRF - uses server signatures)
         .route(
             "/.well-known/konstruct",

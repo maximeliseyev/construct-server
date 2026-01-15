@@ -10,7 +10,7 @@
 //
 // ============================================================================
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -58,26 +58,24 @@ pub async fn readiness_check(
     )
     .await
     {
-        Ok(health_status) => {
-            Ok((
-                StatusCode::OK,
-                Json(json!({
-                    "status": health_status.status,
-                    "database": {
-                        "status": health_status.database.status,
-                        "error": health_status.database.error
-                    },
-                    "redis": {
-                        "status": health_status.redis.status,
-                        "error": health_status.redis.error
-                    },
-                    "kafka": {
-                        "status": health_status.kafka.status,
-                        "error": health_status.kafka.error
-                    }
-                })),
-            ))
-        }
+        Ok(health_status) => Ok((
+            StatusCode::OK,
+            Json(json!({
+                "status": health_status.status,
+                "database": {
+                    "status": health_status.database.status,
+                    "error": health_status.database.error
+                },
+                "redis": {
+                    "status": health_status.redis.status,
+                    "error": health_status.redis.error
+                },
+                "kafka": {
+                    "status": health_status.kafka.status,
+                    "error": health_status.kafka.error
+                }
+            })),
+        )),
         Err(e) => {
             tracing::warn!("Readiness check failed: {}", e);
             // Return 503 with error details
@@ -101,14 +99,12 @@ pub async fn readiness_check(
 /// Always returns 200 OK if the process is alive.
 pub async fn liveness_check() -> Result<impl IntoResponse, AppError> {
     match health::liveness_check().await {
-        Ok(health_status) => {
-            Ok((
-                StatusCode::OK,
-                Json(json!({
-                    "status": health_status.status
-                })),
-            ))
-        }
+        Ok(health_status) => Ok((
+            StatusCode::OK,
+            Json(json!({
+                "status": health_status.status
+            })),
+        )),
         Err(e) => {
             // This should never happen for liveness check, but handle it anyway
             tracing::error!("Liveness check failed (unexpected): {}", e);

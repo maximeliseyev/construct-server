@@ -40,6 +40,7 @@ use crate::delivery_worker::state::WorkerState;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::utils::log_safe_id;
 use anyhow::{Context, Result};
+use redis::cmd;
 use tracing::{debug, info};
 
 /// Result of processing a Kafka message
@@ -143,6 +144,18 @@ pub async fn process_kafka_message(
             .await
             .context("Failed to mark message as processed")?;
 
+        // Phase 2.5: Publish notification for long polling endpoints
+        // This allows REST API clients to be notified when new messages arrive
+        if let Err(e) = publish_message_notification(state, recipient_id).await {
+            // Log but don't fail - notification is optional, message is already in stream
+            debug!(
+                message_id = %message_id,
+                recipient_hash = %log_safe_id(recipient_id, salt),
+                error = %e,
+                "Failed to publish message notification (not critical)"
+            );
+        }
+
         info!(
             message_id = %message_id,
             recipient_hash = %log_safe_id(recipient_id, salt),
@@ -164,14 +177,8 @@ pub async fn process_kafka_message(
 
         // Optional: Save to Redis offline stream as cache (not source of truth)
         // This allows faster delivery when user comes online, but is not required
-        if let Err(e) = push_to_offline_stream(
-            state,
-            recipient_id,
-            message_id,
-            &message_bytes,
-            None,
-        )
-        .await
+        if let Err(e) =
+            push_to_offline_stream(state, recipient_id, message_id, &message_bytes, None).await
         {
             // Log but don't fail - Redis cache is optional, Kafka has the message
             debug!(
@@ -193,4 +200,42 @@ pub async fn process_kafka_message(
 
         Ok(ProcessResult::UserOffline)
     }
+}
+
+/// Publish notification to Redis Pub/Sub for long polling endpoints
+///
+/// When a message is delivered to a user, this function publishes a notification
+/// to the channel `message_notifications:{user_id}` so that long polling endpoints
+/// can be notified and return messages immediately.
+///
+/// # Arguments
+/// * `state` - Worker state
+/// * `user_id` - User ID to notify
+async fn publish_message_notification(state: &WorkerState, user_id: &str) -> Result<()> {
+    use crate::delivery_worker::retry::execute_redis_with_retry;
+
+    let channel = format!("message_notifications:{}", user_id);
+
+    execute_redis_with_retry(state, "publish_message_notification", |conn| {
+        let ch = channel.clone();
+        Box::pin(async move {
+            // PUBLISH returns the number of subscribers that received the message
+            let _subscriber_count: i64 = cmd("PUBLISH")
+                .arg(&ch)
+                .arg("1") // Simple notification payload
+                .query_async(conn)
+                .await?;
+            Ok(())
+        })
+    })
+    .await
+    .context("Failed to publish message notification")?;
+
+    debug!(
+        user_id = %user_id,
+        channel = %channel,
+        "Published message notification for long polling"
+    );
+
+    Ok(())
 }

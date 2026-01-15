@@ -25,9 +25,11 @@
 
 use crate::e2e::UploadableKeyBundle;
 use crate::message::ChatMessage;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use redis::{AsyncCommands, Client, cmd};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
 use crate::config::{Config, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 
@@ -362,7 +364,7 @@ impl MessageQueue {
     ) -> Result<u32> {
         // Normalize IP (handle IPv6 brackets if present)
         let normalized_ip = ip.trim_start_matches('[').trim_end_matches(']');
-        
+
         // Create combined key: "rate:combined:{user_id}:{ip}"
         // This allows separate tracking per user+IP combination
         let key = format!("rate:combined:{}:{}", user_id, normalized_ip);
@@ -535,11 +537,11 @@ impl MessageQueue {
         // Pattern: refresh_token:*
         // Use KEYS for simplicity (in production with many tokens, use SCAN)
         let pattern = "refresh_token:*";
-        
+
         // Note: KEYS can block Redis, but for token revocation it's acceptable
         // In high-scale production, maintain a reverse index: user_tokens:{user_id} -> Set{jti}
         let keys: Vec<String> = self.client.keys(pattern).await?;
-        
+
         let mut deleted_count = 0;
         for key in keys {
             // Check if this token belongs to the user
@@ -549,13 +551,13 @@ impl MessageQueue {
                 deleted_count += 1;
             }
         }
-        
+
         tracing::info!(
             user_id = %user_id,
             deleted_count = deleted_count,
             "Revoked all refresh tokens for user"
         );
-        
+
         Ok(())
     }
 
@@ -563,16 +565,9 @@ impl MessageQueue {
     ///
     /// Stores token JTI with short TTL to prevent reuse after logout
     /// TTL should match access token lifetime
-    pub async fn invalidate_access_token(
-        &mut self,
-        jti: &str,
-        ttl_seconds: i64,
-    ) -> Result<()> {
+    pub async fn invalidate_access_token(&mut self, jti: &str, ttl_seconds: i64) -> Result<()> {
         let key = format!("invalidated_token:{}", jti);
-        let _: () = self
-            .client
-            .set_ex(&key, "1", ttl_seconds as u64)
-            .await?;
+        let _: () = self.client.set_ex(&key, "1", ttl_seconds as u64).await?;
         Ok(())
     }
 
@@ -696,6 +691,207 @@ impl MessageQueue {
     pub async fn ping(&mut self) -> Result<()> {
         let _: () = cmd("PING").query_async(&mut self.client).await?;
         Ok(())
+    }
+
+    // ============================================================================
+    // Phase 2.5: REST API Message Retrieval (Long Polling)
+    // ============================================================================
+
+    /// Read messages from Redis Stream for a user
+    ///
+    /// Reads from either:
+    /// - delivery_stream:offline:{user_id} (if user was offline)
+    /// - delivery_stream:{server_instance_id} (if user is online, filters by recipient_id)
+    ///
+    /// # Arguments
+    /// * `user_id` - User ID to get messages for
+    /// * `server_instance_id` - Server instance ID (if user is online)
+    /// * `since_id` - Stream message ID to read after (optional, for pagination)
+    /// * `count` - Maximum number of messages to return
+    ///
+    /// # Returns
+    /// Vector of (stream_message_id, KafkaMessageEnvelope) tuples
+    pub async fn read_user_messages_from_stream(
+        &mut self,
+        user_id: &str,
+        server_instance_id: Option<&str>,
+        since_id: Option<&str>,
+        count: usize,
+    ) -> Result<Vec<(String, crate::kafka::types::KafkaMessageEnvelope)>> {
+        // Try offline stream first (if user was offline)
+        let offline_stream_key = format!("{}offline:{}", self.delivery_queue_prefix, user_id);
+
+        // Check if offline stream exists and has messages
+        let offline_messages = self
+            .read_stream_messages(&offline_stream_key, since_id, count)
+            .await?;
+
+        if !offline_messages.is_empty() {
+            // Parse and filter messages for this user
+            let mut result = Vec::new();
+            for (stream_id, fields) in offline_messages {
+                if let Some(envelope) = self.parse_stream_message(fields, user_id)? {
+                    result.push((stream_id, envelope));
+                }
+            }
+            return Ok(result);
+        }
+
+        // If no offline messages, check delivery stream (if user is online)
+        if let Some(server_id) = server_instance_id {
+            let delivery_stream_key = format!("{}{}", self.delivery_queue_prefix, server_id);
+            let delivery_messages = self
+                .read_stream_messages(&delivery_stream_key, since_id, count * 2)
+                .await?;
+
+            // Filter messages for this user (delivery stream contains messages for all users on this server)
+            let mut result = Vec::new();
+            for (stream_id, fields) in delivery_messages {
+                if let Some(envelope) = self.parse_stream_message(fields, user_id)? {
+                    result.push((stream_id, envelope));
+                    if result.len() >= count {
+                        break;
+                    }
+                }
+            }
+            return Ok(result);
+        }
+
+        Ok(vec![])
+    }
+
+    /// Read messages from a Redis Stream using XREAD
+    ///
+    /// # Arguments
+    /// * `stream_key` - Redis stream key
+    /// * `since_id` - Stream message ID to read after (None = "0" = from beginning)
+    /// * `count` - Maximum number of messages
+    ///
+    /// # Returns
+    /// Vector of (stream_message_id, fields_map) tuples
+    async fn read_stream_messages(
+        &mut self,
+        stream_key: &str,
+        since_id: Option<&str>,
+        count: usize,
+    ) -> Result<Vec<(String, HashMap<String, Vec<u8>>)>> {
+        let start_id = since_id.unwrap_or("0");
+
+        // XREAD COUNT count STREAMS stream_key start_id
+        // Note: Redis returns Vec<(stream_key, Vec<(message_id, Vec<(field, value)>)>)>
+        type StreamResult = Vec<(String, Vec<(String, Vec<(String, Vec<u8>)>)>)>;
+        let result: redis::RedisResult<StreamResult> = cmd("XREAD")
+            .arg("COUNT")
+            .arg(count as i64)
+            .arg("STREAMS")
+            .arg(stream_key)
+            .arg(start_id)
+            .query_async(&mut self.client)
+            .await;
+
+        match result {
+            Ok(streams) => {
+                if streams.is_empty() {
+                    return Ok(vec![]);
+                }
+
+                // Parse result: [(stream_key, [(message_id, [(field, value), ...]), ...])]
+                let messages: Vec<(String, HashMap<String, Vec<u8>>)> = streams
+                    .into_iter()
+                    .flat_map(|(_, messages)| {
+                        messages.into_iter().map(|(id, fields)| {
+                            let field_map: HashMap<String, Vec<u8>> = fields.into_iter().collect();
+                            (id, field_map)
+                        })
+                    })
+                    .collect();
+
+                Ok(messages)
+            }
+            Err(e) => {
+                // Check if it's a "stream doesn't exist" error
+                let err_str = e.to_string();
+                if err_str.contains("no such key") || err_str.contains("WRONGTYPE") {
+                    // Stream doesn't exist or is empty
+                    Ok(vec![])
+                } else {
+                    Err(anyhow::anyhow!("Failed to read stream: {}", e))
+                }
+            }
+        }
+    }
+
+    /// Parse stream message fields into KafkaMessageEnvelope
+    /// Filters by recipient_id to ensure user only gets their messages
+    fn parse_stream_message(
+        &self,
+        fields: HashMap<String, Vec<u8>>,
+        user_id: &str,
+    ) -> Result<Option<crate::kafka::types::KafkaMessageEnvelope>> {
+        // Extract message_id and payload from fields
+        let message_id_bytes = fields
+            .get("message_id")
+            .ok_or_else(|| anyhow::anyhow!("Missing message_id in stream message"))?;
+        let _message_id =
+            String::from_utf8(message_id_bytes.clone()).context("Invalid UTF-8 in message_id")?;
+
+        let payload = fields
+            .get("payload")
+            .ok_or_else(|| anyhow::anyhow!("Missing payload in stream message"))?;
+
+        // Deserialize KafkaMessageEnvelope from MessagePack
+        let envelope: crate::kafka::types::KafkaMessageEnvelope = rmp_serde::from_slice(payload)
+            .context("Failed to deserialize KafkaMessageEnvelope from stream")?;
+
+        // SECURITY: Filter by recipient_id - only return messages for this user
+        if envelope.recipient_id != user_id {
+            return Ok(None);
+        }
+
+        Ok(Some(envelope))
+    }
+
+    /// Subscribe to Redis Pub/Sub channel for message notifications
+    ///
+    /// # Arguments
+    /// * `user_id` - User ID to subscribe for
+    /// * `timeout_ms` - Timeout in milliseconds
+    ///
+    /// # Returns
+    /// true if notification received, false if timeout
+    pub async fn wait_for_message_notification(
+        &self,
+        user_id: &str,
+        timeout_ms: u64,
+    ) -> Result<bool> {
+        use tokio::time::{Duration, timeout};
+
+        let channel = format!("message_notifications:{}", user_id);
+
+        // Create a new connection for Pub/Sub (can't use same connection for commands and pub/sub)
+        let client = Client::open(self.config.redis_url.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to create Redis client for Pub/Sub: {}", e))?;
+
+        let mut pubsub_conn = client
+            .get_async_pubsub()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get Pub/Sub connection: {}", e))?;
+
+        // Subscribe to channel
+        pubsub_conn
+            .subscribe(&channel)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to subscribe to channel: {}", e))?;
+
+        // Wait for message or timeout
+        let mut stream = pubsub_conn.on_message();
+        let result = timeout(Duration::from_millis(timeout_ms), stream.next()).await;
+
+        match result {
+            Ok(Some(_)) => Ok(true), // Notification received
+            Ok(None) => Ok(false),   // Channel closed
+            Err(_) => Ok(false),     // Timeout
+        }
     }
 
     // ============================================================================

@@ -356,8 +356,14 @@ mod tests {
 
     #[test]
     fn test_skip_reason_display() {
-        assert_eq!(SkipReason::AlreadyProcessed.to_string(), "already_processed");
+        assert_eq!(
+            SkipReason::AlreadyProcessed.to_string(),
+            "already_processed"
+        );
         assert_eq!(SkipReason::DeliveredDirect.to_string(), "delivered_direct");
-        assert_eq!(SkipReason::DuplicateContent.to_string(), "duplicate_content");
+        assert_eq!(
+            SkipReason::DuplicateContent.to_string(),
+            "duplicate_content"
+        );
     }
 }

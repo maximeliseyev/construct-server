@@ -3,15 +3,17 @@
 // ============================================================================
 //
 // Endpoints:
-// - POST /keys/upload - Upload or update user's key bundle
-// - GET /keys/:user_id - Retrieve user's public key bundle
+// - POST /keys/upload - Upload or update user's key bundle (legacy)
+// - POST /api/v1/keys/upload - Upload or update user's key bundle [Phase 2.5.4]
+// - GET /keys/:user_id - Retrieve user's public key bundle (legacy)
+// - GET /api/v1/users/:id/public-key - Retrieve user's public key bundle [Phase 2.5.4]
 //
 // ============================================================================
 
 use axum::{
     Json,
     extract::{Path, State},
-    http::{StatusCode, HeaderMap},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde_json::json;
@@ -24,12 +26,14 @@ use crate::db;
 use crate::e2e::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
 use crate::error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
-use crate::routes::request_signing::{extract_request_signature, verify_request_signature, compute_body_hash};
+use crate::routes::request_signing::{
+    compute_body_hash, extract_request_signature, verify_request_signature,
+};
 use crate::utils::{extract_client_ip, log_safe_id};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::net::IpAddr;
 
-/// POST /keys/upload
+/// POST /keys/upload (legacy) or POST /api/v1/keys/upload
 /// Uploads or updates a user's key bundle
 ///
 /// Security:
@@ -59,7 +63,7 @@ pub async fn upload_keys(
             .ok()
             .flatten()
             .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
-        
+
         AuditLogger::log_key_rotation(
             user_id_hash.clone(),
             username_hash,
@@ -100,7 +104,7 @@ pub async fn upload_keys(
             .ok()
             .flatten()
             .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
-        
+
         AuditLogger::log_key_rotation(
             user_id_hash.clone(),
             username_hash,
@@ -183,7 +187,7 @@ pub async fn upload_keys(
                     .ok()
                     .flatten()
                     .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
-                
+
                 AuditLogger::log_key_rotation(
                     user_id_hash.clone(),
                     username_hash,
@@ -207,7 +211,10 @@ pub async fn upload_keys(
         // Additional check: verify that public_key in signature matches master_identity_key
         use subtle::ConstantTimeEq;
         if !bool::from(
-            request_sig.public_key.as_bytes().ct_eq(bundle.master_identity_key.as_bytes())
+            request_sig
+                .public_key
+                .as_bytes()
+                .ct_eq(bundle.master_identity_key.as_bytes()),
         ) {
             // AUDIT: Log security violation (public key mismatch)
             let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
@@ -215,13 +222,16 @@ pub async fn upload_keys(
                 .ok()
                 .flatten()
                 .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
-            
+
             AuditLogger::log_key_rotation(
                 user_id_hash.clone(),
                 username_hash,
                 client_ip,
                 false, // failure
-                Some("Request signature public key does not match bundle master_identity_key".to_string()),
+                Some(
+                    "Request signature public key does not match bundle master_identity_key"
+                        .to_string(),
+                ),
             );
 
             tracing::warn!(
@@ -238,17 +248,25 @@ pub async fn upload_keys(
     // Generate a unique request ID for this operation
     let request_id = uuid::Uuid::new_v4().to_string();
     let nonce = bundle.nonce.as_deref().unwrap_or(&request_id);
-    let timestamp = bundle.timestamp.unwrap_or_else(|| chrono::Utc::now().timestamp());
-    
+    let timestamp = bundle
+        .timestamp
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
+
     // Use bundle_data as content for replay protection (includes user_id, timestamp, suites)
     let content_for_replay = &bundle.bundle_data;
-    
+
     {
         let mut queue = app_context.queue.lock().await;
         // Use 5 minutes (300 seconds) as max age for critical operations
         const MAX_AGE_SECONDS: i64 = 300;
         match queue
-            .check_replay_with_timestamp(&request_id, content_for_replay, nonce, timestamp, MAX_AGE_SECONDS)
+            .check_replay_with_timestamp(
+                &request_id,
+                content_for_replay,
+                nonce,
+                timestamp,
+                MAX_AGE_SECONDS,
+            )
             .await
         {
             Ok(true) => {
@@ -262,13 +280,16 @@ pub async fn upload_keys(
                     .ok()
                     .flatten()
                     .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
-                
+
                 AuditLogger::log_key_rotation(
                     user_id_hash.clone(),
                     username_hash,
                     client_ip,
                     false, // failure
-                    Some(format!("Replay attack detected for key upload (request_id: {})", request_id)),
+                    Some(format!(
+                        "Replay attack detected for key upload (request_id: {})",
+                        request_id
+                    )),
                 );
 
                 tracing::warn!(
@@ -297,7 +318,7 @@ pub async fn upload_keys(
 
     // Store in database
     let store_result = db::store_key_bundle(&app_context.db_pool, &user_id, &bundle).await;
-    
+
     match &store_result {
         Ok(_) => {
             // AUDIT: Log successful key bundle upload
@@ -349,12 +370,22 @@ pub async fn upload_keys(
     Ok((StatusCode::OK, Json(json!({"status": "ok"}))))
 }
 
-/// GET /keys/:user_id
+/// GET /keys/:user_id (legacy) or GET /api/v1/users/:id/public-key
 /// Retrieves a user's public key bundle
 pub async fn get_keys(
     State(app_context): State<Arc<AppContext>>,
     user: AuthenticatedUser,
     Path(user_id_str): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    get_keys_impl(app_context, user, user_id_str).await
+}
+
+/// Internal implementation for get_keys
+/// Supports both /keys/:user_id and /api/v1/users/:id/public-key paths
+async fn get_keys_impl(
+    app_context: Arc<AppContext>,
+    user: AuthenticatedUser,
+    user_id_str: String,
 ) -> Result<impl IntoResponse, AppError> {
     let authenticated_user_id = user.0;
 
@@ -421,4 +452,14 @@ pub async fn get_keys(
             Err(AppError::Unknown(e.into()))
         }
     }
+}
+
+/// GET /api/v1/users/:id/public-key
+/// Retrieves a user's public key bundle (new API path)
+pub async fn get_keys_v1(
+    State(app_context): State<Arc<AppContext>>,
+    user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    get_keys_impl(app_context, user, id).await
 }

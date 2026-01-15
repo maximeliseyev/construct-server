@@ -10,10 +10,10 @@
 // ============================================================================
 
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -23,7 +23,9 @@ use crate::context::AppContext;
 use crate::db;
 use crate::error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
-use crate::routes::request_signing::{extract_request_signature, verify_request_signature, compute_body_hash};
+use crate::routes::request_signing::{
+    compute_body_hash, extract_request_signature, verify_request_signature,
+};
 use crate::utils::log_safe_id;
 
 /// Account information response
@@ -124,9 +126,7 @@ pub async fn update_account(
             tracing::error!(error = %e, "Failed to fetch user");
             AppError::Unknown(e.into())
         })?
-        .ok_or_else(|| {
-            AppError::Auth("User not found".to_string())
-        })?;
+        .ok_or_else(|| AppError::Auth("User not found".to_string()))?;
 
     // Update username if provided
     if let Some(new_username) = &request.username {
@@ -135,9 +135,13 @@ pub async fn update_account(
         }
 
         // Check if username is already taken
-        if let Ok(Some(existing_user)) = db::get_user_by_username(&app_context.db_pool, new_username).await {
+        if let Ok(Some(existing_user)) =
+            db::get_user_by_username(&app_context.db_pool, new_username).await
+        {
             if existing_user.id != user_id {
-                return Err(AppError::Validation("Username is already taken".to_string()));
+                return Err(AppError::Validation(
+                    "Username is already taken".to_string(),
+                ));
             }
         }
 
@@ -147,7 +151,9 @@ pub async fn update_account(
             user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
             "Username update not yet implemented"
         );
-        return Err(AppError::Validation("Username update is not yet implemented".to_string()));
+        return Err(AppError::Validation(
+            "Username update is not yet implemented".to_string(),
+        ));
     }
 
     // Update password if provided
@@ -252,9 +258,7 @@ pub async fn delete_account(
             tracing::error!(error = %e, "Failed to fetch user");
             AppError::Unknown(e.into())
         })?
-        .ok_or_else(|| {
-            AppError::Auth("User not found".to_string())
-        })?;
+        .ok_or_else(|| AppError::Auth("User not found".to_string()))?;
 
     let password_valid = db::verify_password(&user_record, &request.password)
         .await
@@ -335,7 +339,10 @@ pub async fn delete_account(
         // Verify public_key matches master_identity_key
         use subtle::ConstantTimeEq;
         if !bool::from(
-            request_sig.public_key.as_bytes().ct_eq(bundle.master_identity_key.as_bytes())
+            request_sig
+                .public_key
+                .as_bytes()
+                .ct_eq(bundle.master_identity_key.as_bytes()),
         ) {
             tracing::warn!(
                 user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
@@ -350,7 +357,7 @@ pub async fn delete_account(
     // 4. Revoke all tokens and sessions
     {
         let mut queue = app_context.queue.lock().await;
-        
+
         // Revoke all refresh tokens
         if let Err(e) = queue.revoke_all_user_tokens(&user_id.to_string()).await {
             tracing::warn!(error = %e, "Failed to revoke all user tokens");

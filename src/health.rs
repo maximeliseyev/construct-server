@@ -108,7 +108,9 @@ pub async fn readiness_check(
     }
 
     if health.status == "unhealthy" {
-        return Err(anyhow::anyhow!("Readiness check failed: one or more components are unhealthy"));
+        return Err(anyhow::anyhow!(
+            "Readiness check failed: one or more components are unhealthy"
+        ));
     }
 
     Ok(health)

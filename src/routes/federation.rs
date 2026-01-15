@@ -10,7 +10,12 @@
 //
 // ============================================================================
 
-use axum::{Json, extract::{State, Path}, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -154,7 +159,10 @@ pub async fn get_federation_keys(
     // Check cache first (5 minute TTL)
     {
         let mut queue = app_context.queue.lock().await;
-        if let Ok(Some(cached_json)) = queue.get_cached_federation_key_bundle(&user_id.to_string()).await {
+        if let Ok(Some(cached_json)) = queue
+            .get_cached_federation_key_bundle(&user_id.to_string())
+            .await
+        {
             if let Ok(bundle_json) = serde_json::from_str::<serde_json::Value>(&cached_json) {
                 drop(queue);
                 tracing::debug!(
@@ -180,7 +188,7 @@ pub async fn get_federation_keys(
                 StatusCode::NOT_FOUND,
                 Json(json!({
                     "error": "User key bundle not found"
-                }))
+                })),
             ));
         }
         Err(e) => {
@@ -208,12 +216,15 @@ pub async fn get_federation_keys(
     {
         let mut queue = app_context.queue.lock().await;
         let cache_value = serde_json::to_string(&response).unwrap_or_default();
-        
-        if let Err(e) = queue.cache_federation_key_bundle(
-            &user_id.to_string(),
-            &cache_value,
-            300, // 5 minutes TTL
-        ).await {
+
+        if let Err(e) = queue
+            .cache_federation_key_bundle(
+                &user_id.to_string(),
+                &cache_value,
+                300, // 5 minutes TTL
+            )
+            .await
+        {
             tracing::warn!(
                 error = %e,
                 "Failed to cache federation key bundle (non-critical)"

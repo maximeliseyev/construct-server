@@ -119,7 +119,10 @@ pub async fn csrf_protection(
     }
 
     // Skip for safe methods (GET, HEAD, OPTIONS)
-    if matches!(req.method(), &Method::GET | &Method::HEAD | &Method::OPTIONS) {
+    if matches!(
+        req.method(),
+        &Method::GET | &Method::HEAD | &Method::OPTIONS
+    ) {
         return Ok(next.run(req).await);
     }
 
@@ -173,9 +176,11 @@ pub async fn csrf_protection(
                 // We need user ID to validate the token
                 // For now, we'll validate the token structure
                 // Full validation happens in the handler with AuthenticatedUser
-                
+
                 // Extract user ID from Authorization header if present
-                if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+                if let Some(auth_header) =
+                    headers.get("authorization").and_then(|v| v.to_str().ok())
+                {
                     if let Some(token_str) = auth_header.strip_prefix("Bearer ") {
                         // Try to decode JWT to get user ID (without full validation)
                         // This is a lightweight check - full auth happens in extractor
@@ -219,7 +224,7 @@ pub async fn csrf_protection(
 /// Extract user ID from JWT token without full validation
 /// Used for CSRF token binding - full auth validation happens in AuthenticatedUser extractor
 fn extract_user_id_from_jwt_lightweight(token: &str) -> Result<String, ()> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
     // JWT format: header.payload.signature
     let parts: Vec<&str> = token.split('.').collect();
@@ -261,7 +266,10 @@ pub async fn ip_rate_limiting(
     }
 
     // Skip for safe methods (GET, HEAD, OPTIONS)
-    if matches!(req.method(), &Method::GET | &Method::HEAD | &Method::OPTIONS) {
+    if matches!(
+        req.method(),
+        &Method::GET | &Method::HEAD | &Method::OPTIONS
+    ) {
         return Ok(next.run(req).await);
     }
 
@@ -329,7 +337,10 @@ pub async fn combined_rate_limiting(
     }
 
     // Skip for safe methods
-    if matches!(req.method(), &Method::GET | &Method::HEAD | &Method::OPTIONS) {
+    if matches!(
+        req.method(),
+        &Method::GET | &Method::HEAD | &Method::OPTIONS
+    ) {
         return Ok(next.run(req).await);
     }
 
@@ -421,7 +432,11 @@ pub async fn metrics_auth(
 
     // Check 1: IP whitelist
     if !ctx.config.security.metrics_ip_whitelist.is_empty() {
-        let ip_allowed = ctx.config.security.metrics_ip_whitelist.iter()
+        let ip_allowed = ctx
+            .config
+            .security
+            .metrics_ip_whitelist
+            .iter()
             .any(|allowed_ip| {
                 // Support exact match and CIDR notation (basic)
                 if allowed_ip.contains('/') {
@@ -430,7 +445,9 @@ pub async fn metrics_auth(
                     client_ip.starts_with(allowed_ip.split('/').next().unwrap_or(""))
                 } else {
                     // Exact match
-                    client_ip == *allowed_ip || normalize_ip_for_comparison(&client_ip) == normalize_ip_for_comparison(allowed_ip)
+                    client_ip == *allowed_ip
+                        || normalize_ip_for_comparison(&client_ip)
+                            == normalize_ip_for_comparison(allowed_ip)
                 }
             });
 

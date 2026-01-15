@@ -346,7 +346,10 @@ pub fn extract_client_ip(headers: &axum::http::HeaderMap, direct_ip: Option<IpAd
 fn normalize_ip(ip: IpAddr) -> String {
     let ip_str = ip.to_string();
     // Remove brackets if present (e.g., "[::1]" -> "::1")
-    ip_str.trim_start_matches('[').trim_end_matches(']').to_string()
+    ip_str
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string()
 }
 
 #[cfg(test)]

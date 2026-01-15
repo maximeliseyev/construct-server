@@ -129,12 +129,13 @@ pub fn verify_request_signature(
         )));
     }
 
-    let public_key_array: [u8; 32] = public_key_bytes
-        .try_into()
-        .map_err(|_| RequestSigningError::InvalidPublicKey("Failed to convert public key".to_string()))?;
+    let public_key_array: [u8; 32] = public_key_bytes.try_into().map_err(|_| {
+        RequestSigningError::InvalidPublicKey("Failed to convert public key".to_string())
+    })?;
 
-    let verifying_key = VerifyingKey::from_bytes(&public_key_array)
-        .map_err(|e| RequestSigningError::InvalidPublicKey(format!("Invalid Ed25519 public key: {}", e)))?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key_array).map_err(|e| {
+        RequestSigningError::InvalidPublicKey(format!("Invalid Ed25519 public key: {}", e))
+    })?;
 
     // Decode signature
     let signature_bytes = BASE64.decode(signature_b64.trim()).map_err(|e| {
@@ -148,9 +149,9 @@ pub fn verify_request_signature(
         )));
     }
 
-    let signature_array: [u8; 64] = signature_bytes
-        .try_into()
-        .map_err(|_| RequestSigningError::InvalidSignature("Failed to convert signature".to_string()))?;
+    let signature_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
+        RequestSigningError::InvalidSignature("Failed to convert signature".to_string())
+    })?;
 
     let signature = Signature::from_bytes(&signature_array);
 
@@ -188,7 +189,8 @@ mod tests {
 
     #[test]
     fn test_create_canonical_request_bytes() {
-        let canonical = create_canonical_request_bytes("POST", "/keys/upload", 1234567890, "abc123");
+        let canonical =
+            create_canonical_request_bytes("POST", "/keys/upload", 1234567890, "abc123");
         let expected = b"POST:/keys/upload:1234567890:abc123";
         assert_eq!(canonical, expected);
     }
@@ -220,15 +222,17 @@ mod tests {
         let public_key_b64 = BASE64.encode(verifying_key.as_bytes());
         let signature_b64 = BASE64.encode(signature.to_bytes());
 
-        assert!(verify_request_signature(
-            &public_key_b64,
-            method,
-            path,
-            timestamp,
-            &body_hash,
-            &signature_b64
-        )
-        .is_ok());
+        assert!(
+            verify_request_signature(
+                &public_key_b64,
+                method,
+                path,
+                timestamp,
+                &body_hash,
+                &signature_b64
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -251,14 +255,16 @@ mod tests {
         let public_key_b64 = BASE64.encode(verifying_key.as_bytes());
         let signature_b64 = BASE64.encode(signature.to_bytes());
 
-        assert!(verify_request_signature(
-            &public_key_b64,
-            "POST",
-            "/keys/upload_tampered", // Different path
-            timestamp,
-            &body_hash,
-            &signature_b64
-        )
-        .is_err());
+        assert!(
+            verify_request_signature(
+                &public_key_b64,
+                "POST",
+                "/keys/upload_tampered", // Different path
+                timestamp,
+                &body_hash,
+                &signature_b64
+            )
+            .is_err()
+        );
     }
 }

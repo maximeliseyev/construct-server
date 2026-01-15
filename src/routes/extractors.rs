@@ -69,7 +69,8 @@ impl FromRequestParts<Arc<AppContext>> for AuthenticatedUser {
                             "error": "Token was revoked (logged out)",
                             "code": "TOKEN_REVOKED",
                         });
-                        return Err((axum::http::StatusCode::UNAUTHORIZED, axum::Json(body)).into_response());
+                        return Err((axum::http::StatusCode::UNAUTHORIZED, axum::Json(body))
+                            .into_response());
                     }
                 }
             }
