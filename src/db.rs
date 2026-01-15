@@ -224,6 +224,8 @@ pub async fn get_key_bundle(
                 master_identity_key: BASE64.encode(r.master_identity_key),
                 bundle_data: BASE64.encode(r.bundle_data),
                 signature: BASE64.encode(r.signature),
+                nonce: None, // Nonce is not stored in DB (only used for replay protection)
+                timestamp: None, // Timestamp is not stored in DB (only used for replay protection)
             },
             r.username,
         )

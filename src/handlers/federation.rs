@@ -139,6 +139,14 @@ pub struct FederatedMessageResponse {
 
 /// Receive federated message from remote server
 /// Served at: POST /federation/v1/messages
+/// Helper function that accepts bytes directly (for Axum routes)
+pub async fn receive_federated_message_bytes(
+    ctx: &AppContext,
+    body_bytes: bytes::Bytes,
+) -> Result<hyper::Response<Full<Bytes>>, AppError> {
+    receive_federated_message_http_impl(ctx, body_bytes).await
+}
+
 pub async fn receive_federated_message_http(
     ctx: &AppContext,
     body: IncomingBody,
@@ -154,6 +162,14 @@ pub async fn receive_federated_message_http(
         }
     };
 
+    receive_federated_message_http_impl(ctx, body_bytes).await
+}
+
+/// Main implementation (extracted for reuse)
+async fn receive_federated_message_http_impl(
+    ctx: &AppContext,
+    body_bytes: bytes::Bytes,
+) -> Result<hyper::Response<Full<Bytes>>, AppError> {
     // 2. Parse JSON to FederatedMessageRequest
     let req: FederatedMessageRequest = match serde_json::from_slice(&body_bytes) {
         Ok(r) => r,
@@ -217,9 +233,10 @@ pub async fn receive_federated_message_http(
             payload_hash: payload_hash.clone(),
         };
 
-        // Verify payload hash integrity
+        // Verify payload hash integrity (constant-time comparison to prevent timing attacks)
         let expected_hash = FederatedEnvelope::hash_payload(&req.ciphertext);
-        if expected_hash != *payload_hash {
+        use subtle::ConstantTimeEq;
+        if !bool::from(expected_hash.as_bytes().ct_eq(payload_hash.as_bytes())) {
             tracing::warn!(
                 message_id = %req.message_id,
                 origin_server = %origin_server,

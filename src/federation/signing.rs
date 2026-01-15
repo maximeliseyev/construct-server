@@ -368,7 +368,8 @@ mod tests {
     #[test]
     fn test_server_signer_from_seed() {
         // Generate a test seed (in production, use: openssl rand -base64 32)
-        let seed_b64 = "dGVzdC1zZWVkLWZvci1lZDI1NTE5LWtleXMtMzJi"; // 32 bytes base64
+        // This is a valid 32-byte seed: "0123456789abcdef0123456789abcdef" encoded in base64
+        let seed_b64 = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="; // 32 bytes base64
 
         let signer = ServerSigner::from_seed_base64(seed_b64, "test.konstruct.cc".to_string());
         assert!(signer.is_ok());
@@ -380,7 +381,8 @@ mod tests {
 
     #[test]
     fn test_sign_and_verify() {
-        let seed_b64 = "dGVzdC1zZWVkLWZvci1lZDI1NTE5LWtleXMtMzJi";
+        // This is a valid 32-byte seed: "0123456789abcdef0123456789abcdef" encoded in base64
+        let seed_b64 = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
         let signer =
             ServerSigner::from_seed_base64(seed_b64, "origin.konstruct.cc".to_string()).unwrap();
 
@@ -404,7 +406,8 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify fails with wrong public key
-        let wrong_seed = "YW5vdGhlci10ZXN0LXNlZWQtZm9yLWtleXMtMzI=";
+        // This is a valid 32-byte seed: "fedcba9876543210fedcba9876543210" encoded in base64
+        let wrong_seed = "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=";
         let wrong_signer =
             ServerSigner::from_seed_base64(wrong_seed, "other.konstruct.cc".to_string()).unwrap();
         let result = ServerSigner::verify_signature(

@@ -70,7 +70,8 @@ pub async fn spawn_app() -> TestApp {
     let db_pool_arc = Arc::new(db_pool.clone());
     let message_queue = MessageQueue::new(&app_config).await.unwrap();
     let queue = Arc::new(Mutex::new(message_queue));
-    let auth_manager = Arc::new(AuthManager::new(&app_config));
+    let auth_manager =
+        Arc::new(AuthManager::new(&app_config).expect("Failed to create AuthManager"));
     let clients = Arc::new(RwLock::new(HashMap::new()));
     let server_instance_id = Uuid::new_v4().to_string();
 
@@ -141,6 +142,7 @@ impl TestClient {
             suite_id: 1,
             identity_key: BASE64.encode(vec![0u8; 32]), // 32 bytes for X25519
             signed_prekey: BASE64.encode(vec![1u8; 32]), // 32 bytes for X25519
+            signed_prekey_signature: BASE64.encode(vec![2u8; 64]), // 64 bytes for Ed25519 signature
             one_time_prekeys: vec![],
         };
 
@@ -160,6 +162,8 @@ impl TestClient {
             master_identity_key: BASE64.encode(vec![2u8; 32]), // 32 bytes for Ed25519
             bundle_data: bundle_data_base64,
             signature: BASE64.encode(vec![3u8; 64]), // 64 bytes for Ed25519 signature
+            nonce: None,
+            timestamp: None,
         };
 
         // Use native UploadableKeyBundle directly (no additional encoding needed)

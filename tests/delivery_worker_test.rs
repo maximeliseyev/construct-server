@@ -14,7 +14,6 @@ use construct_server::config::{Config, RedisKeyPrefixes};
 use construct_server::delivery_worker::{deduplication, redis_streams, state::WorkerState};
 use redis::cmd;
 use serial_test::serial;
-use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 
@@ -146,6 +145,14 @@ async fn create_test_state() -> WorkerState {
             upload_token_secret: "".to_string(),
             max_file_size: 100 * 1024 * 1024,
             rate_limit_per_hour: 50,
+        },
+        csrf: construct_server::config::CsrfConfig {
+            enabled: false, // Disabled for tests
+            secret: "test-csrf-secret-at-least-32-characters".to_string(),
+            token_ttl_secs: 3600,
+            allowed_origins: vec![],
+            cookie_name: "csrf_token".to_string(),
+            header_name: "X-CSRF-Token".to_string(),
         },
         instance_domain: "test.local".to_string(),
         federation_base_domain: "test.local".to_string(),

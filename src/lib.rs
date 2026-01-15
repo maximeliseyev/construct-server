@@ -40,6 +40,7 @@ pub mod message_gateway;
 pub mod metrics;
 pub mod pqc;
 pub mod queue;
+pub mod routes;
 pub mod server_registry;
 pub mod user_id;
 pub mod utils;
@@ -50,163 +51,19 @@ pub mod delivery_worker;
 use auth::AuthManager;
 use config::Config;
 use context::AppContext;
-use db::DbPool;
 use error::AppError;
 use handlers::{handle_websocket, session::Clients};
 use kafka::MessageProducer;
 use queue::MessageQueue;
 
-type HttpResult = Result<Response<Full<Bytes>>, crate::error::AppError>;
-
-async fn http_handler(
-    req: Request<IncomingBody>,
-    db_pool: Arc<DbPool>,
-    queue: Arc<Mutex<MessageQueue>>,
-    auth_manager: Arc<AuthManager>,
-    clients: Clients,
-    config: Arc<Config>,
-    kafka_producer: Arc<MessageProducer>,
-    apns_client: Arc<apns::ApnsClient>,
-    token_encryption: Arc<apns::DeviceTokenEncryption>,
-    server_instance_id: String,
-) -> HttpResult {
-    let path = req.uri().path().to_string();
-    let method = req.method().clone();
-
-    let response = match (method.as_str(), path.as_str()) {
-        ("GET", "/health") => match health::health_check(&db_pool, queue, kafka_producer).await {
-            Ok(_) => {
-                Ok::<Response<Full<Bytes>>, AppError>(Response::new(Full::new(Bytes::from("OK"))))
-            }
-            Err(e) => {
-                tracing::error!("Health check failed: {}", e);
-                let mut res = Response::new(Full::new(Bytes::from("Service Unavailable")));
-                *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-                Ok::<Response<Full<Bytes>>, AppError>(res)
-            }
-        },
-        ("GET", "/metrics") => match metrics::gather_metrics() {
-            Ok(metrics_data) => {
-                let mut res = Response::new(Full::new(Bytes::from(metrics_data)));
-                res.headers_mut().insert(
-                    "Content-Type",
-                    "text/plain; version=0.0.4"
-                        .parse()
-                        .map_err(AppError::HttpHeader)?,
-                );
-                Ok::<Response<Full<Bytes>>, AppError>(res)
-            }
-            Err(e) => {
-                tracing::error!("Failed to gather metrics: {}", e);
-                let mut res = Response::new(Full::new(Bytes::from("Internal Server Error")));
-                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                Ok::<Response<Full<Bytes>>, AppError>(res)
-            }
-        },
-
-        // API routes
-        ("POST", "/keys/upload") => {
-            let ctx = AppContext::new(
-                db_pool,
-                queue,
-                auth_manager,
-                clients,
-                config,
-                kafka_producer,
-                apns_client,
-                token_encryption,
-                server_instance_id,
-            );
-            let (parts, body) = req.into_parts();
-            Ok(handlers::keys::handle_upload_keys(&ctx, parts.headers, body).await?)
-        }
-        ("GET", p) if p.starts_with("/keys/") => {
-            let user_id = p.trim_start_matches("/keys/");
-            let ctx = AppContext::new(
-                db_pool,
-                queue,
-                auth_manager,
-                clients,
-                config,
-                kafka_producer,
-                apns_client,
-                token_encryption,
-                server_instance_id,
-            );
-            let (parts, _) = req.into_parts();
-            Ok(handlers::keys::handle_get_keys(&ctx, parts.headers, user_id).await?)
-        }
-        ("POST", "/messages/send") => {
-            let ctx = AppContext::new(
-                db_pool,
-                queue,
-                auth_manager,
-                clients,
-                config,
-                kafka_producer,
-                apns_client,
-                token_encryption,
-                server_instance_id,
-            );
-            let (parts, body) = req.into_parts();
-            handlers::messages::handle_send_message(&ctx, parts.headers, body).await
-        }
-
-        // Federation routes
-        ("GET", "/.well-known/konstruct") => {
-            let ctx = AppContext::new(
-                db_pool,
-                queue,
-                auth_manager,
-                clients,
-                config,
-                kafka_producer,
-                apns_client,
-                token_encryption,
-                server_instance_id,
-            );
-            handlers::federation::well_known_konstruct(&ctx).await
-        }
-        ("GET", "/federation/health") => {
-            let ctx = AppContext::new(
-                db_pool,
-                queue,
-                auth_manager,
-                clients,
-                config,
-                kafka_producer,
-                apns_client,
-                token_encryption,
-                server_instance_id,
-            );
-            handlers::federation::federation_health(&ctx).await
-        }
-        ("POST", "/federation/v1/messages") => {
-            let ctx = AppContext::new(
-                db_pool,
-                queue,
-                auth_manager,
-                clients,
-                config,
-                kafka_producer,
-                apns_client,
-                token_encryption,
-                server_instance_id,
-            );
-            let (_parts, body) = req.into_parts();
-            handlers::federation::receive_federated_message_http(&ctx, body).await
-        }
-
-        _ => {
-            let mut not_found = Response::new(Full::new(Bytes::from("Not Found")));
-            *not_found.status_mut() = StatusCode::NOT_FOUND;
-            Ok(not_found)
-        }
-    };
-    Ok(response?)
-}
+// Old http_handler removed - now using Axum router (Phase 2.1)
 
 pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) {
+    // Phase 2.1 - Axum router integration
+    // Create Axum router for HTTP routes
+    let app_context_arc = Arc::new(app_context.clone());
+    let axum_router = Arc::new(routes::create_router(app_context_arc.clone()));
+
     loop {
         let (stream, addr) = match listener.accept().await {
             Ok(s) => s,
@@ -217,13 +74,16 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
         };
 
         let ctx = app_context.clone();
+        let router = axum_router.clone();
 
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
 
             let service = service_fn(move |mut req: Request<IncomingBody>| {
                 let ctx = ctx.clone();
+                let router = router.clone();
                 async move {
+                    // Check if this is a WebSocket upgrade request
                     if req
                         .headers()
                         .get("upgrade")
@@ -231,8 +91,7 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
                         .map(|v| v.eq_ignore_ascii_case("websocket"))
                         .unwrap_or(false)
                     {
-                        // Manually implement the handshake response to avoid moving `req`.
-                        // Extract the key, build the response, and then move `req` into the upgrade task.
+                        // Handle WebSocket upgrade (keep existing logic)
                         let key = match req.headers().get(hyper::header::SEC_WEBSOCKET_KEY) {
                             Some(key) => key.clone(),
                             None => {
@@ -275,7 +134,6 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
                         *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
 
                         // SECURITY: Replace unwrap() with proper error handling
-                        // These header values are static and should never fail, but we handle errors gracefully
                         res.headers_mut().insert(
                             hyper::header::UPGRADE,
                             "websocket".parse().map_err(|e| {
@@ -299,20 +157,78 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
                         );
                         Ok::<Response<Full<Bytes>>, AppError>(res)
                     } else {
-                        // Handle regular HTTP
-                        http_handler(
-                            req,
-                            ctx.db_pool.clone(),
-                            ctx.queue.clone(),
-                            ctx.auth_manager.clone(),
-                            ctx.clients.clone(),
-                            ctx.config.clone(),
-                            ctx.kafka_producer.clone(),
-                            ctx.apns_client.clone(),
-                            ctx.token_encryption.clone(),
-                            ctx.server_instance_id.clone(),
-                        )
-                        .await
+                        // Handle regular HTTP with Axum router
+                        // Use tower::Service trait to call the router
+                        use axum::body::Body as AxumBody;
+                        use axum::extract::Request as AxumRequest;
+                        use http_body_util::BodyExt;
+
+                        // Convert hyper::Request to axum::Request
+                        let (parts, body) = req.into_parts();
+                        let body_bytes = match body.collect().await {
+                            Ok(collected) => collected.to_bytes(),
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to read request body");
+                                let mut res =
+                                    Response::new(Full::new(Bytes::from("Internal Server Error")));
+                                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                return Ok(res);
+                            }
+                        };
+
+                        let axum_body = AxumBody::from(body_bytes.to_vec());
+                        let mut axum_request = AxumRequest::builder()
+                            .uri(parts.uri)
+                            .method(parts.method)
+                            .body(axum_body)
+                            .map_err(|e| {
+                                tracing::error!(error = %e, "Failed to build axum request");
+                                AppError::Hyper(format!("Failed to build request: {}", e))
+                            })?;
+
+                        // Copy headers
+                        for (key, value) in parts.headers {
+                            if let (Some(name), Ok(val)) =
+                                (key, axum::http::HeaderValue::from_bytes(value.as_bytes()))
+                            {
+                                axum_request.headers_mut().insert(name, val);
+                            }
+                        }
+
+                        // Process through Axum router using tower::ServiceExt::oneshot
+                        use tower::ServiceExt;
+                        let router_clone = (*router).clone();
+                        let axum_response =
+                            router_clone.oneshot(axum_request).await.map_err(|e| {
+                                tracing::error!(error = %e, "Axum router error");
+                                AppError::Unknown(anyhow::anyhow!("Router error: {}", e))
+                            })?;
+
+                        // Convert axum::Response back to hyper::Response
+                        let (parts, body) = axum_response.into_parts();
+                        let body_bytes =
+                            axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
+                                tracing::error!(error = %e, "Failed to read response body");
+                                AppError::Hyper(format!("Failed to read response: {}", e))
+                            })?;
+
+                        let mut hyper_response = Response::builder().status(parts.status);
+
+                        for (key, value) in parts.headers {
+                            if let (Some(name), Ok(val)) = (
+                                key,
+                                hyper::header::HeaderValue::from_bytes(value.as_bytes()),
+                            ) {
+                                hyper_response = hyper_response.header(name, val);
+                            }
+                        }
+
+                        hyper_response
+                            .body(Full::new(Bytes::from(body_bytes.to_vec())))
+                            .map_err(|e| {
+                                tracing::error!(error = %e, "Failed to build hyper response");
+                                AppError::Hyper(format!("Failed to build response: {}", e))
+                            })
                     }
                 }
             });

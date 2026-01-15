@@ -5,10 +5,24 @@
 // Deduplication logic for delivery worker messages.
 // Prevents processing the same message multiple times.
 //
-// Flow:
-// 1. Check if message was already processed (processed_msg:{message_id})
-// 2. Check if message was delivered directly via tx.send() (delivered_direct:{message_id})
-// 3. Mark message as processed after successful handling
+// ARCHITECTURE: Multi-layer deduplication for Kafka as Source of Truth
+// ============================================================================
+//
+// Layer 1: Message ID deduplication (processed_msg:{message_id})
+//   - Prevents reprocessing of already-delivered messages
+//   - Used when Kafka redelivers (user came online)
+//
+// Layer 2: Direct delivery check (delivered_direct:{message_id})
+//   - Skips delivery-worker if message was delivered via tx.send()
+//   - Reduces unnecessary work and network traffic
+//
+// Layer 3: Content hash deduplication (content_hash:{hash})
+//   - Prevents duplicate messages with different IDs but same content
+//   - Protects against client sending same message twice
+//
+// Key Principle:
+//   For ONLINE users: mark as processed, commit Kafka offset
+//   For OFFLINE users: do NOT mark as processed, Kafka will redeliver
 //
 // ============================================================================
 
@@ -17,7 +31,29 @@ use crate::delivery_worker::retry::execute_redis_with_retry;
 use crate::delivery_worker::state::WorkerState;
 use anyhow::{Context, Result};
 use redis::cmd;
-use tracing::{debug, info};
+use sha2::{Digest, Sha256};
+use tracing::{debug, info, warn};
+
+/// Reason why a message was skipped
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Message was already processed by delivery worker
+    AlreadyProcessed,
+    /// Message was delivered directly via tx.send()
+    DeliveredDirect,
+    /// Message content hash already exists (duplicate content)
+    DuplicateContent,
+}
+
+impl std::fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkipReason::AlreadyProcessed => write!(f, "already_processed"),
+            SkipReason::DeliveredDirect => write!(f, "delivered_direct"),
+            SkipReason::DuplicateContent => write!(f, "duplicate_content"),
+        }
+    }
+}
 
 /// Check if message was already processed
 ///
@@ -47,12 +83,12 @@ pub async fn is_message_processed(state: &WorkerState, message_id: &str) -> Resu
 
 /// Check if message was already delivered directly via tx.send() (fast path)
 ///
-/// УМНАЯ ДЕДУПЛИКАЦИЯ:
-/// Если construct-server успешно доставил через tx.send(), он помечает:
+/// SMART DEDUPLICATION:
+/// If construct-server successfully delivered via tx.send(), it marks:
 /// SET delivered_direct:{message_id} 1 EX 3600
 ///
-/// Мы проверяем этот ключ и пропускаем доставку, чтобы избежать дубликатов.
-/// Это снижает нагрузку на сервер и сеть.
+/// We check this key and skip delivery to avoid duplicates.
+/// This reduces server and network load.
 ///
 /// # Arguments
 /// * `state` - Worker state
@@ -76,9 +112,100 @@ pub async fn was_delivered_direct(state: &WorkerState, message_id: &str) -> Resu
     Ok(was_delivered > 0)
 }
 
+/// Check if content hash already exists (duplicate content detection)
+///
+/// Calculates SHA-256 hash of message content and checks if it was already delivered.
+/// This prevents duplicate messages with different IDs but same content.
+///
+/// Key format: content_hash:{recipient_id}:{sha256_hash}
+/// TTL: Short (1 hour) to allow intentional resends while catching accidental duplicates
+///
+/// # Arguments
+/// * `state` - Worker state
+/// * `recipient_id` - Recipient user ID
+/// * `content` - Message content (ciphertext)
+///
+/// # Returns
+/// `true` if content hash exists, `false` otherwise
+pub async fn is_content_duplicate(
+    state: &WorkerState,
+    recipient_id: &str,
+    content: &[u8],
+) -> Result<bool> {
+    // Calculate SHA-256 hash of content
+    let mut hasher = Sha256::new();
+    hasher.update(content);
+    let hash = hasher.finalize();
+    let hash_hex = hex::encode(hash);
+
+    // Key format: content_hash:{recipient_id}:{hash}
+    // Include recipient_id to allow same content to different recipients
+    let content_hash_key = format!(
+        "{}content_hash:{}:{}",
+        state.config.redis_key_prefixes.processed_msg,
+        recipient_id,
+        &hash_hex[..16] // Use first 16 chars of hash (64 bits, collision-safe for dedup)
+    );
+
+    let exists: i64 = execute_redis_with_retry(state, "check_content_hash", |conn| {
+        let key = content_hash_key.clone();
+        Box::pin(async move { cmd("EXISTS").arg(&key).query_async(conn).await })
+    })
+    .await
+    .context("Failed to check content hash")?;
+
+    Ok(exists > 0)
+}
+
+/// Mark content hash as processed
+///
+/// # Arguments
+/// * `state` - Worker state
+/// * `recipient_id` - Recipient user ID
+/// * `content` - Message content (ciphertext)
+/// * `ttl_seconds` - TTL for the hash key (usually 1 hour for content dedup)
+pub async fn mark_content_hash_processed(
+    state: &WorkerState,
+    recipient_id: &str,
+    content: &[u8],
+    ttl_seconds: i64,
+) -> Result<()> {
+    let mut hasher = Sha256::new();
+    hasher.update(content);
+    let hash = hasher.finalize();
+    let hash_hex = hex::encode(hash);
+
+    let content_hash_key = format!(
+        "{}content_hash:{}:{}",
+        state.config.redis_key_prefixes.processed_msg,
+        recipient_id,
+        &hash_hex[..16]
+    );
+
+    let _: String = execute_redis_with_retry(state, "mark_content_hash", |conn| {
+        let key = content_hash_key.clone();
+        let ttl = ttl_seconds;
+        Box::pin(async move {
+            cmd("SETEX")
+                .arg(&key)
+                .arg(ttl)
+                .arg("1")
+                .query_async(conn)
+                .await
+        })
+    })
+    .await
+    .context("Failed to mark content hash as processed")?;
+
+    Ok(())
+}
+
 /// Mark message as processed (for deduplication)
 ///
 /// Sets Redis key: processed_msg:{message_id} with TTL
+///
+/// IMPORTANT: Only call this for ONLINE users!
+/// For offline users, do NOT mark as processed - Kafka should redeliver.
 ///
 /// # Arguments
 /// * `state` - Worker state
@@ -109,45 +236,128 @@ pub async fn mark_message_processed(
     .await
     .context("Failed to mark message as processed after retries")?;
 
+    debug!(
+        message_id = %message_id,
+        ttl_seconds = ttl_seconds,
+        "Message marked as processed"
+    );
+
     Ok(())
 }
 
-/// Check if message should be skipped (already processed or delivered directly)
+/// Check if message should be skipped (multi-layer deduplication)
 ///
-/// Convenience function that checks both deduplication paths.
+/// Checks all deduplication layers in order of efficiency:
+/// 1. Message ID (fastest - single key lookup)
+/// 2. Direct delivery flag (fast - single key lookup)
+///
+/// Note: Content hash check is optional and done separately in processor
+/// because it requires message content which may not be available yet.
 ///
 /// # Arguments
 /// * `state` - Worker state
 /// * `message_id` - Message ID to check
 ///
 /// # Returns
-/// `Some(reason)` if message should be skipped, `None` if it should be processed
+/// `Some(SkipReason)` if message should be skipped, `None` if it should be processed
 pub async fn should_skip_message(
     state: &WorkerState,
     message_id: &str,
 ) -> Result<Option<&'static str>> {
-    // Check if already processed
+    // Layer 1: Check if already processed by delivery worker
     if is_message_processed(state, message_id).await? {
         info!(
             message_id = %message_id,
-            "Message already processed (deduplication)"
+            reason = "already_processed",
+            "Message skipped (deduplication layer 1: processed_msg)"
         );
         return Ok(Some("already_processed"));
     }
 
-    // Check if delivered directly
+    // Layer 2: Check if delivered directly via tx.send()
     if was_delivered_direct(state, message_id).await? {
         debug!(
             message_id = %message_id,
-            "Message was already delivered directly via tx.send() - skipping delivery-worker delivery"
+            reason = "delivered_direct",
+            "Message skipped (deduplication layer 2: delivered_direct)"
         );
 
-        // Mark as processed (deduplication) so we don't check again
+        // Mark as processed so we don't check again on next Kafka redeliver
         let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
-        mark_message_processed(state, message_id, ttl_seconds).await?;
+        if let Err(e) = mark_message_processed(state, message_id, ttl_seconds).await {
+            warn!(
+                message_id = %message_id,
+                error = %e,
+                "Failed to mark delivered_direct message as processed"
+            );
+        }
 
         return Ok(Some("delivered_direct"));
     }
 
     Ok(None)
+}
+
+/// Extended skip check including content hash
+///
+/// Use this for full deduplication including content-based detection.
+/// More expensive than basic should_skip_message but catches duplicate content.
+///
+/// # Arguments
+/// * `state` - Worker state
+/// * `message_id` - Message ID to check
+/// * `recipient_id` - Recipient user ID
+/// * `content` - Message content (ciphertext)
+///
+/// # Returns
+/// `Some(SkipReason)` if message should be skipped, `None` if it should be processed
+pub async fn should_skip_message_with_content(
+    state: &WorkerState,
+    message_id: &str,
+    recipient_id: &str,
+    content: &[u8],
+) -> Result<Option<SkipReason>> {
+    // Layer 1 & 2: Basic deduplication
+    if let Some(reason) = should_skip_message(state, message_id).await? {
+        return Ok(Some(match reason {
+            "already_processed" => SkipReason::AlreadyProcessed,
+            "delivered_direct" => SkipReason::DeliveredDirect,
+            _ => SkipReason::AlreadyProcessed,
+        }));
+    }
+
+    // Layer 3: Content hash deduplication
+    if is_content_duplicate(state, recipient_id, content).await? {
+        info!(
+            message_id = %message_id,
+            reason = "duplicate_content",
+            "Message skipped (deduplication layer 3: content_hash)"
+        );
+
+        // Mark as processed
+        let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
+        if let Err(e) = mark_message_processed(state, message_id, ttl_seconds).await {
+            warn!(
+                message_id = %message_id,
+                error = %e,
+                "Failed to mark duplicate content message as processed"
+            );
+        }
+
+        return Ok(Some(SkipReason::DuplicateContent));
+    }
+
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_skip_reason_display() {
+        assert_eq!(SkipReason::AlreadyProcessed.to_string(), "already_processed");
+        assert_eq!(SkipReason::DeliveredDirect.to_string(), "delivered_direct");
+        assert_eq!(SkipReason::DuplicateContent.to_string(), "duplicate_content");
+    }
 }
