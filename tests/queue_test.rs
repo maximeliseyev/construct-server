@@ -38,6 +38,7 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             prekey_min_ttl_days: 7,
             prekey_max_ttl_days: 90,
             max_messages_per_hour: 1000,
+            max_messages_per_ip_per_hour: 5000,
             max_key_rotations_per_day: 10,
             max_password_changes_per_day: 5,
             max_failed_login_attempts: 5,
@@ -80,6 +81,13 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             instance_domain: "test.local".to_string(),
             base_domain: "test.local".to_string(),
             signing_key_seed: None,
+            mtls: construct_server::federation::MtlsConfig {
+                required: false,
+                client_cert_path: None,
+                client_key_path: None,
+                verify_server_cert: false,
+                pinned_certs: std::collections::HashMap::new(),
+            },
         },
         db: construct_server::config::DbConfig {
             max_connections: 10,
@@ -104,6 +112,7 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             blocked: "blocked:".to_string(),
             key_bundle: "key_bundle:".to_string(),
             connections: "connections:".to_string(),
+            delivered_direct: "delivered_direct:".to_string(),
         },
         redis_channels: construct_server::config::RedisChannels {
             dead_letter_queue: "dead_letter_queue".to_string(),
@@ -115,6 +124,23 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
         federation_base_domain: "test.local".to_string(),
         federation_enabled: false,
         deep_link_base_url: "".to_string(),
+        jwt_private_key: None,
+        jwt_public_key: None,
+        media: construct_server::config::MediaConfig {
+            enabled: false,
+            base_url: "".to_string(),
+            upload_token_secret: "".to_string(),
+            max_file_size: 100 * 1024 * 1024,
+            rate_limit_per_hour: 100,
+        },
+        csrf: construct_server::config::CsrfConfig {
+            enabled: false, // Disabled for tests
+            secret: "test-csrf-secret-at-least-32-characters".to_string(),
+            token_ttl_secs: 3600,
+            allowed_origins: vec![],
+            cookie_name: "csrf_token".to_string(),
+            header_name: "X-CSRF-Token".to_string(),
+        },
     };
 
     // Allow overriding redis_url from environment for CI/different setups

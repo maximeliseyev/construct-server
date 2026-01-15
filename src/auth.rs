@@ -31,8 +31,12 @@ pub struct AuthManager {
     legacy_decoding_key: Option<DecodingKey>,
     /// Current algorithm being used for new tokens
     current_algorithm: JwtAlgorithm,
-    session_ttl_days: i64,
+    /// Access token TTL in hours (for REST API)
+    access_token_ttl_hours: i64,
+    /// Session TTL in days (for WebSocket - legacy, kept for backward compatibility)
     #[allow(dead_code)]
+    session_ttl_days: i64,
+    /// Refresh token TTL in days
     refresh_token_ttl_days: i64,
     issuer: String,
 }
@@ -87,15 +91,18 @@ impl AuthManager {
             decoding_key,
             legacy_decoding_key,
             current_algorithm,
+            access_token_ttl_hours: config.access_token_ttl_hours,
             session_ttl_days: config.session_ttl_days,
             refresh_token_ttl_days: config.refresh_token_ttl_days,
             issuer: config.jwt_issuer.clone(),
         })
     }
 
+    /// Create access token (short-lived, for REST API)
     pub fn create_token(&self, user_id: &Uuid) -> Result<(String, String, i64)> {
         let now = Utc::now();
-        let exp = now + Duration::days(self.session_ttl_days);
+        // Use hours for access tokens (short-lived for security)
+        let exp = now + Duration::hours(self.access_token_ttl_hours);
         let jti = Uuid::new_v4().to_string();
 
         let claims = Claims {
@@ -119,7 +126,7 @@ impl AuthManager {
         Ok((token, jti, exp.timestamp()))
     }
 
-    #[allow(dead_code)]
+    /// Create refresh token (long-lived, for token refresh)
     pub fn create_refresh_token(&self, user_id: &Uuid) -> Result<(String, String, i64)> {
         let now = Utc::now();
         let exp = now + Duration::days(self.refresh_token_ttl_days);

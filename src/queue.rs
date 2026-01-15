@@ -226,6 +226,87 @@ impl MessageQueue {
         Ok(true) // Сообщение уникальное
     }
 
+    /// Enhanced replay protection with timestamp validation
+    ///
+    /// Checks for replay attacks using:
+    /// - message_id + content + nonce hash (for deduplication)
+    /// - timestamp validation (rejects requests older than max_age_seconds)
+    ///
+    /// # Arguments
+    /// * `message_id` - Unique message identifier
+    /// * `content` - Message content (for hash)
+    /// * `nonce` - Nonce for this request (prevents replay)
+    /// * `timestamp` - Request timestamp (Unix epoch seconds)
+    /// * `max_age_seconds` - Maximum age of request in seconds (default: 300 = 5 minutes)
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Request is new and valid (not a replay)
+    /// * `Ok(false)` - Request is a replay (already seen)
+    /// * `Err(_)` - Error checking replay protection
+    pub async fn check_replay_with_timestamp(
+        &mut self,
+        message_id: &str,
+        content: &str,
+        nonce: &str,
+        timestamp: i64,
+        max_age_seconds: i64,
+    ) -> Result<bool> {
+        // 1. Validate timestamp (prevent replay of old requests)
+        let now = chrono::Utc::now().timestamp();
+        let age = now - timestamp;
+
+        if age > max_age_seconds {
+            tracing::warn!(
+                message_id = %message_id,
+                timestamp = timestamp,
+                age_seconds = age,
+                max_age = max_age_seconds,
+                "Request timestamp too old - possible replay attack"
+            );
+            return Ok(false); // Timestamp validation failed
+        }
+
+        if age < -60 {
+            // Allow 60 seconds clock skew for future timestamps
+            tracing::warn!(
+                message_id = %message_id,
+                timestamp = timestamp,
+                now = now,
+                "Request timestamp too far in future - possible clock skew or attack"
+            );
+            return Ok(false); // Timestamp too far in future
+        }
+
+        // 2. Check replay using hash (same as check_message_replay)
+        let mut hasher = Sha256::new();
+        hasher.update(message_id.as_bytes());
+        hasher.update(content.as_bytes());
+        hasher.update(nonce.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+
+        let key = format!("{}{}", self.config.redis_key_prefixes.msg_hash, hash);
+
+        // Check if already exists
+        let exists: bool = self.client.exists(&key).await?;
+
+        if exists {
+            tracing::warn!(
+                message_id = %message_id,
+                hash = %hash,
+                "Potential replay attack detected (duplicate hash)"
+            );
+            return Ok(false); // Message already seen
+        }
+
+        // Store with TTL = max_age_seconds (cleanup old entries automatically)
+        let _: () = self
+            .client
+            .set_ex(&key, &timestamp.to_string(), max_age_seconds as u64)
+            .await?;
+
+        Ok(true) // Request is new and valid
+    }
+
     pub async fn increment_message_count(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:msg:{}", user_id);
 
@@ -254,6 +335,44 @@ impl MessageQueue {
         // Set TTL only on first increment (1 hour window)
         if count == 1 {
             let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
+        }
+
+        Ok(count)
+    }
+
+    /// Increments combined rate limit counter (user_id + IP)
+    /// Returns the total count of operations from this user+IP combination in the last hour
+    /// This provides more precise rate limiting for authenticated operations:
+    /// - Same user from different IPs: separate limits per IP
+    /// - Different users from same IP: separate limits per user
+    /// - Protects against both account takeover and distributed attacks
+    ///
+    /// # Arguments
+    /// * `user_id` - User identifier (UUID string)
+    /// * `ip` - Client IP address (normalized)
+    /// * `ttl_seconds` - Time window in seconds (default: 1 hour)
+    ///
+    /// # Returns
+    /// Current count for this user+IP combination
+    pub async fn increment_combined_rate_limit(
+        &mut self,
+        user_id: &str,
+        ip: &str,
+        ttl_seconds: i64,
+    ) -> Result<u32> {
+        // Normalize IP (handle IPv6 brackets if present)
+        let normalized_ip = ip.trim_start_matches('[').trim_end_matches(']');
+        
+        // Create combined key: "rate:combined:{user_id}:{ip}"
+        // This allows separate tracking per user+IP combination
+        let key = format!("rate:combined:{}:{}", user_id, normalized_ip);
+
+        // Increment counter
+        let count: u32 = self.client.incr(&key, 1).await?;
+
+        // Set TTL only on first increment
+        if count == 1 {
+            let _: () = self.client.expire(&key, ttl_seconds).await?;
         }
 
         Ok(count)
@@ -362,6 +481,110 @@ impl MessageQueue {
         let key = format!("blocked:{}", user_id);
         let reason: Option<String> = self.client.get(&key).await?;
         Ok(reason)
+    }
+
+    /// Store refresh token in Redis for validation and revocation
+    ///
+    /// # Arguments
+    /// * `jti` - JWT ID (unique token identifier)
+    /// * `user_id` - User ID this token belongs to
+    /// * `ttl_seconds` - Time to live in seconds
+    pub async fn store_refresh_token(
+        &mut self,
+        jti: &str,
+        user_id: &str,
+        ttl_seconds: i64,
+    ) -> Result<()> {
+        let key = format!("refresh_token:{}", jti);
+        // Store user_id with the token for validation
+        let _: () = self
+            .client
+            .set_ex(&key, user_id, ttl_seconds as u64)
+            .await?;
+        Ok(())
+    }
+
+    /// Check if refresh token is valid (exists and not revoked)
+    ///
+    /// # Returns
+    /// * `Ok(Some(user_id))` - Token is valid and belongs to this user
+    /// * `Ok(None)` - Token doesn't exist or was revoked
+    /// * `Err(_)` - Error checking token
+    pub async fn check_refresh_token(&mut self, jti: &str) -> Result<Option<String>> {
+        let key = format!("refresh_token:{}", jti);
+        let user_id: Option<String> = self.client.get(&key).await?;
+        Ok(user_id)
+    }
+
+    /// Revoke refresh token (soft logout)
+    ///
+    /// Removes the token from Redis, making it invalid for future use
+    pub async fn revoke_refresh_token(&mut self, jti: &str) -> Result<()> {
+        let key = format!("refresh_token:{}", jti);
+        let _: () = self.client.del(&key).await?;
+        Ok(())
+    }
+
+    /// Revoke all refresh tokens for a user (logout from all devices)
+    ///
+    /// Note: This requires scanning all refresh tokens, which can be expensive.
+    /// For better performance, consider maintaining a set of active tokens per user.
+    /// This implementation uses a simple approach - in production, you might want to
+    /// maintain a set: user_tokens:{user_id} -> Set{jti} for O(1) revocation.
+    pub async fn revoke_all_user_tokens(&mut self, user_id: &str) -> Result<()> {
+        // Pattern: refresh_token:*
+        // Use KEYS for simplicity (in production with many tokens, use SCAN)
+        let pattern = "refresh_token:*";
+        
+        // Note: KEYS can block Redis, but for token revocation it's acceptable
+        // In high-scale production, maintain a reverse index: user_tokens:{user_id} -> Set{jti}
+        let keys: Vec<String> = self.client.keys(pattern).await?;
+        
+        let mut deleted_count = 0;
+        for key in keys {
+            // Check if this token belongs to the user
+            let stored_user_id: Option<String> = self.client.get(&key).await?;
+            if stored_user_id.as_deref() == Some(user_id) {
+                let _: () = self.client.del(&key).await?;
+                deleted_count += 1;
+            }
+        }
+        
+        tracing::info!(
+            user_id = %user_id,
+            deleted_count = deleted_count,
+            "Revoked all refresh tokens for user"
+        );
+        
+        Ok(())
+    }
+
+    /// Store invalidated access token (for soft logout)
+    ///
+    /// Stores token JTI with short TTL to prevent reuse after logout
+    /// TTL should match access token lifetime
+    pub async fn invalidate_access_token(
+        &mut self,
+        jti: &str,
+        ttl_seconds: i64,
+    ) -> Result<()> {
+        let key = format!("invalidated_token:{}", jti);
+        let _: () = self
+            .client
+            .set_ex(&key, "1", ttl_seconds as u64)
+            .await?;
+        Ok(())
+    }
+
+    /// Check if access token is invalidated (was revoked)
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Token is invalidated (should be rejected)
+    /// * `Ok(false)` - Token is valid (not invalidated)
+    pub async fn is_token_invalidated(&mut self, jti: &str) -> Result<bool> {
+        let key = format!("invalidated_token:{}", jti);
+        let exists: bool = self.client.exists(&key).await?;
+        Ok(exists)
     }
 
     pub async fn cache_key_bundle(

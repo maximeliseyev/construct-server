@@ -1,18 +1,25 @@
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_server::e2e::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
+use ed25519_dalek::{Signer, SigningKey};
+use rand::rngs::OsRng;
 
 mod test_utils;
 use construct_server::message::ClientMessage;
 use serial_test::serial;
 use test_utils::{TestClient, spawn_app};
 
-/// Helper function to create a valid test UploadableKeyBundle
+/// Helper function to create a valid test UploadableKeyBundle with real Ed25519 keys and signatures
 fn create_test_bundle(user_id: &str) -> UploadableKeyBundle {
+    // Generate a real Ed25519 key pair for signing
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+
     // Create key material for suite 1 (CLASSIC_X25519)
     let suite_material = SuiteKeyMaterial {
         suite_id: 1,
         identity_key: BASE64.encode(vec![0u8; 32]), // 32 bytes for X25519
         signed_prekey: BASE64.encode(vec![1u8; 32]), // 32 bytes for X25519
+        signed_prekey_signature: BASE64.encode(vec![2u8; 64]), // 64 bytes for Ed25519 signature
         one_time_prekeys: vec![],
     };
 
@@ -23,16 +30,19 @@ fn create_test_bundle(user_id: &str) -> UploadableKeyBundle {
         supported_suites: vec![suite_material],
     };
 
-    // Serialize BundleData to JSON and encode as Base64
-    let bundle_data_json = serde_json::to_string(&bundle_data).unwrap();
-    let bundle_data_base64 = BASE64.encode(bundle_data_json.as_bytes());
+    // Serialize to canonical bytes for signing
+    let canonical_bytes = bundle_data.canonical_bytes().unwrap();
 
-    // Create and return UploadableKeyBundle directly
-    // No need for additional JSON/Base64 encoding - MessagePack handles serialization
+    // Sign the bundle data with the real Ed25519 key
+    let signature = signing_key.sign(&canonical_bytes);
+
+    // Create and return UploadableKeyBundle with valid signature
     UploadableKeyBundle {
-        master_identity_key: BASE64.encode(vec![2u8; 32]), // 32 bytes for Ed25519
-        bundle_data: bundle_data_base64,
-        signature: BASE64.encode(vec![3u8; 64]), // 64 bytes for Ed25519 signature
+        master_identity_key: BASE64.encode(verifying_key.as_bytes()), // Real Ed25519 public key (32 bytes)
+        bundle_data: BASE64.encode(canonical_bytes),
+        signature: BASE64.encode(signature.to_bytes()), // Real Ed25519 signature (64 bytes)
+        nonce: None,
+        timestamp: None,
     }
 }
 
@@ -47,7 +57,7 @@ async fn test_user_registration_success() {
 
     let msg = ClientMessage::Register(construct_server::message::RegisterData {
         username: "testuser".to_string(),
-        password: "securepassword123".to_string(),
+        password: "SecurePassword123".to_string(), // Must have uppercase, lowercase, number, and be >= 10 chars
         public_key,
     });
 
@@ -86,7 +96,7 @@ async fn test_duplicate_username_rejected() {
 
     let msg1 = ClientMessage::Register(construct_server::message::RegisterData {
         username: "duplicate_test".to_string(),
-        password: "password1".to_string(),
+        password: "SecurePassword1".to_string(), // Must have uppercase, lowercase, number, and be >= 10 chars
         public_key: public_key1,
     });
     client1.send(&msg1).await.unwrap();
@@ -98,7 +108,7 @@ async fn test_duplicate_username_rejected() {
 
     let msg2 = ClientMessage::Register(construct_server::message::RegisterData {
         username: "duplicate_test".to_string(),
-        password: "password2".to_string(),
+        password: "Secure-Password#2".to_string(), // Must have uppercase, lowercase, number, and be >= 10 chars
         public_key: public_key2,
     });
     client2.send(&msg2).await.unwrap();

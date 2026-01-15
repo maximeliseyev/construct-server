@@ -537,6 +537,16 @@ pub struct UploadableKeyBundle {
 
     /// Base64-encoded Ed25519 signature of bundle_data (64 bytes)
     pub signature: String,
+
+    /// Optional: Nonce for replay protection (base64-encoded random bytes, 16-32 bytes)
+    /// Required for critical operations to prevent replay attacks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+
+    /// Optional: Timestamp for replay protection (Unix epoch seconds)
+    /// Server validates that timestamp is within 5 minutes of current time
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
 }
 
 /// Encrypted message for API v3
@@ -551,4 +561,14 @@ pub struct EncryptedMessageV3 {
 
     /// Base64-encoded ciphertext (format depends on suite_id)
     pub ciphertext: String,
+
+    /// Optional: Nonce for replay protection (base64-encoded random bytes, 16-32 bytes)
+    /// Recommended for better replay protection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+
+    /// Optional: Timestamp for replay protection (Unix epoch seconds)
+    /// Server validates that timestamp is within 5 minutes of current time
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
 }

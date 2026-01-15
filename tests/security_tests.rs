@@ -41,6 +41,7 @@ async fn test_ed25519_signature_verification_valid() {
             suite_id: 1,
             identity_key: BASE64.encode(vec![0u8; 32]),
             signed_prekey: BASE64.encode(vec![1u8; 32]),
+            signed_prekey_signature: BASE64.encode(vec![2u8; 64]), // 64 bytes for Ed25519 signature
             one_time_prekeys: vec![],
         }],
     };
@@ -56,6 +57,8 @@ async fn test_ed25519_signature_verification_valid() {
         master_identity_key: BASE64.encode(verifying_key.as_bytes()),
         bundle_data: BASE64.encode(canonical_bytes),
         signature: BASE64.encode(signature.to_bytes()),
+        nonce: None,
+        timestamp: None,
     };
 
     // Validate should succeed
@@ -84,6 +87,7 @@ async fn test_ed25519_signature_verification_invalid() {
             suite_id: 1,
             identity_key: BASE64.encode(vec![0u8; 32]),
             signed_prekey: BASE64.encode(vec![1u8; 32]),
+            signed_prekey_signature: BASE64.encode(vec![2u8; 64]), // 64 bytes for Ed25519 signature
             one_time_prekeys: vec![],
         }],
     };
@@ -130,6 +134,7 @@ async fn test_ed25519_signature_verification_tampered_data() {
             suite_id: 1,
             identity_key: BASE64.encode(vec![0u8; 32]),
             signed_prekey: BASE64.encode(vec![1u8; 32]),
+            signed_prekey_signature: BASE64.encode(vec![2u8; 64]), // 64 bytes for Ed25519 signature
             one_time_prekeys: vec![],
         }],
     };
@@ -366,6 +371,7 @@ async fn test_key_bundle_signature_required() {
             suite_id: 1,
             identity_key: BASE64.encode(vec![0u8; 32]),
             signed_prekey: BASE64.encode(vec![1u8; 32]),
+            signed_prekey_signature: BASE64.encode(vec![2u8; 64]), // 64 bytes for Ed25519 signature
             one_time_prekeys: vec![],
         }],
     };
@@ -378,6 +384,8 @@ async fn test_key_bundle_signature_required() {
         master_identity_key: BASE64.encode(vec![0u8; 32]),
         bundle_data: BASE64.encode(canonical_bytes.clone()),
         signature: BASE64.encode(vec![0u8; 32]), // Invalid: should be 64 bytes, not 32
+        nonce: None,
+        timestamp: None,
     };
 
     // Validate should fail due to invalid signature format
@@ -393,6 +401,8 @@ async fn test_key_bundle_signature_required() {
         master_identity_key: BASE64.encode(vec![0u8; 32]),
         bundle_data: BASE64.encode(canonical_bytes),
         signature: "".to_string(), // Empty signature
+        nonce: None,
+        timestamp: None,
     };
 
     // Validate should fail due to base64 decode error

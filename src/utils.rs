@@ -2,6 +2,7 @@ use hyper::header::HeaderValue;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt;
+use std::net::IpAddr;
 
 /// A wrapper type for sensitive data (passwords, tokens, secrets) that prevents accidental logging
 ///
@@ -286,6 +287,66 @@ pub fn add_security_headers(headers: &mut hyper::HeaderMap, is_https: bool) {
             HeaderValue::from_static("max-age=31536000; includeSubDomains; preload"),
         );
     }
+}
+
+/// Extracts client IP address from HTTP request headers
+///
+/// Checks headers in order of priority:
+/// 1. X-Forwarded-For (first IP in the chain, if present)
+/// 2. X-Real-IP (single IP, if present)
+/// 3. Falls back to provided direct IP (from connection)
+///
+/// # Security Note
+/// X-Forwarded-For can be spoofed by clients, so it should only be trusted
+/// if the request comes through a trusted proxy/load balancer.
+/// In production, ensure your reverse proxy (Caddy, nginx, etc.) sets these headers
+/// and strips any existing X-Forwarded-For from untrusted sources.
+///
+/// # Arguments
+/// * `headers` - HTTP request headers
+/// * `direct_ip` - Direct connection IP (fallback if headers don't contain IP)
+///
+/// # Returns
+/// IP address as a string (normalized, without brackets for IPv6)
+pub fn extract_client_ip(headers: &axum::http::HeaderMap, direct_ip: Option<IpAddr>) -> String {
+    // 1. Check X-Forwarded-For (first IP in chain)
+    if let Some(forwarded_for) = headers.get("x-forwarded-for") {
+        if let Ok(forwarded_str) = forwarded_for.to_str() {
+            // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+            // We want the first (original client) IP
+            let first_ip = forwarded_str.split(',').next().unwrap_or("").trim();
+            if !first_ip.is_empty() {
+                // Try to parse as IP address
+                if let Ok(ip) = first_ip.parse::<IpAddr>() {
+                    return normalize_ip(ip);
+                }
+            }
+        }
+    }
+
+    // 2. Check X-Real-IP (single IP, often set by nginx)
+    if let Some(real_ip) = headers.get("x-real-ip") {
+        if let Ok(real_ip_str) = real_ip.to_str() {
+            if let Ok(ip) = real_ip_str.trim().parse::<IpAddr>() {
+                return normalize_ip(ip);
+            }
+        }
+    }
+
+    // 3. Fallback to direct connection IP
+    if let Some(ip) = direct_ip {
+        return normalize_ip(ip);
+    }
+
+    // 4. Last resort: return "unknown" (shouldn't happen in production)
+    "unknown".to_string()
+}
+
+/// Normalizes IP address to string format (removes brackets for IPv6)
+fn normalize_ip(ip: IpAddr) -> String {
+    let ip_str = ip.to_string();
+    // Remove brackets if present (e.g., "[::1]" -> "::1")
+    ip_str.trim_start_matches('[').trim_end_matches(']').to_string()
 }
 
 #[cfg(test)]

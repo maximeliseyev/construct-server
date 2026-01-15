@@ -182,10 +182,12 @@ mod security_tests {
             env::remove_var("DELIVERY_ACK_BATCH_BUFFER_SECS");
         }
 
-        // Valid key (32 bytes = 64 hex chars)
+        // Valid key (32 bytes = 64 hex chars) - use a valid key with good entropy
+        // This key has good diversity: 16 different hex characters
+        let valid_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         unsafe {
             env::set_var("DELIVERY_ACK_MODE", "postgres");
-            env::set_var("DELIVERY_SECRET_KEY", "a".repeat(64));
+            env::set_var("DELIVERY_SECRET_KEY", valid_key);
         }
         let config = DeliveryAckConfig::from_env();
         assert!(config.is_ok(), "64-char hex key must be valid");
@@ -278,9 +280,11 @@ mod security_tests {
         }
 
         // Batching enabled by default
+        // Use a valid key with good entropy (16 different hex characters)
+        let valid_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         unsafe {
             env::set_var("DELIVERY_ACK_MODE", "kafka");
-            env::set_var("DELIVERY_SECRET_KEY", "a".repeat(64));
+            env::set_var("DELIVERY_SECRET_KEY", valid_key);
             env::remove_var("DELIVERY_ACK_ENABLE_BATCHING");
         }
         let config = DeliveryAckConfig::from_env().unwrap();
@@ -294,9 +298,11 @@ mod security_tests {
         );
 
         // Batching can be disabled
+        // Use a valid key with good entropy (16 different hex characters)
+        let valid_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         unsafe {
             env::set_var("DELIVERY_ACK_MODE", "kafka");
-            env::set_var("DELIVERY_SECRET_KEY", "a".repeat(64));
+            env::set_var("DELIVERY_SECRET_KEY", valid_key);
             env::set_var("DELIVERY_ACK_ENABLE_BATCHING", "false");
         }
         let config = DeliveryAckConfig::from_env().unwrap();
@@ -305,7 +311,7 @@ mod security_tests {
         // Custom buffer time
         unsafe {
             env::set_var("DELIVERY_ACK_MODE", "kafka");
-            env::set_var("DELIVERY_SECRET_KEY", "a".repeat(64));
+            env::set_var("DELIVERY_SECRET_KEY", valid_key);
             env::set_var("DELIVERY_ACK_ENABLE_BATCHING", "true");
             env::set_var("DELIVERY_ACK_BATCH_BUFFER_SECS", "10");
         }

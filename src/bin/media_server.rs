@@ -356,7 +356,9 @@ async fn upload_media(
             hasher.update(&data);
             let actual_hash = hex::encode(hasher.finalize());
 
-            if actual_hash != expected_hash {
+            // Constant-time comparison to prevent timing attacks
+            use subtle::ConstantTimeEq;
+            if !bool::from(actual_hash.as_bytes().ct_eq(expected_hash.as_bytes())) {
                 return Err((
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {

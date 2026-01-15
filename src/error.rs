@@ -61,6 +61,9 @@ pub enum AppError {
     #[error("JWT error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
 
+    #[error("CSRF validation failed: {0}")]
+    Csrf(String),
+
     // ===== Validation Errors =====
     #[error("Validation error: {0}")]
     Validation(String),
@@ -94,6 +97,7 @@ impl AppError {
     pub fn status_code(&self) -> StatusCode {
         match self {
             AppError::Auth(_) | AppError::Jwt(_) => StatusCode::UNAUTHORIZED,
+            AppError::Csrf(_) => StatusCode::FORBIDDEN,
             AppError::Validation(_) | AppError::Uuid(_) => StatusCode::BAD_REQUEST,
             AppError::Reqwest(_) | AppError::Federation(_) => StatusCode::BAD_GATEWAY,
             AppError::Database(_)
@@ -110,6 +114,7 @@ impl AppError {
         match self {
             AppError::Auth(msg) => format!("Authentication failed: {}", msg),
             AppError::Jwt(_) => "Invalid or expired token".to_string(),
+            AppError::Csrf(_) => "CSRF validation failed".to_string(),
             AppError::Validation(msg) => format!("Validation error: {}", msg),
             AppError::Database(_) => "Database error".to_string(),
             AppError::Redis(_) => "Cache error".to_string(),
@@ -129,6 +134,7 @@ impl AppError {
         match self {
             AppError::Auth(_) => "AUTH_ERROR",
             AppError::Jwt(_) => "JWT_ERROR",
+            AppError::Csrf(_) => "CSRF_ERROR",
             AppError::Validation(_) => "VALIDATION_ERROR",
             AppError::Database(_) => "DATABASE_ERROR",
             AppError::Redis(_) => "REDIS_ERROR",
@@ -228,6 +234,11 @@ impl AppError {
     /// Create an authentication error
     pub fn auth(msg: impl Into<String>) -> Self {
         AppError::Auth(msg.into())
+    }
+
+    /// Create a CSRF validation error
+    pub fn csrf(msg: impl Into<String>) -> Self {
+        AppError::Csrf(msg.into())
     }
 
     /// Create a validation error

@@ -389,12 +389,22 @@ mod tests {
 
     #[test]
     fn test_config_invalid_key_length() {
-        // Invalid key length (not 32 bytes)
+        // Invalid key length (not 32 bytes = 64 hex chars)
         unsafe {
-            std::env::set_var("DELIVERY_SECRET_KEY", "0".repeat(32)); // Only 16 bytes
+            std::env::set_var("DELIVERY_ACK_MODE", "postgres");
+            std::env::set_var("DELIVERY_SECRET_KEY", "0".repeat(32)); // Only 16 bytes (32 hex chars)
         }
 
         let result = DeliveryAckConfig::from_env();
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "Short key (32 hex chars = 16 bytes) must be rejected"
+        );
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("DELIVERY_ACK_MODE");
+            std::env::remove_var("DELIVERY_SECRET_KEY");
+        }
     }
 }

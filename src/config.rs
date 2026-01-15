@@ -14,10 +14,14 @@ const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: i64 = 180;
 const DEFAULT_SERVER_REGISTRY_TTL_SECS: i64 = 270;
 
-// Default TTL values (in days)
+// Default TTL values
 const DEFAULT_MESSAGE_TTL_DAYS: i64 = 7;
-const DEFAULT_SESSION_TTL_DAYS: i64 = 30;
-const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 90;
+// Access token TTL: 1 hour (for better security - tokens expire quickly)
+const DEFAULT_ACCESS_TOKEN_TTL_HOURS: i64 = 1;
+// Session TTL: kept for backward compatibility, but access tokens now use shorter TTL
+const DEFAULT_SESSION_TTL_DAYS: i64 = 30; // Legacy, used for WebSocket sessions
+// Refresh token TTL: 30 days (long-lived for user convenience)
+const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 30;
 
 // Default polling interval (in milliseconds)
 // OPTIMIZED: Increased default polling interval from 10s to 30s to reduce Redis commands
@@ -141,6 +145,17 @@ pub struct SecurityConfig {
     pub max_connections_per_user: u32,
     pub key_bundle_cache_hours: i64,
     pub rate_limit_block_duration_seconds: i64,
+    /// Whether IP-based rate limiting is enabled for anonymous operations
+    pub ip_rate_limiting_enabled: bool,
+    /// Maximum requests per IP per hour (for anonymous operations: login, registration, etc.)
+    pub max_requests_per_ip_per_hour: u32,
+    /// Whether combined (user_id + IP) rate limiting is enabled for authenticated operations
+    pub combined_rate_limiting_enabled: bool,
+    /// Maximum requests per user+IP combination per hour (for authenticated operations)
+    /// This is typically lower than IP-only limit for stricter control
+    pub max_requests_per_user_ip_per_hour: u32,
+    /// Whether request signing is required for critical operations (key upload, account deletion)
+    pub request_signing_required: bool,
 }
 
 /// Media server configuration
@@ -233,6 +248,25 @@ pub enum ApnsEnvironment {
     Development,
 }
 
+/// CSRF (Cross-Site Request Forgery) protection configuration
+#[derive(Clone, Debug)]
+pub struct CsrfConfig {
+    /// Whether CSRF protection is enabled (default: true)
+    pub enabled: bool,
+    /// Secret key for CSRF token generation (HMAC-SHA256)
+    /// Must be at least 32 characters for security
+    pub secret: String,
+    /// Token TTL in seconds (default: 3600 = 1 hour)
+    pub token_ttl_secs: u64,
+    /// Allowed origins for CORS/CSRF validation
+    /// Empty = allow same-origin only
+    pub allowed_origins: Vec<String>,
+    /// Cookie name for CSRF token (default: "csrf_token")
+    pub cookie_name: String,
+    /// Header name for CSRF token (default: "X-CSRF-Token")
+    pub header_name: String,
+}
+
 impl std::str::FromStr for ApnsEnvironment {
     type Err = anyhow::Error;
 
@@ -266,7 +300,11 @@ pub struct Config {
     pub heartbeat_interval_secs: i64,
     pub server_registry_ttl_secs: i64,
     pub message_ttl_days: i64,
+    /// Access token TTL in hours (for REST API - short-lived for security)
+    pub access_token_ttl_hours: i64,
+    /// Session TTL in days (for WebSocket sessions - legacy, kept for backward compatibility)
     pub session_ttl_days: i64,
+    /// Refresh token TTL in days (long-lived for user convenience)
     pub refresh_token_ttl_days: i64,
     pub jwt_issuer: String,
     pub online_channel: String,
@@ -285,6 +323,7 @@ pub struct Config {
     pub redis_key_prefixes: RedisKeyPrefixes,
     pub redis_channels: RedisChannels,
     pub media: MediaConfig,
+    pub csrf: CsrfConfig,
 
     // Legacy aliases (for backward compatibility)
     // TODO: Remove after updating all usages to config.federation.*
@@ -408,6 +447,10 @@ impl Config {
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(DEFAULT_MESSAGE_TTL_DAYS),
+            access_token_ttl_hours: std::env::var("ACCESS_TOKEN_TTL_HOURS")
+                .ok()
+                .and_then(|h| h.parse().ok())
+                .unwrap_or(DEFAULT_ACCESS_TOKEN_TTL_HOURS),
             session_ttl_days: std::env::var("SESSION_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
@@ -491,6 +534,29 @@ impl Config {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(3600),
+                // IP-based rate limiting for anonymous operations
+                ip_rate_limiting_enabled: std::env::var("IP_RATE_LIMITING_ENABLED")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(true), // Enabled by default
+                max_requests_per_ip_per_hour: std::env::var("MAX_REQUESTS_PER_IP_PER_HOUR")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1000), // 1000 requests/hour per IP for anonymous operations
+                // Combined (user_id + IP) rate limiting for authenticated operations
+                combined_rate_limiting_enabled: std::env::var("COMBINED_RATE_LIMITING_ENABLED")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(true), // Enabled by default
+                max_requests_per_user_ip_per_hour: std::env::var("MAX_REQUESTS_PER_USER_IP_PER_HOUR")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(500), // 500 requests/hour per user+IP (stricter than IP-only)
+                // Request signing for critical operations (like Signal)
+                request_signing_required: std::env::var("REQUEST_SIGNING_REQUIRED")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false), // Disabled by default (can be enabled for production)
             },
             kafka: KafkaConfig {
                 enabled: std::env::var("KAFKA_ENABLED")
@@ -769,6 +835,39 @@ impl Config {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(50),
+            },
+
+            // CSRF protection configuration
+            csrf: CsrfConfig {
+                enabled: std::env::var("CSRF_ENABLED")
+                    .map(|v| v.to_lowercase() == "true")
+                    .unwrap_or(true), // Enabled by default for security
+                secret: {
+                    let secret = std::env::var("CSRF_SECRET").unwrap_or_else(|_| {
+                        // Generate a random secret if not provided (development mode)
+                        // In production, CSRF_SECRET should be set explicitly
+                        tracing::warn!(
+                            "CSRF_SECRET not set, using random secret. Set CSRF_SECRET in production!"
+                        );
+                        use rand::Rng;
+                        let mut rng = rand::thread_rng();
+                        (0..32)
+                            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                            .collect()
+                    });
+                    secret
+                },
+                token_ttl_secs: std::env::var("CSRF_TOKEN_TTL_SECS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(3600), // 1 hour default
+                allowed_origins: std::env::var("CSRF_ALLOWED_ORIGINS")
+                    .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
+                    .unwrap_or_default(),
+                cookie_name: std::env::var("CSRF_COOKIE_NAME")
+                    .unwrap_or_else(|_| "csrf_token".to_string()),
+                header_name: std::env::var("CSRF_HEADER_NAME")
+                    .unwrap_or_else(|_| "X-CSRF-Token".to_string()),
             },
         })
     }
