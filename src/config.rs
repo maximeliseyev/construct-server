@@ -156,6 +156,14 @@ pub struct SecurityConfig {
     pub max_requests_per_user_ip_per_hour: u32,
     /// Whether request signing is required for critical operations (key upload, account deletion)
     pub request_signing_required: bool,
+    /// Metrics endpoint protection
+    pub metrics_auth_enabled: bool,
+    /// IP whitelist for /metrics endpoint (comma-separated)
+    /// If empty, only Bearer token auth is used (if enabled)
+    pub metrics_ip_whitelist: Vec<String>,
+    /// Bearer token for /metrics endpoint (optional, for Prometheus scraping)
+    /// If empty, only IP whitelist is used (if enabled)
+    pub metrics_bearer_token: Option<String>,
 }
 
 /// Media server configuration
@@ -557,6 +565,23 @@ impl Config {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(false), // Disabled by default (can be enabled for production)
+                // Metrics endpoint protection
+                metrics_auth_enabled: std::env::var("METRICS_AUTH_ENABLED")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false), // Disabled by default (metrics are public)
+                metrics_ip_whitelist: std::env::var("METRICS_IP_WHITELIST")
+                    .ok()
+                    .map(|s| {
+                        s.split(',')
+                            .map(|ip| ip.trim().to_string())
+                            .filter(|ip| !ip.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                metrics_bearer_token: std::env::var("METRICS_BEARER_TOKEN")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
             },
             kafka: KafkaConfig {
                 enabled: std::env::var("KAFKA_ENABLED")

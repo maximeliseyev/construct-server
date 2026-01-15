@@ -6,15 +6,19 @@
 // - GET /.well-known/konstruct - Federation discovery
 // - GET /federation/health - Federation health check
 // - POST /federation/v1/messages - Receive federated message from remote server
+// - GET /federation/v1/keys/:user_id - Get user's key bundle (for federation)
 //
 // ============================================================================
 
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{Json, extract::{State, Path}, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::context::AppContext;
+use crate::db;
 use crate::error::AppError;
+use crate::utils::log_safe_id;
 
 /// GET /.well-known/konstruct
 /// Federation discovery endpoint
@@ -39,7 +43,8 @@ pub async fn well_known_konstruct(
             "endpoints": {
                 "messages": format!("https://{}/federation/v1/messages", app_context.config.instance_domain),
                 "health": format!("https://{}/federation/health", app_context.config.instance_domain),
-                "keys": format!("https://{}/federation/v1/keys", app_context.config.instance_domain)
+                "keys": format!("https://{}/federation/v1/keys", app_context.config.instance_domain),
+                "key_format": "GET /federation/v1/keys/{user_id}"
             }
         },
         "features": [
@@ -113,4 +118,114 @@ pub async fn receive_federated_message(
     Ok(axum_response
         .body(axum::body::Body::from(body_bytes.to_vec()))
         .map_err(|e| AppError::Hyper(format!("Failed to build response: {}", e)))?)
+}
+
+/// GET /federation/v1/keys/:user_id
+/// Get user's key bundle for federation
+///
+/// This endpoint allows remote federation servers to fetch key bundles
+/// for users on this instance. Used when sending federated messages.
+///
+/// Security:
+/// - Server-to-server authentication via Ed25519 signatures (in message envelope)
+/// - Rate limiting (via middleware)
+/// - Caching support (5 minute TTL)
+///
+/// Format: /federation/v1/keys/{uuid}
+/// Example: /federation/v1/keys/550e8400-e29b-41d4-a716-446655440000
+pub async fn get_federation_keys(
+    State(app_context): State<Arc<AppContext>>,
+    Path(user_id_str): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    // Parse user_id
+    let user_id = match Uuid::parse_str(&user_id_str) {
+        Ok(id) => id,
+        Err(_) => {
+            tracing::warn!(
+                user_id = %user_id_str,
+                "Invalid user ID format in federation keys request"
+            );
+            return Err(AppError::Validation(
+                "Invalid user ID format. Expected UUID.".to_string(),
+            ));
+        }
+    };
+
+    // Check cache first (5 minute TTL)
+    {
+        let mut queue = app_context.queue.lock().await;
+        if let Ok(Some(cached_json)) = queue.get_cached_federation_key_bundle(&user_id.to_string()).await {
+            if let Ok(bundle_json) = serde_json::from_str::<serde_json::Value>(&cached_json) {
+                drop(queue);
+                tracing::debug!(
+                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                    "Returning cached key bundle for federation"
+                );
+                return Ok((StatusCode::OK, Json(bundle_json)));
+            }
+        }
+        drop(queue);
+    }
+
+    // Fetch from database
+    let (bundle, username) = match db::get_key_bundle(&app_context.db_pool, &user_id).await {
+        Ok(Some((bundle, username))) => (bundle, username),
+        Ok(None) => {
+            tracing::debug!(
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Key bundle not found for federation request"
+            );
+            // Return 404 Not Found for missing key bundle
+            return Ok((
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "User key bundle not found"
+                }))
+            ));
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Failed to fetch key bundle from database"
+            );
+            return Err(AppError::Unknown(e));
+        }
+    };
+
+    // Build response
+    let response = json!({
+        "user_id": user_id.to_string(),
+        "username": username,
+        "bundle": {
+            "master_identity_key": bundle.master_identity_key,
+            "bundle_data": bundle.bundle_data,
+            "signature": bundle.signature,
+        }
+    });
+
+    // Cache the response (5 minutes TTL)
+    {
+        let mut queue = app_context.queue.lock().await;
+        let cache_value = serde_json::to_string(&response).unwrap_or_default();
+        
+        if let Err(e) = queue.cache_federation_key_bundle(
+            &user_id.to_string(),
+            &cache_value,
+            300, // 5 minutes TTL
+        ).await {
+            tracing::warn!(
+                error = %e,
+                "Failed to cache federation key bundle (non-critical)"
+            );
+        }
+        drop(queue);
+    }
+
+    tracing::debug!(
+        user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+        "Returning key bundle for federation"
+    );
+
+    Ok((StatusCode::OK, Json(response)))
 }
