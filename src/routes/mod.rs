@@ -17,6 +17,7 @@
 //
 // ============================================================================
 
+mod account;
 mod auth;
 mod csrf;
 mod extractors;
@@ -29,7 +30,7 @@ mod request_signing;
 
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{delete, get, post, put},
 };
 use std::sync::Arc;
 use tower::ServiceBuilder;
@@ -42,12 +43,18 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
     Router::new()
         // Health and monitoring (no CSRF needed)
         .route("/health", get(health::health_check))
+        .route("/health/ready", get(health::readiness_check))
+        .route("/health/live", get(health::liveness_check))
         .route("/metrics", get(health::metrics))
         // CSRF token endpoint (GET - no CSRF needed)
         .route("/api/csrf-token", get(csrf::get_csrf_token))
         // Authentication endpoints
         .route("/auth/refresh", post(auth::refresh_token))
         .route("/auth/logout", post(auth::logout))
+        // Account management (CSRF protected, authenticated)
+        .route("/api/v1/account", get(account::get_account))
+        .route("/api/v1/account", put(account::update_account))
+        .route("/api/v1/account", delete(account::delete_account))
         // Keys management (CSRF protected)
         .route("/keys/upload", post(keys::upload_keys))
         .route("/keys/:user_id", get(keys::get_keys))
@@ -62,6 +69,10 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         .route(
             "/federation/v1/messages",
             post(federation::receive_federated_message),
+        )
+        .route(
+            "/federation/v1/keys/:user_id",
+            get(federation::get_federation_keys),
         )
         // Apply middleware (order matters - last added runs first)
         .layer(
@@ -78,6 +89,11 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
                 ))
                 .into_inner(),
         )
+        // Metrics authentication (needs state, applied before CSRF)
+        .layer(axum::middleware::from_fn_with_state(
+            app_context.clone(),
+            crate::routes::middleware::metrics_auth,
+        ))
         // CSRF protection middleware (needs state, applied separately)
         .layer(axum::middleware::from_fn_with_state(
             app_context.clone(),

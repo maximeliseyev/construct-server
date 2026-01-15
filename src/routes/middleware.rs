@@ -26,6 +26,7 @@ use crate::routes::csrf::{
 };
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{add_security_headers as utils_add_security_headers, extract_client_ip};
+use subtle::ConstantTimeEq;
 
 /// Request logging middleware
 pub async fn request_logging(req: Request, next: Next) -> Response {
@@ -389,4 +390,82 @@ pub async fn error_handler(req: Request, next: Next) -> Response {
     let response = next.run(req).await;
     // Error handling is done via AppError::into_response() implementation
     response
+}
+
+/// Metrics Authentication Middleware
+///
+/// Protects /metrics endpoint from unauthorized access.
+/// Supports two authentication methods:
+/// 1. IP whitelist (if configured)
+/// 2. Bearer token authentication (if configured)
+///
+/// If both are configured, either method can grant access.
+/// If neither is configured and metrics_auth_enabled=false, access is allowed.
+pub async fn metrics_auth(
+    State(ctx): State<Arc<AppContext>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    // Skip if metrics auth is disabled
+    if !ctx.config.security.metrics_auth_enabled {
+        return Ok(next.run(req).await);
+    }
+
+    // Only apply to /metrics endpoint
+    if req.uri().path() != "/metrics" {
+        return Ok(next.run(req).await);
+    }
+
+    let headers = req.headers();
+    let client_ip = extract_client_ip(headers, None);
+
+    // Check 1: IP whitelist
+    if !ctx.config.security.metrics_ip_whitelist.is_empty() {
+        let ip_allowed = ctx.config.security.metrics_ip_whitelist.iter()
+            .any(|allowed_ip| {
+                // Support exact match and CIDR notation (basic)
+                if allowed_ip.contains('/') {
+                    // CIDR notation - for now, just check if IP starts with prefix
+                    // TODO: Implement proper CIDR matching if needed
+                    client_ip.starts_with(allowed_ip.split('/').next().unwrap_or(""))
+                } else {
+                    // Exact match
+                    client_ip == *allowed_ip || normalize_ip_for_comparison(&client_ip) == normalize_ip_for_comparison(allowed_ip)
+                }
+            });
+
+        if ip_allowed {
+            tracing::debug!(ip = %client_ip, "Metrics access granted via IP whitelist");
+            return Ok(next.run(req).await);
+        }
+    }
+
+    // Check 2: Bearer token authentication
+    if let Some(expected_token) = &ctx.config.security.metrics_bearer_token {
+        if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+            if let Some(token) = auth_header.strip_prefix("Bearer ") {
+                // Constant-time comparison to prevent timing attacks
+                if bool::from(token.as_bytes().ct_eq(expected_token.as_bytes())) {
+                    tracing::debug!("Metrics access granted via Bearer token");
+                    return Ok(next.run(req).await);
+                }
+            }
+        }
+    }
+
+    // Access denied
+    tracing::warn!(
+        ip = %client_ip,
+        path = %req.uri().path(),
+        "Unauthorized metrics access attempt"
+    );
+
+    Err(AppError::Auth(
+        "Unauthorized: Metrics endpoint requires authentication".to_string(),
+    ))
+}
+
+/// Normalize IP for comparison (handles IPv6 brackets)
+fn normalize_ip_for_comparison(ip: &str) -> String {
+    ip.trim_start_matches('[').trim_end_matches(']').to_string()
 }

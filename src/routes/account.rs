@@ -1,0 +1,418 @@
+// ============================================================================
+// Account Management Routes
+// ============================================================================
+//
+// Endpoints:
+// - GET /api/v1/account - Get account information
+// - PUT /api/v1/account - Update account (username, password)
+// - DELETE /api/v1/account - Delete account (requires request signing)
+//
+// ============================================================================
+
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::sync::Arc;
+
+use crate::context::AppContext;
+use crate::db;
+use crate::error::AppError;
+use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::request_signing::{extract_request_signature, verify_request_signature, compute_body_hash};
+use crate::utils::log_safe_id;
+
+/// Account information response
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInfo {
+    /// User ID (UUID)
+    pub user_id: String,
+    /// Username
+    pub username: String,
+    /// Account creation timestamp (if available)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+}
+
+/// GET /api/v1/account
+/// Get current user's account information
+///
+/// Security:
+/// - Requires JWT authentication
+/// - Returns only non-sensitive information (no password hash)
+pub async fn get_account(
+    State(app_context): State<Arc<AppContext>>,
+    user: AuthenticatedUser,
+) -> Result<impl IntoResponse, AppError> {
+    let user_id = user.0;
+
+    // Fetch user from database
+    let user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                error = %e,
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Failed to fetch user from database"
+            );
+            AppError::Unknown(e.into())
+        })?;
+
+    let user_record = user_record.ok_or_else(|| {
+        tracing::warn!(
+            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+            "User not found in database"
+        );
+        AppError::Auth("User not found".to_string())
+    })?;
+
+    tracing::debug!(
+        user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+        "Account information retrieved"
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(AccountInfo {
+            user_id: user_record.id.to_string(),
+            username: user_record.username,
+            created_at: None, // TODO: Add created_at to User struct if needed
+        }),
+    ))
+}
+
+/// Request body for account update
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountRequest {
+    /// New username (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// New password (optional, requires old_password)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_password: Option<String>,
+    /// Old password (required if updating password)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_password: Option<String>,
+}
+
+/// PUT /api/v1/account
+/// Update account information (username, password)
+///
+/// Security:
+/// - Requires JWT authentication
+/// - Requires CSRF protection (via middleware)
+/// - Password update requires old password verification
+/// - Username changes should be rate-limited
+pub async fn update_account(
+    State(app_context): State<Arc<AppContext>>,
+    user: AuthenticatedUser,
+    _headers: HeaderMap, // Reserved for future request signing
+    Json(request): Json<UpdateAccountRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user_id = user.0;
+
+    // Fetch current user
+    let user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to fetch user");
+            AppError::Unknown(e.into())
+        })?
+        .ok_or_else(|| {
+            AppError::Auth("User not found".to_string())
+        })?;
+
+    // Update username if provided
+    if let Some(new_username) = &request.username {
+        if new_username.is_empty() {
+            return Err(AppError::Validation("Username cannot be empty".to_string()));
+        }
+
+        // Check if username is already taken
+        if let Ok(Some(existing_user)) = db::get_user_by_username(&app_context.db_pool, new_username).await {
+            if existing_user.id != user_id {
+                return Err(AppError::Validation("Username is already taken".to_string()));
+            }
+        }
+
+        // Update username (TODO: Add update_username function to db.rs)
+        // For now, we'll skip username updates until the function is added
+        tracing::warn!(
+            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+            "Username update not yet implemented"
+        );
+        return Err(AppError::Validation("Username update is not yet implemented".to_string()));
+    }
+
+    // Update password if provided
+    if let Some(new_password) = &request.new_password {
+        if new_password.len() < 8 {
+            return Err(AppError::Validation(
+                "Password must be at least 8 characters long".to_string(),
+            ));
+        }
+
+        // Verify old password
+        let old_password = request.old_password.ok_or_else(|| {
+            AppError::Validation("Old password is required to change password".to_string())
+        })?;
+
+        let password_valid = db::verify_password(&user_record, &old_password)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to verify password");
+                AppError::Unknown(e.into())
+            })?;
+
+        if !password_valid {
+            tracing::warn!(
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Invalid old password during password update"
+            );
+            return Err(AppError::Auth("Invalid old password".to_string()));
+        }
+
+        // Update password
+        db::update_user_password(&app_context.db_pool, &user_id, new_password)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to update password");
+                AppError::Unknown(e.into())
+            })?;
+
+        tracing::info!(
+            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+            "Password updated successfully"
+        );
+    }
+
+    // If no updates were requested
+    if request.username.is_none() && request.new_password.is_none() {
+        return Err(AppError::Validation(
+            "No update fields provided".to_string(),
+        ));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "message": "Account updated successfully"
+        })),
+    ))
+}
+
+/// Request body for account deletion
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAccountRequest {
+    /// Password confirmation (required for account deletion)
+    pub password: String,
+    /// Confirmation flag (must be true)
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+/// DELETE /api/v1/account
+/// Delete user account and all associated data
+///
+/// Security:
+/// - Requires JWT authentication
+/// - Requires CSRF protection (via middleware)
+/// - Requires request signature (Ed25519) if enabled
+/// - Requires password confirmation
+/// - Requires explicit confirmation flag
+/// - Revokes all tokens and sessions
+/// - Deletes all user data (GDPR compliance)
+pub async fn delete_account(
+    State(app_context): State<Arc<AppContext>>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Json(request): Json<DeleteAccountRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user_id = user.0;
+
+    // 1. Verify confirmation flag
+    if !request.confirm {
+        return Err(AppError::Validation(
+            "Account deletion requires explicit confirmation (confirm: true)".to_string(),
+        ));
+    }
+
+    // 2. Verify password
+    let user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to fetch user");
+            AppError::Unknown(e.into())
+        })?
+        .ok_or_else(|| {
+            AppError::Auth("User not found".to_string())
+        })?;
+
+    let password_valid = db::verify_password(&user_record, &request.password)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to verify password");
+            AppError::Unknown(e.into())
+        })?;
+
+    if !password_valid {
+        tracing::warn!(
+            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+            "Invalid password during account deletion"
+        );
+        return Err(AppError::Auth("Invalid password".to_string()));
+    }
+
+    // 3. Request signing verification (if enabled)
+    if app_context.config.security.request_signing_required {
+        let request_sig = extract_request_signature(&headers)
+            .ok_or_else(|| {
+                tracing::warn!(
+                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                    "Request signature missing for account deletion"
+                );
+                AppError::Validation(
+                    "Request signature is required for account deletion. Please sign the request with your master_identity_key.".to_string(),
+                )
+            })?;
+
+        // Compute body hash
+        let body_json = serde_json::to_string(&request).map_err(|e| {
+            tracing::error!(error = %e, "Failed to serialize request for signature verification");
+            AppError::Unknown(e.into())
+        })?;
+        let body_hash = compute_body_hash(body_json.as_bytes());
+
+        // Get user's master_identity_key from key bundle
+        let (bundle, _) = db::get_key_bundle(&app_context.db_pool, &user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to fetch key bundle");
+                AppError::Unknown(e.into())
+            })?
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "Key bundle not found. Cannot verify request signature.".to_string(),
+                )
+            })?;
+
+        // Verify request signature
+        match verify_request_signature(
+            &bundle.master_identity_key,
+            "DELETE",
+            "/api/v1/account",
+            request_sig.timestamp,
+            &body_hash,
+            &request_sig.signature,
+        ) {
+            Ok(()) => {
+                tracing::debug!(
+                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                    "Request signature verified for account deletion"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                    error = %e,
+                    "Request signature verification failed for account deletion"
+                );
+                return Err(AppError::Validation(format!(
+                    "Request signature verification failed: {}",
+                    e
+                )));
+            }
+        }
+
+        // Verify public_key matches master_identity_key
+        use subtle::ConstantTimeEq;
+        if !bool::from(
+            request_sig.public_key.as_bytes().ct_eq(bundle.master_identity_key.as_bytes())
+        ) {
+            tracing::warn!(
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Request signature public key does not match bundle master_identity_key"
+            );
+            return Err(AppError::Validation(
+                "Request signature public key must match bundle master_identity_key".to_string(),
+            ));
+        }
+    }
+
+    // 4. Revoke all tokens and sessions
+    {
+        let mut queue = app_context.queue.lock().await;
+        
+        // Revoke all refresh tokens
+        if let Err(e) = queue.revoke_all_user_tokens(&user_id.to_string()).await {
+            tracing::warn!(error = %e, "Failed to revoke all user tokens");
+        }
+
+        // Revoke all sessions
+        if let Err(e) = queue.revoke_all_sessions(&user_id.to_string()).await {
+            tracing::warn!(
+                error = %e,
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Failed to revoke all sessions"
+            );
+        }
+        drop(queue);
+    }
+
+    // 5. Delete delivery ACK data (GDPR compliance)
+    if let Some(ack_manager) = &app_context.delivery_ack_manager {
+        if let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
+            tracing::warn!(
+                error = %e,
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Failed to delete delivery ACK data"
+            );
+        }
+    }
+
+    // 6. Untrack user online status
+    {
+        let mut queue = app_context.queue.lock().await;
+        if let Err(e) = queue.untrack_user_online(&user_id.to_string()).await {
+            tracing::warn!(
+                error = %e,
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Failed to untrack user online status"
+            );
+        }
+        drop(queue);
+    }
+
+    // 7. Delete user account from database (cascade will handle related records)
+    db::delete_user_account(&app_context.db_pool, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                error = %e,
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Failed to delete user account"
+            );
+            AppError::Unknown(e.into())
+        })?;
+
+    tracing::info!(
+        user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+        "Account deleted successfully"
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "message": "Account deleted successfully"
+        })),
+    ))
+}

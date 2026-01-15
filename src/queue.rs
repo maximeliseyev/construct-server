@@ -629,6 +629,46 @@ impl MessageQueue {
         Ok(())
     }
 
+    /// Cache federation key bundle response (includes user_id, username, bundle)
+    /// Used for federation key exchange endpoint
+    ///
+    /// # Arguments
+    /// * `user_id` - User ID (UUID)
+    /// * `response_json` - JSON response string to cache
+    /// * `ttl_seconds` - Time to live in seconds (typically 300 = 5 minutes)
+    pub async fn cache_federation_key_bundle(
+        &mut self,
+        user_id: &str,
+        response_json: &str,
+        ttl_seconds: i64,
+    ) -> Result<()> {
+        let key = format!("federation_key_bundle:{}", user_id);
+        let _: () = self
+            .client
+            .set_ex(&key, response_json, ttl_seconds as u64)
+            .await?;
+        tracing::debug!(
+            user_id = %user_id,
+            ttl_seconds = ttl_seconds,
+            "Cached federation key bundle"
+        );
+        Ok(())
+    }
+
+    /// Get cached federation key bundle response
+    ///
+    /// # Returns
+    /// * `Ok(Some(json))` - Cached JSON response string
+    /// * `Ok(None)` - Not in cache
+    pub async fn get_cached_federation_key_bundle(
+        &mut self,
+        user_id: &str,
+    ) -> Result<Option<String>> {
+        let key = format!("federation_key_bundle:{}", user_id);
+        let cached: Option<String> = self.client.get(&key).await?;
+        Ok(cached)
+    }
+
     #[allow(dead_code)]
     pub async fn track_connection(&mut self, user_id: &str, connection_id: &str) -> Result<u32> {
         let key = format!("connections:{}", user_id);

@@ -18,14 +18,16 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::db;
 use crate::e2e::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
 use crate::error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::request_signing::{extract_request_signature, verify_request_signature, compute_body_hash};
-use crate::utils::log_safe_id;
+use crate::utils::{extract_client_ip, log_safe_id};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::net::IpAddr;
 
 /// POST /keys/upload
 /// Uploads or updates a user's key bundle
@@ -43,16 +45,36 @@ pub async fn upload_keys(
 ) -> Result<impl IntoResponse, AppError> {
     let user_id = user.0;
 
+    // Extract client IP early for audit logging (before any errors)
+    let client_ip_str = extract_client_ip(&headers, None);
+    let client_ip: Option<IpAddr> = client_ip_str.parse().ok();
+    let user_id_hash = log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt);
+
     // Validate the bundle
     // Don't allow empty user_id for key updates (user must already exist)
-    ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false).map_err(|e| {
+    if let Err(e) = ServerCryptoValidator::validate_uploadable_key_bundle(&bundle, false) {
+        // AUDIT: Log failed key bundle validation
+        let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+        
+        AuditLogger::log_key_rotation(
+            user_id_hash.clone(),
+            username_hash,
+            client_ip,
+            false, // failure
+            Some(format!("Key bundle validation failed: {}", e)),
+        );
+
         tracing::warn!(
             error = %e,
-            user_id = %user_id,
+            user_hash = %user_id_hash,
             "Key bundle validation failed"
         );
-        AppError::Validation(e.to_string())
-    })?;
+        return Err(AppError::Validation(e.to_string()));
+    }
 
     // SECURITY: Verify that user_id in bundle matches authenticated user
     let bundle_data_bytes = BASE64.decode(&bundle.bundle_data).map_err(|e| {
@@ -72,9 +94,28 @@ pub async fn upload_keys(
 
     // Verify that user_id in bundle matches the authenticated user
     if bundle_data.user_id != user_id.to_string() {
+        // AUDIT: Log security violation (user_id mismatch)
+        let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+        
+        AuditLogger::log_key_rotation(
+            user_id_hash.clone(),
+            username_hash,
+            client_ip,
+            false, // failure
+            Some(format!(
+                "user_id mismatch: bundle contains '{}' but authenticated user is '{}'",
+                bundle_data.user_id, user_id
+            )),
+        );
+
         tracing::warn!(
             authenticated_user = %user_id,
             bundle_user_id = %bundle_data.user_id,
+            user_hash = %user_id_hash,
             "user_id mismatch: authenticated user attempting to upload bundle for different user"
         );
         return Err(AppError::Auth(
@@ -89,8 +130,17 @@ pub async fn upload_keys(
         // Extract request signature from header
         let request_sig = extract_request_signature(&headers)
             .ok_or_else(|| {
+                // AUDIT: Log missing request signature (username_hash not needed for this case)
+                AuditLogger::log_key_rotation(
+                    user_id_hash.clone(),
+                    None, // username_hash not critical for this audit event
+                    client_ip,
+                    false, // failure
+                    Some("Request signature missing for key upload".to_string()),
+                );
+
                 tracing::warn!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                    user_hash = %user_id_hash,
                     "Request signature missing for key upload"
                 );
                 AppError::Validation(
@@ -127,8 +177,23 @@ pub async fn upload_keys(
                 );
             }
             Err(e) => {
+                // AUDIT: Log failed request signature verification
+                let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+                
+                AuditLogger::log_key_rotation(
+                    user_id_hash.clone(),
+                    username_hash,
+                    client_ip,
+                    false, // failure
+                    Some(format!("Request signature verification failed: {}", e)),
+                );
+
                 tracing::warn!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                    user_hash = %user_id_hash,
                     error = %e,
                     "Request signature verification failed"
                 );
@@ -144,8 +209,23 @@ pub async fn upload_keys(
         if !bool::from(
             request_sig.public_key.as_bytes().ct_eq(bundle.master_identity_key.as_bytes())
         ) {
+            // AUDIT: Log security violation (public key mismatch)
+            let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+            
+            AuditLogger::log_key_rotation(
+                user_id_hash.clone(),
+                username_hash,
+                client_ip,
+                false, // failure
+                Some("Request signature public key does not match bundle master_identity_key".to_string()),
+            );
+
             tracing::warn!(
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                user_hash = %user_id_hash,
                 "Request signature public key does not match bundle master_identity_key"
             );
             return Err(AppError::Validation(
@@ -176,8 +256,23 @@ pub async fn upload_keys(
             }
             Ok(false) => {
                 drop(queue);
+                // AUDIT: Log replay attack attempt
+                let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+                
+                AuditLogger::log_key_rotation(
+                    user_id_hash.clone(),
+                    username_hash,
+                    client_ip,
+                    false, // failure
+                    Some(format!("Replay attack detected for key upload (request_id: {})", request_id)),
+                );
+
                 tracing::warn!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                    user_hash = %user_id_hash,
                     request_id = %request_id,
                     "Replay attack detected for key upload"
                 );
@@ -193,17 +288,52 @@ pub async fn upload_keys(
         drop(queue);
     }
 
-    // Store in database
-    db::store_key_bundle(&app_context.db_pool, &user_id, &bundle)
+    // Get username for audit logging (optional, for better audit trail)
+    let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
         .await
-        .map_err(|e| {
+        .ok()
+        .flatten()
+        .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+
+    // Store in database
+    let store_result = db::store_key_bundle(&app_context.db_pool, &user_id, &bundle).await;
+    
+    match &store_result {
+        Ok(_) => {
+            // AUDIT: Log successful key bundle upload
+            AuditLogger::log_key_rotation(
+                user_id_hash.clone(),
+                username_hash.clone(),
+                client_ip,
+                true, // success
+                Some("Key bundle uploaded successfully".to_string()),
+            );
+
+            tracing::info!(
+                user_hash = %user_id_hash,
+                "Key bundle uploaded successfully"
+            );
+        }
+        Err(e) => {
+            // AUDIT: Log failed key bundle upload
+            AuditLogger::log_key_rotation(
+                user_id_hash.clone(),
+                username_hash.clone(),
+                client_ip,
+                false, // failure
+                Some(format!("Failed to store key bundle: {}", e)),
+            );
+
             tracing::error!(
                 error = %e,
-                user_id = %user_id,
+                user_hash = %user_id_hash,
                 "Failed to store key bundle"
             );
-            AppError::Unknown(e)
-        })?;
+        }
+    }
+
+    // Return error if storage failed
+    store_result.map_err(|e| AppError::Unknown(e.into()))?;
 
     // Invalidate cache
     let mut queue = app_context.queue.lock().await;
@@ -214,12 +344,6 @@ pub async fn upload_keys(
         tracing::warn!(error = %e, "Failed to invalidate key bundle cache");
     }
     drop(queue);
-
-    // SECURITY: Always use hashed user_id in logs
-    tracing::info!(
-        user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-        "Key bundle uploaded successfully"
-    );
 
     // Return success
     Ok((StatusCode::OK, Json(json!({"status": "ok"}))))
