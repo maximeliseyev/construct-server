@@ -556,10 +556,12 @@ impl Config {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(true), // Enabled by default
-                max_requests_per_user_ip_per_hour: std::env::var("MAX_REQUESTS_PER_USER_IP_PER_HOUR")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(500), // 500 requests/hour per user+IP (stricter than IP-only)
+                max_requests_per_user_ip_per_hour: std::env::var(
+                    "MAX_REQUESTS_PER_USER_IP_PER_HOUR",
+                )
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(500), // 500 requests/hour per user+IP (stricter than IP-only)
                 // Request signing for critical operations (like Signal)
                 request_signing_required: std::env::var("REQUEST_SIGNING_REQUIRED")
                     .ok()

@@ -1,6 +1,6 @@
 [package]
 name = "construct-server"
-version = "0.4.7"
+version = "0.4.8"
 edition = "2024"
 
 [lib]
@@ -36,8 +36,10 @@ hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 bytes = "1.8"
 
-# HTTP framework для media-server
+# HTTP framework для media-server и main server
 axum = { version = "0.7", features = ["multipart"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
 
 # HTTP client (federation)
 reqwest = { version = "0.12", features = ["json"] }

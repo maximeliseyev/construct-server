@@ -3,12 +3,20 @@
 // ============================================================================
 //
 // Endpoints:
-// - POST /messages/send - Send an E2E-encrypted message
+// - POST /messages/send - Send an E2E-encrypted message (legacy)
+// - POST /api/v1/messages - Send an E2E-encrypted message [Phase 2.5.4]
+// - GET /api/v1/messages - Get messages (long polling) [Phase 2.5.1]
 //
 // ============================================================================
 
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use axum::http::HeaderMap;
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -19,9 +27,9 @@ use crate::e2e::{EncryptedMessageV3, ServerCryptoValidator};
 use crate::error::AppError;
 use crate::kafka::types::{KafkaMessageEnvelope, MessageType};
 use crate::routes::extractors::AuthenticatedUser;
-use crate::utils::{log_safe_id, extract_client_ip};
+use crate::utils::{extract_client_ip, log_safe_id};
 
-/// POST /messages/send
+/// POST /messages/send (legacy) or POST /api/v1/messages
 /// Sends an E2E-encrypted message
 pub async fn send_message(
     State(app_context): State<Arc<AppContext>>,
@@ -51,7 +59,7 @@ pub async fn send_message(
         // Check combined rate limit (user_id + IP) for authenticated operations
         // Extract IP from request headers
         let client_ip = extract_client_ip(&headers, None);
-        
+
         // Use combined rate limiting if enabled (more precise)
         if app_context.config.security.combined_rate_limiting_enabled {
             match queue
@@ -59,7 +67,10 @@ pub async fn send_message(
                 .await
             {
                 Ok(count) => {
-                    let max_combined = app_context.config.security.max_requests_per_user_ip_per_hour;
+                    let max_combined = app_context
+                        .config
+                        .security
+                        .max_requests_per_user_ip_per_hour;
                     if count > max_combined {
                         drop(queue);
                         tracing::warn!(
@@ -81,7 +92,7 @@ pub async fn send_message(
                 }
             }
         }
-        
+
         // Also check user_id-only rate limit (legacy, for backward compatibility)
         match queue.increment_message_count(&sender_id_str).await {
             Ok(count) => {
@@ -150,8 +161,10 @@ pub async fn send_message(
     // SECURITY: Replay protection for messages
     // Use nonce from request or generate one, validate timestamp if provided
     let nonce = message.nonce.as_deref().unwrap_or(&message_id);
-    let timestamp = message.timestamp.unwrap_or_else(|| chrono::Utc::now().timestamp());
-    
+    let timestamp = message
+        .timestamp
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
+
     // Validate timestamp if provided (5 minutes max age)
     const MAX_AGE_SECONDS: i64 = 300;
     let now = chrono::Utc::now().timestamp();
@@ -186,7 +199,13 @@ pub async fn send_message(
     {
         let mut queue = app_context.queue.lock().await;
         match queue
-            .check_replay_with_timestamp(&message_id, &message.ciphertext, nonce, timestamp, MAX_AGE_SECONDS)
+            .check_replay_with_timestamp(
+                &message_id,
+                &message.ciphertext,
+                nonce,
+                timestamp,
+                MAX_AGE_SECONDS,
+            )
             .await
         {
             Ok(true) => {
@@ -200,7 +219,8 @@ pub async fn send_message(
                     "Replay attack detected for message"
                 );
                 return Err(AppError::Validation(
-                    "This message was already sent or is a replay. Please generate a new message.".to_string(),
+                    "This message was already sent or is a replay. Please generate a new message."
+                        .to_string(),
                 ));
             }
             Err(e) => {
@@ -267,5 +287,270 @@ pub async fn send_message(
             "status": "ok",
             "message_id": message_id
         })),
+    ))
+}
+
+// ============================================================================
+// Phase 2.5: REST API for Message Retrieval (Long Polling)
+// ============================================================================
+
+/// Query parameters for GET /api/v1/messages
+#[derive(Debug, Deserialize)]
+pub struct GetMessagesParams {
+    /// Message ID to get messages after (optional)
+    pub since: Option<String>,
+    /// Timeout for long polling in seconds (default: 30, max: 60)
+    pub timeout: Option<u64>,
+    /// Maximum number of messages to return (default: 50, max: 100)
+    pub limit: Option<u32>,
+}
+
+/// Message response structure for GET /api/v1/messages
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageResponse {
+    pub id: String,
+    pub sender_id: String,
+    pub recipient_id: String,
+    pub ciphertext: String,
+    pub timestamp: i64,
+    pub suite_id: u8,
+    pub nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_status: Option<String>,
+}
+
+/// Response structure for GET /api/v1/messages
+#[derive(Debug, Serialize)]
+pub struct GetMessagesResponse {
+    pub messages: Vec<MessageResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_since: Option<String>,
+    pub has_more: bool,
+}
+
+/// GET /api/v1/messages?since=<id>&timeout=30&limit=50
+///
+/// Long polling endpoint for retrieving messages.
+///
+/// Behavior:
+/// 1. If there are new messages - returns them immediately
+/// 2. If no new messages - waits up to `timeout` seconds (long polling)
+/// 3. Returns messages when they arrive or empty array on timeout
+///
+/// Security:
+/// - Requires JWT authentication
+/// - Returns only messages for the authenticated user
+/// - Rate limiting: 1 request per second per user
+pub async fn get_messages(
+    State(app_context): State<Arc<AppContext>>,
+    user: AuthenticatedUser,
+    Query(params): Query<GetMessagesParams>,
+) -> Result<impl IntoResponse, AppError> {
+    let user_id = user.0;
+    let user_id_str = user_id.to_string();
+    let user_id_hash = log_safe_id(&user_id_str, &app_context.config.logging.hash_salt);
+
+    // Rate limiting: 1 request per second per user
+    {
+        let mut queue = app_context.queue.lock().await;
+        let rate_limit_key = format!("rate:get_messages:{}", user_id_str);
+        match queue.increment_rate_limit(&rate_limit_key, 1).await {
+            Ok(count) => {
+                if count > 1 {
+                    drop(queue);
+                    tracing::warn!(
+                        user_hash = %user_id_hash,
+                        count = count,
+                        "Rate limit exceeded for get_messages"
+                    );
+                    return Err(AppError::Validation(
+                        "Rate limit exceeded: maximum 1 request per second".to_string(),
+                    ));
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to check rate limit for get_messages");
+                // Fail open - continue but log error
+            }
+        }
+        drop(queue);
+    }
+
+    // Validate and set defaults for parameters
+    let timeout = params.timeout.unwrap_or(30).min(60) as u64;
+    let limit = params.limit.unwrap_or(50).min(100) as usize;
+
+    // Get server instance ID (if user is online)
+    let server_instance_id = {
+        let mut queue = app_context.queue.lock().await;
+        queue
+            .get_user_server_instance(&user_id_str)
+            .await
+            .unwrap_or(None)
+    };
+
+    // Step 1: Check for existing messages in Redis Streams
+    // Note: `since` parameter is for message_id pagination, but Redis Streams use stream message IDs
+    // For now, we'll read from the beginning and filter client-side if needed
+    // TODO: Implement proper stream ID tracking for pagination
+    let mut queue = app_context.queue.lock().await;
+    let stream_messages = queue
+        .read_user_messages_from_stream(
+            &user_id_str,
+            server_instance_id.as_deref(),
+            None, // Stream message ID (different from message_id) - TODO: implement proper pagination
+            limit,
+        )
+        .await;
+
+    let mut messages = match stream_messages {
+        Ok(msgs) => {
+            // Convert KafkaMessageEnvelope to MessageResponse
+            msgs.into_iter()
+                .map(|(_stream_id, envelope)| {
+                    MessageResponse {
+                        id: envelope.message_id,
+                        sender_id: envelope.sender_id,
+                        recipient_id: envelope.recipient_id,
+                        ciphertext: envelope.encrypted_payload,
+                        timestamp: envelope.timestamp,
+                        suite_id: envelope.suite_id,
+                        nonce: None, // Nonce is not stored in envelope
+                        delivery_status: Some("delivered".to_string()), // Messages from stream are delivered
+                    }
+                })
+                .collect::<Vec<_>>()
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                user_hash = %user_id_hash,
+                "Failed to read messages from stream"
+            );
+            vec![]
+        }
+    };
+
+    // Filter by since_id if provided (client-side filtering for now)
+    // TODO: Implement server-side filtering using stream message IDs
+    let filtered_messages: Vec<MessageResponse> = if let Some(ref since_id) = params.since {
+        messages
+            .iter()
+            .filter(|msg| {
+                // Simple comparison: only return messages with ID greater than since_id
+                // In production, you'd want proper UUID comparison
+                msg.id > *since_id
+            })
+            .cloned()
+            .collect()
+    } else {
+        messages.clone()
+    };
+
+    // If we have messages, return them immediately
+    if !filtered_messages.is_empty() {
+        drop(queue);
+        let next_since = filtered_messages.last().map(|m| m.id.clone());
+
+        tracing::debug!(
+            user_hash = %user_id_hash,
+            count = filtered_messages.len(),
+            "Returning {} messages immediately",
+            filtered_messages.len()
+        );
+
+        return Ok((
+            StatusCode::OK,
+            Json(GetMessagesResponse {
+                messages: filtered_messages,
+                next_since,
+                has_more: false, // TODO: Implement has_more logic
+            }),
+        ));
+    }
+
+    // Step 2: No messages found - long polling
+    // Subscribe to Redis Pub/Sub and wait for notifications
+    drop(queue);
+
+    tracing::debug!(
+        user_hash = %user_id_hash,
+        timeout = timeout,
+        "No messages found, starting long polling"
+    );
+
+    // Wait for notification or timeout
+    let queue_ref = app_context.queue.lock().await;
+    let notification_received = queue_ref
+        .wait_for_message_notification(&user_id_str, timeout * 1000)
+        .await
+        .unwrap_or(false);
+    drop(queue_ref);
+
+    if notification_received {
+        // Notification received - check for messages again
+        let mut queue = app_context.queue.lock().await;
+        let stream_messages = queue
+            .read_user_messages_from_stream(
+                &user_id_str,
+                server_instance_id.as_deref(),
+                None,
+                limit,
+            )
+            .await;
+
+        let new_messages = match stream_messages {
+            Ok(msgs) => msgs
+                .into_iter()
+                .map(|(_, envelope)| MessageResponse {
+                    id: envelope.message_id,
+                    sender_id: envelope.sender_id,
+                    recipient_id: envelope.recipient_id,
+                    ciphertext: envelope.encrypted_payload,
+                    timestamp: envelope.timestamp,
+                    suite_id: envelope.suite_id,
+                    nonce: None,
+                    delivery_status: Some("delivered".to_string()),
+                })
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    user_hash = %user_id_hash,
+                    "Failed to read messages after notification"
+                );
+                vec![]
+            }
+        };
+
+        // Filter by since_id if provided
+        let final_messages = if let Some(ref since_id) = params.since {
+            new_messages
+                .into_iter()
+                .filter(|msg| msg.id > *since_id)
+                .collect()
+        } else {
+            new_messages
+        };
+
+        messages = final_messages;
+    }
+
+    let next_since = messages.last().map(|m| m.id.clone());
+
+    tracing::debug!(
+        user_hash = %user_id_hash,
+        count = messages.len(),
+        notification_received = notification_received,
+        "Long polling completed"
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(GetMessagesResponse {
+            messages,
+            next_since,
+            has_more: false,
+        }),
     ))
 }

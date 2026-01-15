@@ -38,7 +38,7 @@
 
 use anyhow::{Context, Result};
 use construct_server::config::Config;
-use construct_server::delivery_worker::{process_kafka_message, ProcessResult, WorkerState};
+use construct_server::delivery_worker::{ProcessResult, WorkerState, process_kafka_message};
 use construct_server::kafka::MessageConsumer;
 use construct_server::utils::log_safe_id;
 use futures_util::stream::StreamExt;
@@ -118,7 +118,10 @@ async fn main() -> Result<()> {
 ///
 /// CRITICAL: Offset is committed ONLY for Success and Skipped results.
 /// UserOffline results do NOT commit offset - Kafka will redeliver.
-async fn run_kafka_consumer_mode(state: Arc<WorkerState>, redis_client: redis::Client) -> Result<()> {
+async fn run_kafka_consumer_mode(
+    state: Arc<WorkerState>,
+    redis_client: redis::Client,
+) -> Result<()> {
     // Initialize message consumer
     let consumer =
         MessageConsumer::new(&state.config.kafka).context("Failed to initialize Kafka consumer")?;
@@ -133,7 +136,8 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>, redis_client: redis::C
     let state_clone = state.clone();
     let redis_client_clone = redis_client.clone();
     let _online_notification_handle = tokio::spawn(async move {
-        if let Err(e) = run_user_online_notification_listener(state_clone, redis_client_clone).await {
+        if let Err(e) = run_user_online_notification_listener(state_clone, redis_client_clone).await
+        {
             error!(error = %e, "User online notification listener failed");
         }
     });
@@ -159,7 +163,7 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>, redis_client: redis::C
                     Ok(ProcessResult::Success) => {
                         // Message delivered to online user - COMMIT offset
                         messages_delivered += 1;
-                        
+
                         if let Err(e) = consumer.commit() {
                             error!(
                                 error = %e,
@@ -177,7 +181,7 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>, redis_client: redis::C
                     Ok(ProcessResult::Skipped) => {
                         // Message was already processed - COMMIT offset
                         messages_skipped += 1;
-                        
+
                         if let Err(e) = consumer.commit() {
                             error!(
                                 error = %e,
@@ -195,13 +199,13 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>, redis_client: redis::C
                         // User is offline - DO NOT COMMIT offset!
                         // Kafka will redeliver this message when we poll again
                         messages_offline += 1;
-                        
+
                         debug!(
                             message_id = %message_id,
                             recipient_hash = %log_safe_id(&recipient_id, salt),
                             "User offline - offset NOT committed, message will be redelivered from Kafka"
                         );
-                        
+
                         // Continue without committing - message stays in Kafka
                         // Small delay to prevent tight loop on offline messages
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -214,7 +218,7 @@ async fn run_kafka_consumer_mode(state: Arc<WorkerState>, redis_client: redis::C
                             recipient_hash = %log_safe_id(&recipient_id, salt),
                             "Failed to process Kafka message - offset NOT committed"
                         );
-                        
+
                         // Continue without committing - message will be redelivered
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }

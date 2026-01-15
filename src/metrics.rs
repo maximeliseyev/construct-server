@@ -12,6 +12,14 @@ pub static CONNECTIONS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     .expect("Failed to register CONNECTIONS_TOTAL metric - this should only happen if the metric is registered twice")
 });
 
+pub static CONNECTIONS_ACTIVE: Lazy<prometheus::IntGauge> = Lazy::new(|| {
+    prometheus::register_int_gauge!(opts!(
+        "construct_connections_active",
+        "Current number of active WebSocket connections"
+    ))
+    .expect("Failed to register CONNECTIONS_ACTIVE metric - this should only happen if the metric is registered twice")
+});
+
 pub static MESSAGES_SENT_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(opts!(
         "construct_messages_sent_total",
