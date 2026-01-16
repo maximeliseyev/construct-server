@@ -60,6 +60,7 @@ primary_region = 'ams'
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 1
+  processes = ["app"]
 
   # Health check endpoint
   [[http_service.checks]]
@@ -69,6 +70,9 @@ primary_region = 'ams'
     path = "/health"
     timeout = "2s"
     protocol = "http"
+
+[processes]
+  app = "construct-server"
 
 # VM configuration - WebSocket server needs more resources
 [[vm]]

@@ -43,7 +43,13 @@ echo ""
 # ============================================================================
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-  echo "Setting up core secrets for construct-server..."
+  echo ""
+  echo "Setting up secrets for construct-server..."
+  # Create app if it doesn't exist
+  if ! flyctl status --app construct-server >/dev/null 2>&1; then
+    echo "Creating construct-server app..."
+    flyctl apps create construct-server
+  fi
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
