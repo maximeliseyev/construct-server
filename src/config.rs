@@ -26,7 +26,8 @@ const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 30;
 // Default polling interval (in milliseconds)
 // OPTIMIZED: Increased default polling interval from 10s to 30s to reduce Redis commands
 // This reduces Redis command usage by ~66% while maintaining acceptable latency for real-time messaging
-const DEFAULT_DELIVERY_POLL_INTERVAL_MS: u64 = 30000;
+// OPTIMIZED: Increased from 30s to 60s to reduce Redis commands by 50%
+const DEFAULT_DELIVERY_POLL_INTERVAL_MS: u64 = 60000;
 
 // Time conversion constants
 pub const SECONDS_PER_MINUTE: i64 = 60;
@@ -275,6 +276,40 @@ pub struct CsrfConfig {
     pub header_name: String,
 }
 
+/// Microservices configuration (Phase 2.6)
+#[derive(Clone, Debug)]
+pub struct MicroservicesConfig {
+    /// Whether microservices mode is enabled (default: false)
+    /// When false: monolithic mode (all endpoints in one server)
+    /// When true: microservices mode (API Gateway routes to separate services)
+    pub enabled: bool,
+    /// Auth Service URL (e.g., "http://auth-service:8001" or "http://localhost:8001")
+    pub auth_service_url: String,
+    /// Messaging Service URL (e.g., "http://messaging-service:8002")
+    pub messaging_service_url: String,
+    /// User Service URL (e.g., "http://user-service:8003")
+    pub user_service_url: String,
+    /// Notification Service URL (e.g., "http://notification-service:8004")
+    pub notification_service_url: String,
+    /// Service discovery mode: "dns" | "static" | "consul" (default: "static")
+    pub discovery_mode: String,
+    /// Timeout for service requests in seconds (default: 30)
+    pub service_timeout_secs: u64,
+    /// Circuit breaker configuration
+    pub circuit_breaker: CircuitBreakerConfig,
+}
+
+/// Circuit breaker configuration for service resilience
+#[derive(Clone, Debug)]
+pub struct CircuitBreakerConfig {
+    /// Failure threshold before opening circuit (default: 5)
+    pub failure_threshold: u32,
+    /// Success threshold to close circuit (default: 2)
+    pub success_threshold: u32,
+    /// Timeout in seconds before attempting to close circuit (default: 60)
+    pub timeout_secs: u64,
+}
+
 impl std::str::FromStr for ApnsEnvironment {
     type Err = anyhow::Error;
 
@@ -332,6 +367,8 @@ pub struct Config {
     pub redis_channels: RedisChannels,
     pub media: MediaConfig,
     pub csrf: CsrfConfig,
+    /// Phase 2.6: Microservices configuration
+    pub microservices: MicroservicesConfig,
 
     // Legacy aliases (for backward compatibility)
     // TODO: Remove after updating all usages to config.federation.*
@@ -657,21 +694,35 @@ impl Config {
                         .unwrap_or_else(|_| "com.example.construct".to_string())
                 }),
                 device_token_encryption_key: {
+                    let apns_enabled = std::env::var("APNS_ENABLED")
+                        .unwrap_or_else(|_| "false".to_string())
+                        .parse()
+                        .unwrap_or(false);
+                    
                     let key =
                         std::env::var("APNS_DEVICE_TOKEN_ENCRYPTION_KEY").unwrap_or_else(|_| {
                             "0000000000000000000000000000000000000000000000000000000000000000"
                                 .to_string()
                         });
-                    if key.len() != 64 {
+                    
+                    // Only validate if APNs is enabled or if key is explicitly set (not default)
+                    let is_default = key == "0000000000000000000000000000000000000000000000000000000000000000";
+                    
+                    if !is_default {
+                        // Key is set - validate format
+                        if key.len() != 64 {
+                            anyhow::bail!(
+                                "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+                            );
+                        }
+                    } else if apns_enabled {
+                        // APNs is enabled but key is default - require it to be changed
                         anyhow::bail!(
-                            "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+                            "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be changed from default value (APNS_ENABLED=true requires a valid key)"
                         );
                     }
-                    if key == "0000000000000000000000000000000000000000000000000000000000000000" {
-                        anyhow::bail!(
-                            "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be changed from default value"
-                        );
-                    }
+                    // If APNs is disabled and key is default, allow it (service doesn't use APNs)
+                    
                     key
                 },
             },
@@ -895,6 +946,41 @@ impl Config {
                     .unwrap_or_else(|_| "csrf_token".to_string()),
                 header_name: std::env::var("CSRF_HEADER_NAME")
                     .unwrap_or_else(|_| "X-CSRF-Token".to_string()),
+            },
+
+            // Phase 2.6: Microservices configuration
+            microservices: MicroservicesConfig {
+                enabled: std::env::var("MICROSERVICES_ENABLED")
+                    .map(|v| v.to_lowercase() == "true")
+                    .unwrap_or(false),
+                auth_service_url: std::env::var("AUTH_SERVICE_URL")
+                    .unwrap_or_else(|_| "http://localhost:8001".to_string()),
+                messaging_service_url: std::env::var("MESSAGING_SERVICE_URL")
+                    .unwrap_or_else(|_| "http://localhost:8002".to_string()),
+                user_service_url: std::env::var("USER_SERVICE_URL")
+                    .unwrap_or_else(|_| "http://localhost:8003".to_string()),
+                notification_service_url: std::env::var("NOTIFICATION_SERVICE_URL")
+                    .unwrap_or_else(|_| "http://localhost:8004".to_string()),
+                discovery_mode: std::env::var("SERVICE_DISCOVERY_MODE")
+                    .unwrap_or_else(|_| "static".to_string()),
+                service_timeout_secs: std::env::var("SERVICE_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(30),
+                circuit_breaker: CircuitBreakerConfig {
+                    failure_threshold: std::env::var("CIRCUIT_BREAKER_FAILURE_THRESHOLD")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(5),
+                    success_threshold: std::env::var("CIRCUIT_BREAKER_SUCCESS_THRESHOLD")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(2),
+                    timeout_secs: std::env::var("CIRCUIT_BREAKER_TIMEOUT_SECS")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(60),
+                },
             },
         })
     }

@@ -17,16 +17,17 @@
 //
 // ============================================================================
 
-mod account;
-mod auth;
-mod csrf;
-mod extractors;
+pub mod account; // Made public for user-service
+pub mod auth; // Made public for auth-service
+pub mod csrf; // Made public for gateway middleware
+pub mod extractors; // Made public for auth-service, user-service, messaging-service, and notification-service
 mod federation;
 mod health;
-mod keys;
-mod messages;
+pub mod keys; // Made public for user-service
+pub mod messages; // Made public for messaging-service
 mod middleware;
-mod request_signing;
+pub mod notifications; // Made public for notification-service
+pub mod request_signing; // Made public for user-service (account deletion uses request signing)
 
 use axum::{
     Router,

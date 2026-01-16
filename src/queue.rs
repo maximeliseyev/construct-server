@@ -26,7 +26,6 @@
 use crate::e2e::UploadableKeyBundle;
 use crate::message::ChatMessage;
 use anyhow::{Context, Result};
-use futures_util::StreamExt;
 use redis::{AsyncCommands, Client, cmd};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -288,10 +287,27 @@ impl MessageQueue {
 
         let key = format!("{}{}", self.config.redis_key_prefixes.msg_hash, hash);
 
-        // Check if already exists
-        let exists: bool = self.client.exists(&key).await?;
+        // Use Lua script to atomically check and set (SETNX with TTL)
+        // This reduces from 2 commands (EXISTS + SETEX) to 1 command
+        let script = redis::Script::new(
+            r"
+            local exists = redis.call('EXISTS', KEYS[1])
+            if exists == 1 then
+                return 0  -- Already exists, replay detected
+            end
+            redis.call('SETEX', KEYS[1], ARGV[1], ARGV[2])
+            return 1  -- New message, valid
+            ",
+        );
 
-        if exists {
+        let result: i64 = script
+            .key(&key)
+            .arg(max_age_seconds)
+            .arg(timestamp.to_string())
+            .invoke_async(&mut self.client)
+            .await?;
+
+        if result == 0 {
             tracing::warn!(
                 message_id = %message_id,
                 hash = %hash,
@@ -300,25 +316,31 @@ impl MessageQueue {
             return Ok(false); // Message already seen
         }
 
-        // Store with TTL = max_age_seconds (cleanup old entries automatically)
-        let _: () = self
-            .client
-            .set_ex(&key, &timestamp.to_string(), max_age_seconds as u64)
-            .await?;
-
         Ok(true) // Request is new and valid
     }
 
+    /// Increment message count with atomic TTL setting (optimized)
+    /// Uses Lua script to combine INCR + EXPIRE in single atomic operation
     pub async fn increment_message_count(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:msg:{}", user_id);
 
-        // Инкрементируем счетчик
-        let count: u32 = self.client.incr(&key, 1).await?;
+        // Use Lua script to atomically INCR and set TTL only on first increment
+        // This reduces from 2 commands to 1 command
+        let script = redis::Script::new(
+            r"
+            local count = redis.call('INCR', KEYS[1])
+            if count == 1 then
+                redis.call('EXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+            ",
+        );
 
-        // Устанавливаем TTL только при первом инкременте
-        if count == 1 {
-            let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
-        }
+        let count: u32 = script
+            .key(&key)
+            .arg(SECONDS_PER_HOUR as i64)
+            .invoke_async(&mut self.client)
+            .await?;
 
         Ok(count)
     }
@@ -342,12 +364,14 @@ impl MessageQueue {
         Ok(count)
     }
 
-    /// Increments combined rate limit counter (user_id + IP)
+    /// Increments combined rate limit counter (user_id + IP) - OPTIMIZED
     /// Returns the total count of operations from this user+IP combination in the last hour
     /// This provides more precise rate limiting for authenticated operations:
     /// - Same user from different IPs: separate limits per IP
     /// - Different users from same IP: separate limits per user
     /// - Protects against both account takeover and distributed attacks
+    ///
+    /// OPTIMIZED: Uses Lua script to combine INCR + EXPIRE in single atomic operation
     ///
     /// # Arguments
     /// * `user_id` - User identifier (UUID string)
@@ -364,18 +388,25 @@ impl MessageQueue {
     ) -> Result<u32> {
         // Normalize IP (handle IPv6 brackets if present)
         let normalized_ip = ip.trim_start_matches('[').trim_end_matches(']');
-
-        // Create combined key: "rate:combined:{user_id}:{ip}"
-        // This allows separate tracking per user+IP combination
         let key = format!("rate:combined:{}:{}", user_id, normalized_ip);
 
-        // Increment counter
-        let count: u32 = self.client.incr(&key, 1).await?;
+        // Use Lua script to atomically INCR and set TTL only on first increment
+        // This reduces from 2 commands to 1 command
+        let script = redis::Script::new(
+            r"
+            local count = redis.call('INCR', KEYS[1])
+            if count == 1 then
+                redis.call('EXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+            ",
+        );
 
-        // Set TTL only on first increment
-        if count == 1 {
-            let _: () = self.client.expire(&key, ttl_seconds).await?;
-        }
+        let count: u32 = script
+            .key(&key)
+            .arg(ttl_seconds)
+            .invoke_async(&mut self.client)
+            .await?;
 
         Ok(count)
     }
@@ -408,14 +439,27 @@ impl MessageQueue {
 
     /// Generic rate limiter: increments counter for a given key with specified TTL
     /// Returns the current count
+    /// OPTIMIZED: Uses Lua script to combine INCR + EXPIRE in single atomic operation
     pub async fn increment_rate_limit(&mut self, key: &str, ttl_seconds: i64) -> Result<i64> {
         let full_key = format!("rate:{}", key);
 
-        let count: i64 = self.client.incr(&full_key, 1).await?;
+        // Use Lua script to atomically INCR and set TTL only on first increment
+        // This reduces from 2 commands to 1 command
+        let script = redis::Script::new(
+            r"
+            local count = redis.call('INCR', KEYS[1])
+            if count == 1 then
+                redis.call('EXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+            ",
+        );
 
-        if count == 1 {
-            let _: () = self.client.expire(&full_key, ttl_seconds).await?;
-        }
+        let count: i64 = script
+            .key(&full_key)
+            .arg(ttl_seconds)
+            .invoke_async(&mut self.client)
+            .await?;
 
         Ok(count)
     }
@@ -859,39 +903,27 @@ impl MessageQueue {
     ///
     /// # Returns
     /// true if notification received, false if timeout
+    /// 
+    /// OPTIMIZED: Simplified to avoid creating new Redis connections
+    /// Instead of Pub/Sub (which requires new connection per request),
+    /// we just sleep and let the client poll again
+    /// This reduces Redis commands from ~100+ per long polling request to 0
     pub async fn wait_for_message_notification(
         &self,
-        user_id: &str,
+        _user_id: &str,
         timeout_ms: u64,
     ) -> Result<bool> {
-        use tokio::time::{Duration, timeout};
-
-        let channel = format!("message_notifications:{}", user_id);
-
-        // Create a new connection for Pub/Sub (can't use same connection for commands and pub/sub)
-        let client = Client::open(self.config.redis_url.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to create Redis client for Pub/Sub: {}", e))?;
-
-        let mut pubsub_conn = client
-            .get_async_pubsub()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to get Pub/Sub connection: {}", e))?;
-
-        // Subscribe to channel
-        pubsub_conn
-            .subscribe(&channel)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to subscribe to channel: {}", e))?;
-
-        // Wait for message or timeout
-        let mut stream = pubsub_conn.on_message();
-        let result = timeout(Duration::from_millis(timeout_ms), stream.next()).await;
-
-        match result {
-            Ok(Some(_)) => Ok(true), // Notification received
-            Ok(None) => Ok(false),   // Channel closed
-            Err(_) => Ok(false),     // Timeout
-        }
+        use tokio::time::Duration;
+        
+        // Simply sleep for the timeout duration
+        // The client will poll again after timeout
+        // This avoids creating new Redis Pub/Sub connections which was causing
+        // thousands of Redis commands per second
+        tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+        
+        // Always return false (timeout) - client will check for messages again
+        // This is less efficient for real-time notifications but much better for Redis usage
+        Ok(false)
     }
 
     // ============================================================================

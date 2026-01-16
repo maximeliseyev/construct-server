@@ -33,6 +33,66 @@ use crate::error::AppError;
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser(pub Uuid);
 
+// Also implement for AuthServiceContext (via conversion to AppContext)
+#[async_trait]
+impl FromRequestParts<Arc<crate::auth_service::AuthServiceContext>> for AuthenticatedUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<crate::auth_service::AuthServiceContext>,
+    ) -> Result<Self, Self::Rejection> {
+        // Convert to AppContext for reuse of existing logic
+        let app_context = Arc::new(state.to_app_context());
+        <AuthenticatedUser as FromRequestParts<Arc<AppContext>>>::from_request_parts(parts, &app_context).await
+    }
+}
+
+// Also implement for UserServiceContext (via conversion to AppContext)
+#[async_trait]
+impl FromRequestParts<Arc<crate::user_service::UserServiceContext>> for AuthenticatedUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<crate::user_service::UserServiceContext>,
+    ) -> Result<Self, Self::Rejection> {
+        // Convert to AppContext for reuse of existing logic
+        let app_context = Arc::new(state.to_app_context());
+        <AuthenticatedUser as FromRequestParts<Arc<AppContext>>>::from_request_parts(parts, &app_context).await
+    }
+}
+
+// Also implement for MessagingServiceContext (via conversion to AppContext)
+#[async_trait]
+impl FromRequestParts<Arc<crate::messaging_service::MessagingServiceContext>> for AuthenticatedUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<crate::messaging_service::MessagingServiceContext>,
+    ) -> Result<Self, Self::Rejection> {
+        // Convert to AppContext for reuse of existing logic
+        let app_context = Arc::new(state.to_app_context());
+        <AuthenticatedUser as FromRequestParts<Arc<AppContext>>>::from_request_parts(parts, &app_context).await
+    }
+}
+
+// Also implement for NotificationServiceContext (via conversion to AppContext)
+#[async_trait]
+impl FromRequestParts<Arc<crate::notification_service::NotificationServiceContext>> for AuthenticatedUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<crate::notification_service::NotificationServiceContext>,
+    ) -> Result<Self, Self::Rejection> {
+        // Convert to AppContext for reuse of existing logic
+        let app_context = Arc::new(state.to_app_context());
+        <AuthenticatedUser as FromRequestParts<Arc<AppContext>>>::from_request_parts(parts, &app_context).await
+    }
+}
+
 #[async_trait]
 impl FromRequestParts<Arc<AppContext>> for AuthenticatedUser {
     type Rejection = Response;
