@@ -48,6 +48,12 @@ COPY --from=builder --chmod=+x /app/target/release/construct-server /usr/local/b
 COPY --from=builder --chmod=+x /app/target/release/delivery-worker /usr/local/bin/delivery-worker
 COPY --from=builder --chmod=+x /app/target/release/message-gateway /usr/local/bin/message-gateway
 COPY --from=builder --chmod=+x /app/target/release/media-server /usr/local/bin/media-server
+# Microservices binaries (Phase 2.6)
+COPY --from=builder --chmod=+x /app/target/release/gateway /usr/local/bin/gateway
+COPY --from=builder --chmod=+x /app/target/release/auth-service /usr/local/bin/auth-service
+COPY --from=builder --chmod=+x /app/target/release/user-service /usr/local/bin/user-service
+COPY --from=builder --chmod=+x /app/target/release/messaging-service /usr/local/bin/messaging-service
+COPY --from=builder --chmod=+x /app/target/release/notification-service /usr/local/bin/notification-service
 
 # Copy migrations for the main server
 COPY migrations /app/migrations

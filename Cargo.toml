@@ -23,6 +23,26 @@ path = "src/bin/message_gateway.rs"
 name = "media-server"
 path = "src/bin/media_server.rs"
 
+[[bin]]
+name = "gateway"
+path = "src/bin/gateway.rs"
+
+[[bin]]
+name = "auth-service"
+path = "src/bin/auth_service.rs"
+
+[[bin]]
+name = "user-service"
+path = "src/bin/user_service.rs"
+
+[[bin]]
+name = "messaging-service"
+path = "src/bin/messaging_service.rs"
+
+[[bin]]
+name = "notification-service"
+path = "src/bin/notification_service.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
