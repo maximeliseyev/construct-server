@@ -44,9 +44,7 @@ impl ServiceDiscovery for StaticServiceDiscovery {
 }
 
 /// Create service discovery based on config
-pub fn create_service_discovery(
-    config: Arc<MicroservicesConfig>,
-) -> Box<dyn ServiceDiscovery> {
+pub fn create_service_discovery(config: Arc<MicroservicesConfig>) -> Box<dyn ServiceDiscovery> {
     match config.discovery_mode.as_str() {
         "static" => Box::new(StaticServiceDiscovery::new(config)),
         "dns" => {

@@ -10,15 +10,15 @@
 // ============================================================================
 
 use axum::{
+    Json,
     extract::{Query, State},
     http::HeaderMap,
     response::IntoResponse,
-    Json,
 };
 use std::sync::Arc;
 
-use crate::error::AppError;
 use crate::e2e::EncryptedMessageV3;
+use crate::error::AppError;
 use crate::messaging_service::MessagingServiceContext;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::messages;

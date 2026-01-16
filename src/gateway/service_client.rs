@@ -12,16 +12,19 @@
 //
 // ============================================================================
 
-use crate::gateway::circuit_breaker::CircuitBreaker;
 use crate::config::CircuitBreakerConfig;
+use crate::gateway::circuit_breaker::{CircuitBreaker, CircuitState};
+use crate::metrics::{
+    GATEWAY_CIRCUIT_BREAKER_STATE, GATEWAY_REQUEST_DURATION_SECONDS, GATEWAY_REQUESTS_TOTAL,
+};
 use anyhow::Result;
 use axum::body::Body;
 use axum::http::{Request, Response};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{warn, error};
+use tracing::{error, warn};
 
 /// HTTP client for forwarding requests to microservices
 pub struct ServiceClient {
@@ -92,9 +95,15 @@ impl ServiceClient {
         service_name: &str,
         request: Request<Body>,
     ) -> Result<Response<Body>> {
+        let start_time = Instant::now();
+
         // Check circuit breaker
         let breaker = self.get_circuit_breaker(service_name).await;
-        
+
+        // Update circuit breaker state metric
+        self.update_circuit_breaker_metric(service_name, &breaker)
+            .await;
+
         // Check if request is allowed
         if let Err(e) = breaker.allow_request().await {
             error!(
@@ -103,6 +112,10 @@ impl ServiceClient {
                 error = %e,
                 "Circuit breaker is open, rejecting request"
             );
+            // Record metric for rejected request
+            GATEWAY_REQUESTS_TOTAL
+                .with_label_values(&[service_name, "503"])
+                .inc();
             return Err(anyhow::anyhow!("Circuit breaker is open: {}", e));
         }
         // Build target URL
@@ -141,10 +154,13 @@ impl ServiceClient {
         let result = reqwest_request.send().await;
 
         // Handle response and update circuit breaker
+        let duration = start_time.elapsed();
         match result {
             Ok(response) => {
                 let status = response.status();
-                
+                let status_code = status.as_u16();
+                let status_code_str = status_code.to_string();
+
                 // Record success or failure based on status code
                 if status.is_success() || status.is_redirection() {
                     breaker.record_success().await;
@@ -156,6 +172,18 @@ impl ServiceClient {
                     // Don't count them as circuit breaker failures
                     breaker.record_success().await;
                 }
+
+                // Update metrics
+                GATEWAY_REQUESTS_TOTAL
+                    .with_label_values(&[service_name, &status_code_str])
+                    .inc();
+                GATEWAY_REQUEST_DURATION_SECONDS
+                    .with_label_values(&[service_name])
+                    .observe(duration.as_secs_f64());
+
+                // Update circuit breaker state metric
+                self.update_circuit_breaker_metric(service_name, &breaker)
+                    .await;
 
                 // Convert reqwest response to Axum response
                 let mut axum_response = Response::builder().status(status);
@@ -175,15 +203,41 @@ impl ServiceClient {
             Err(e) => {
                 // Network errors are failures
                 breaker.record_failure().await;
+
+                // Update metrics
+                GATEWAY_REQUESTS_TOTAL
+                    .with_label_values(&[service_name, "502"])
+                    .inc();
+                GATEWAY_REQUEST_DURATION_SECONDS
+                    .with_label_values(&[service_name])
+                    .observe(duration.as_secs_f64());
+
+                // Update circuit breaker state metric
+                self.update_circuit_breaker_metric(service_name, &breaker)
+                    .await;
+
                 Err(anyhow::anyhow!("Request failed: {}", e))
             }
         }
     }
 
+    /// Update circuit breaker state metric
+    async fn update_circuit_breaker_metric(&self, service_name: &str, breaker: &CircuitBreaker) {
+        let state = breaker.state().await;
+        let state_value = match state {
+            CircuitState::Closed => 0.0,
+            CircuitState::Open => 1.0,
+            CircuitState::HalfOpen => 2.0,
+        };
+        GATEWAY_CIRCUIT_BREAKER_STATE
+            .with_label_values(&[service_name])
+            .set(state_value);
+    }
+
     /// Check if a service is healthy
-    pub async fn check_health(&self, service_url: &str) -> bool {
+    pub async fn check_health(&self, service_url: &str, service_name: &str) -> bool {
         let health_url = format!("{}/health", service_url);
-        match self
+        let is_healthy = match self
             .client
             .get(&health_url)
             .timeout(Duration::from_secs(5))
@@ -195,6 +249,14 @@ impl ServiceClient {
                 warn!(service_url = %service_url, error = %e, "Service health check failed");
                 false
             }
-        }
+        };
+
+        // Update health metric
+        use crate::metrics::GATEWAY_SERVICE_HEALTH;
+        GATEWAY_SERVICE_HEALTH
+            .with_label_values(&[service_name])
+            .set(if is_healthy { 1.0 } else { 0.0 });
+
+        is_healthy
     }
 }

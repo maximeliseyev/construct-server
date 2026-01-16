@@ -86,17 +86,19 @@ pub async fn spawn_app() -> TestApp {
         DeviceTokenEncryption::from_hex(&app_config.apns.device_token_encryption_key).unwrap(),
     );
 
-    let app_context = AppContext::new(
-        db_pool_arc.clone(),
-        queue.clone(),
-        auth_manager,
-        clients,
-        app_config.clone(),
-        kafka_producer,
-        apns_client,
-        token_encryption,
-        server_instance_id,
-    );
+    // Phase 2.7: Use builder pattern for cleaner code
+    let app_context = AppContext::builder()
+        .with_db_pool(db_pool_arc.clone())
+        .with_queue(queue.clone())
+        .with_auth_manager(auth_manager)
+        .with_clients(clients)
+        .with_config(app_config.clone())
+        .with_kafka_producer(kafka_producer)
+        .with_apns_client(apns_client)
+        .with_token_encryption(token_encryption)
+        .with_server_instance_id(server_instance_id)
+        .build()
+        .expect("Failed to build AppContext for tests");
 
     tokio::spawn(construct_server::run_unified_server(app_context, listener));
 

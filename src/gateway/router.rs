@@ -76,7 +76,11 @@ pub async fn route_request(
     };
 
     // Forward request to service
-    match state.service_client.forward_request(&service_url, service_name, request).await {
+    match state
+        .service_client
+        .forward_request(&service_url, service_name, request)
+        .await
+    {
         Ok(response) => Ok(response),
         Err(e) => {
             tracing::error!(

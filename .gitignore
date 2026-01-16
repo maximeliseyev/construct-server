@@ -24,6 +24,8 @@ target/
 # APNs Keys
 *.p8
 
+*.pem
+
 # IDE
 .vscode/
 .claude/

@@ -9,12 +9,7 @@
 //
 // ============================================================================
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -80,11 +75,15 @@ pub async fn register_device(
             user_hash = %user_id_hash,
             "Invalid device token format"
         );
-        return Err(AppError::Validation("Device token format is invalid".to_string()));
+        return Err(AppError::Validation(
+            "Device token format is invalid".to_string(),
+        ));
     }
 
     // Validate notification filter
-    let filter = request.notification_filter.unwrap_or_else(|| "silent".to_string());
+    let filter = request
+        .notification_filter
+        .unwrap_or_else(|| "silent".to_string());
     let valid_filters = [
         "silent",
         "visible_all",
@@ -125,19 +124,14 @@ pub async fn register_device(
         })?;
 
     let name_encrypted = if let Some(ref name) = request.device_name {
-        Some(
-            app_context
-                .token_encryption
-                .encrypt(name)
-                .map_err(|e| {
-                    tracing::error!(
-                        error = %e,
-                        user_hash = %user_id_hash,
-                        "Failed to encrypt device name"
-                    );
-                    AppError::Unknown(e.into())
-                })?,
-        )
+        Some(app_context.token_encryption.encrypt(name).map_err(|e| {
+            tracing::error!(
+                error = %e,
+                user_hash = %user_id_hash,
+                "Failed to encrypt device name"
+            );
+            AppError::Unknown(e.into())
+        })?)
     } else {
         None
     };

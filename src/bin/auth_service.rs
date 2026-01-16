@@ -20,10 +20,10 @@
 
 use anyhow::{Context, Result};
 use axum::{
+    Json, Router,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use construct_server::auth_service::AuthServiceContext;
 use construct_server::config::Config;
@@ -69,13 +69,11 @@ async fn main() -> Result<()> {
 
     // Initialize Redis
     info!("Connecting to Redis...");
-    let queue = Arc::new(
-        Mutex::new(
-            MessageQueue::new(&config)
-                .await
-                .context("Failed to create message queue")?,
-        ),
-    );
+    let queue = Arc::new(Mutex::new(
+        MessageQueue::new(&config)
+            .await
+            .context("Failed to create message queue")?,
+    ));
     info!("Connected to Redis");
 
     // Initialize Auth Manager

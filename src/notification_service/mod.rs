@@ -46,16 +46,18 @@ impl NotificationServiceContext {
                 panic!("Kafka producer is required but not available - this should not happen in notification service")
             });
 
-        crate::context::AppContext::new(
-            self.db_pool.clone(),
-            self.queue.clone(),
-            self.auth_manager.clone(),
-            clients,
-            self.config.clone(),
-            kafka_producer,
-            self.apns_client.clone(),
-            self.token_encryption.clone(),
-            uuid::Uuid::new_v4().to_string(),
-        )
+        // Create AppContext using builder pattern (Phase 2.8)
+        crate::context::AppContext::builder()
+            .with_db_pool(self.db_pool.clone())
+            .with_queue(self.queue.clone())
+            .with_auth_manager(self.auth_manager.clone())
+            .with_clients(clients)
+            .with_config(self.config.clone())
+            .with_kafka_producer(kafka_producer)
+            .with_apns_client(self.apns_client.clone())
+            .with_token_encryption(self.token_encryption.clone())
+            .with_server_instance_id(uuid::Uuid::new_v4().to_string())
+            .build()
+            .expect("Failed to build AppContext for notification service")
     }
 }

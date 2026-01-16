@@ -10,10 +10,10 @@
 // ============================================================================
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
     response::IntoResponse,
-    Json,
 };
 use std::sync::Arc;
 

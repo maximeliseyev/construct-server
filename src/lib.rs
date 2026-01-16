@@ -251,6 +251,8 @@ pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) 
 
 /// Spawns a background task that listens for messages from the delivery worker
 /// and forwards them to connected clients
+///
+/// Phase 2.8: Refactored into smaller functions for better maintainability
 fn spawn_delivery_listener(
     queue: Arc<Mutex<MessageQueue>>,
     clients: Clients,
@@ -278,7 +280,6 @@ fn spawn_delivery_listener(
 
     let poll_interval = config.delivery_poll_interval_ms;
     let dead_letter_queue = config.redis_channels.dead_letter_queue.clone();
-
     let redis_url = config.redis_url.clone();
 
     tracing::info!(
@@ -288,22 +289,8 @@ fn spawn_delivery_listener(
     );
 
     tokio::spawn(async move {
-        // Create Redis connection for dead-letter queue (for malformed messages)
-        let mut dlq_conn: Option<redis::aio::MultiplexedConnection> = match redis::Client::open(
-            redis_url.as_str(),
-        ) {
-            Ok(client) => match client.get_multiplexed_async_connection().await {
-                Ok(conn) => Some(conn),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to get Redis connection for DLQ - malformed messages will be dropped");
-                    None
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to create Redis client for DLQ - malformed messages will be dropped");
-                None
-            }
-        };
+        // Initialize dead-letter queue connection
+        let mut dlq_conn = init_dlq_connection(&redis_url).await;
 
         tracing::info!(
             server_instance_id = %server_instance_id,
@@ -316,14 +303,11 @@ fn spawn_delivery_listener(
             tokio::time::sleep(tokio::time::Duration::from_millis(poll_interval)).await;
 
             // Poll the delivery queue
-            let messages = {
-                let mut queue_guard = queue.lock().await;
-                match queue_guard.poll_delivery_queue(&server_instance_id).await {
-                    Ok(msgs) => msgs,
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to poll delivery queue");
-                        continue;
-                    }
+            let messages = match poll_delivery_queue(&queue, &server_instance_id).await {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to poll delivery queue");
+                    continue;
                 }
             };
 
@@ -336,130 +320,196 @@ fn spawn_delivery_listener(
                 "Received messages from delivery queue"
             );
 
-            // Forward messages to clients
+            // Process each message
             for message_bytes in messages {
-                // Try to parse as KafkaMessageEnvelope (Phase 5 format from delivery-worker)
-                // This is the format used when messages are saved to offline queue
-                if let Ok(envelope) =
-                    rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(&message_bytes)
-                {
-                    // Convert KafkaMessageEnvelope to ChatMessage for WebSocket delivery
-                    let ephemeral_key = envelope
-                        .ephemeral_public_key
-                        .as_ref()
-                        .and_then(|k| {
-                            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k)
-                                .ok()
-                        })
-                        .unwrap_or_else(|| vec![0u8; 32]);
-
-                    let timestamp =
-                        chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
-                            .unwrap_or_else(chrono::Utc::now)
-                            .timestamp() as u64;
-
-                    let chat_msg = message::ChatMessage {
-                        id: envelope.message_id.clone(),
-                        from: envelope.sender_id.clone(),
-                        to: envelope.recipient_id.clone(),
-                        content: envelope.encrypted_payload.clone(),
-                        ephemeral_public_key: ephemeral_key,
-                        message_number: envelope.message_number.unwrap_or(0),
-                        timestamp,
-                    };
-
-                    let clients_guard = clients.read().await;
-                    if let Some(tx) = clients_guard.get(&envelope.recipient_id) {
-                        let server_msg = message::ServerMessage::Message(chat_msg.clone());
-                        if tx.send(server_msg).is_err() {
-                            tracing::warn!(
-                                recipient_id = %envelope.recipient_id,
-                                message_id = %envelope.message_id,
-                                "Failed to send offline message to client (channel closed)"
-                            );
-                        } else {
-                            tracing::info!(
-                                recipient_id = %envelope.recipient_id,
-                                message_id = %envelope.message_id,
-                                "Delivered offline message from delivery_queue to online client"
-                            );
-                        }
-                    } else {
-                        tracing::warn!(
-                            recipient_id = %envelope.recipient_id,
-                            message_id = %envelope.message_id,
-                            "Client not found for offline message delivery"
-                        );
-                    }
-                    continue;
-                }
-
-                // Try to parse as ChatMessage (old format)
-                if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(&message_bytes)
-                {
-                    // Old format: send to the recipient via WebSocket
-                    let clients_guard = clients.read().await;
-                    if let Some(tx) = clients_guard.get(&chat_msg.to) {
-                        let server_msg = message::ServerMessage::Message(chat_msg.clone());
-                        if tx.send(server_msg).is_err() {
-                            tracing::warn!(
-                                recipient_id = %chat_msg.to,
-                                "Failed to send message to client (channel closed)"
-                            );
-                        } else {
-                            tracing::info!(
-                                recipient_id = %chat_msg.to,
-                                message_id = %chat_msg.id,
-                                "Delivered offline message to online client"
-                            );
-                        }
-                    } else {
-                        tracing::warn!(
-                            recipient_id = %chat_msg.to,
-                            "Client not found for message delivery"
-                        );
-                    }
-                    continue;
-                }
-
-                // Try to parse as JSON (v3 format)
-                if let Ok(json_str) = std::str::from_utf8(&message_bytes) {
-                    if let Ok(v3_msg) = serde_json::from_str::<e2e::EncryptedMessageV3>(json_str) {
-                        // V3 format: send to the recipient via WebSocket
-                        let clients_guard = clients.read().await;
-                        if let Some(tx) = clients_guard.get(&v3_msg.recipient_id) {
-                            let server_msg = message::ServerMessage::EncryptedV3(v3_msg.clone());
-                            if tx.send(server_msg).is_err() {
-                                tracing::warn!(
-                                    recipient_id = %v3_msg.recipient_id,
-                                    "Failed to send V3 message to client (channel closed)"
-                                );
-                            } else {
-                                tracing::info!(
-                                    recipient_id = %v3_msg.recipient_id,
-                                    "Delivered offline V3 message to online client"
-                                );
-                            }
-                        } else {
-                            tracing::warn!(
-                                recipient_id = %v3_msg.recipient_id,
-                                "Client not found for V3 message delivery"
-                            );
-                        }
-                        continue;
-                    }
-                }
-
-                // If none of the formats match, move to dead-letter queue
-                tracing::error!(
-                    "Failed to parse message from delivery_queue. Expected KafkaMessageEnvelope (MessagePack), ChatMessage (MessagePack), or EncryptedMessageV3 (JSON). Moving to dead-letter queue."
-                );
-                if let Some(conn) = &mut dlq_conn {
-                    let _: Result<(), _> = conn.lpush(&dead_letter_queue, &message_bytes).await;
-                }
+                process_delivery_message(
+                    &message_bytes,
+                    &clients,
+                    &mut dlq_conn,
+                    &dead_letter_queue,
+                )
+                .await;
             }
         }
     });
+}
+
+// ============================================================================
+// Helper Functions (Phase 2.8: Extracted from spawn_delivery_listener)
+// ============================================================================
+
+/// Initializes Redis connection for dead-letter queue
+async fn init_dlq_connection(redis_url: &str) -> Option<redis::aio::MultiplexedConnection> {
+    match redis::Client::open(redis_url) {
+        Ok(client) => match client.get_multiplexed_async_connection().await {
+            Ok(conn) => Some(conn),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to get Redis connection for DLQ - malformed messages will be dropped"
+                );
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "Failed to create Redis client for DLQ - malformed messages will be dropped"
+            );
+            None
+        }
+    }
+}
+
+/// Polls the delivery queue for new messages
+async fn poll_delivery_queue(
+    queue: &Arc<Mutex<MessageQueue>>,
+    server_instance_id: &str,
+) -> Result<Vec<Vec<u8>>, anyhow::Error> {
+    let mut queue_guard = queue.lock().await;
+    queue_guard.poll_delivery_queue(server_instance_id).await
+}
+
+/// Processes a single delivery message and forwards it to the appropriate client
+async fn process_delivery_message(
+    message_bytes: &[u8],
+    clients: &Clients,
+    dlq_conn: &mut Option<redis::aio::MultiplexedConnection>,
+    dead_letter_queue: &str,
+) {
+    // Try to parse as KafkaMessageEnvelope (Phase 5 format from delivery-worker)
+    if let Ok(envelope) = rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(message_bytes) {
+        deliver_kafka_envelope(&envelope, clients).await;
+        return;
+    }
+
+    // Try to parse as ChatMessage (old format)
+    if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(message_bytes) {
+        deliver_chat_message(&chat_msg, clients).await;
+        return;
+    }
+
+    // Try to parse as JSON (v3 format)
+    if let Ok(json_str) = std::str::from_utf8(message_bytes) {
+        if let Ok(v3_msg) = serde_json::from_str::<e2e::EncryptedMessageV3>(json_str) {
+            deliver_v3_message(&v3_msg, clients).await;
+            return;
+        }
+    }
+
+    // If none of the formats match, move to dead-letter queue
+    tracing::error!(
+        "Failed to parse message from delivery_queue. Expected KafkaMessageEnvelope (MessagePack), ChatMessage (MessagePack), or EncryptedMessageV3 (JSON). Moving to dead-letter queue."
+    );
+    if let Some(conn) = dlq_conn {
+        let _: Result<(), _> = conn.lpush(dead_letter_queue, message_bytes).await;
+    }
+}
+
+/// Delivers a KafkaMessageEnvelope to the recipient via WebSocket
+async fn deliver_kafka_envelope(envelope: &kafka::KafkaMessageEnvelope, clients: &Clients) {
+    // Convert KafkaMessageEnvelope to ChatMessage for WebSocket delivery
+    let ephemeral_key = envelope
+        .ephemeral_public_key
+        .as_ref()
+        .and_then(|k| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok())
+        .unwrap_or_else(|| vec![0u8; 32]);
+
+    let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .timestamp() as u64;
+
+    let chat_msg = message::ChatMessage {
+        id: envelope.message_id.clone(),
+        from: envelope.sender_id.clone(),
+        to: envelope.recipient_id.clone(),
+        content: envelope.encrypted_payload.clone(),
+        ephemeral_public_key: ephemeral_key,
+        message_number: envelope.message_number.unwrap_or(0),
+        timestamp,
+    };
+
+    deliver_to_websocket(
+        &envelope.recipient_id,
+        message::ServerMessage::Message(chat_msg),
+        clients,
+        Some(&envelope.message_id),
+    )
+    .await;
+}
+
+/// Delivers a ChatMessage to the recipient via WebSocket
+async fn deliver_chat_message(chat_msg: &message::ChatMessage, clients: &Clients) {
+    deliver_to_websocket(
+        &chat_msg.to,
+        message::ServerMessage::Message(chat_msg.clone()),
+        clients,
+        Some(&chat_msg.id),
+    )
+    .await;
+}
+
+/// Delivers an EncryptedMessageV3 to the recipient via WebSocket
+async fn deliver_v3_message(v3_msg: &e2e::EncryptedMessageV3, clients: &Clients) {
+    deliver_to_websocket(
+        &v3_msg.recipient_id,
+        message::ServerMessage::EncryptedV3(v3_msg.clone()),
+        clients,
+        None,
+    )
+    .await;
+}
+
+/// Delivers a message to a WebSocket client
+async fn deliver_to_websocket(
+    recipient_id: &str,
+    server_msg: message::ServerMessage,
+    clients: &Clients,
+    message_id: Option<&str>,
+) {
+    let clients_guard = clients.read().await;
+    if let Some(tx) = clients_guard.get(recipient_id) {
+        if tx.send(server_msg).is_err() {
+            if let Some(id) = message_id {
+                tracing::warn!(
+                    recipient_id = %recipient_id,
+                    message_id = %id,
+                    "Failed to send message to client (channel closed)"
+                );
+            } else {
+                tracing::warn!(
+                    recipient_id = %recipient_id,
+                    "Failed to send message to client (channel closed)"
+                );
+            }
+        } else {
+            if let Some(id) = message_id {
+                tracing::info!(
+                    recipient_id = %recipient_id,
+                    message_id = %id,
+                    "Delivered offline message to online client"
+                );
+            } else {
+                tracing::info!(
+                    recipient_id = %recipient_id,
+                    "Delivered offline message to online client"
+                );
+            }
+        }
+    } else {
+        if let Some(id) = message_id {
+            tracing::warn!(
+                recipient_id = %recipient_id,
+                message_id = %id,
+                "Client not found for message delivery"
+            );
+        } else {
+            tracing::warn!(
+                recipient_id = %recipient_id,
+                "Client not found for message delivery"
+            );
+        }
+    }
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -655,18 +705,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let server_instance_id = uuid::Uuid::new_v4().to_string();
     tracing::info!("Server instance ID: {}", server_instance_id);
 
-    // Create application context
-    let mut app_context = AppContext::new(
-        db_pool.clone(),
-        queue.clone(),
-        auth_manager.clone(),
-        clients.clone(),
-        app_config.clone(),
-        kafka_producer.clone(),
-        apns_client.clone(),
-        token_encryption.clone(),
-        server_instance_id.clone(),
-    );
+    // Create application context using builder pattern (Phase 2.8)
+    let mut app_context = AppContext::builder()
+        .with_db_pool(db_pool.clone())
+        .with_queue(queue.clone())
+        .with_auth_manager(auth_manager.clone())
+        .with_clients(clients.clone())
+        .with_config(app_config.clone())
+        .with_kafka_producer(kafka_producer.clone())
+        .with_apns_client(apns_client.clone())
+        .with_token_encryption(token_encryption.clone())
+        .with_server_instance_id(server_instance_id.clone())
+        .build()
+        .expect("Failed to build AppContext");
 
     // Add delivery ACK manager if initialized
     if let Some(manager) = delivery_ack_manager {

@@ -18,10 +18,10 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    routing::{get, post, put},
+    Json, Router,
     http::StatusCode,
     response::IntoResponse,
-    Json, Router,
+    routing::{get, post, put},
 };
 use construct_server::apns::{ApnsClient, DeviceTokenEncryption};
 use construct_server::auth::AuthManager;
@@ -69,21 +69,17 @@ async fn main() -> Result<()> {
 
     // Initialize Redis
     info!("Connecting to Redis...");
-    let queue = Arc::new(
-        Mutex::new(
-            MessageQueue::new(&config)
-                .await
-                .context("Failed to create message queue")?,
-        ),
-    );
+    let queue = Arc::new(Mutex::new(
+        MessageQueue::new(&config)
+            .await
+            .context("Failed to create message queue")?,
+    ));
     info!("Connected to Redis");
 
     // Initialize APNs Client
     info!("Initializing APNs client...");
-    let apns_client = Arc::new(
-        ApnsClient::new(config.apns.clone())
-            .context("Failed to initialize APNs client")?,
-    );
+    let apns_client =
+        Arc::new(ApnsClient::new(config.apns.clone()).context("Failed to initialize APNs client")?);
     info!("APNs client initialized");
 
     // Initialize Device Token Encryption
@@ -93,10 +89,8 @@ async fn main() -> Result<()> {
     );
 
     // Initialize Auth Manager
-    let auth_manager = Arc::new(
-        AuthManager::new(&config)
-            .context("Failed to initialize auth manager")?,
-    );
+    let auth_manager =
+        Arc::new(AuthManager::new(&config).context("Failed to initialize auth manager")?);
 
     // Create service context
     let context = Arc::new(NotificationServiceContext {
@@ -118,9 +112,18 @@ async fn main() -> Result<()> {
         .route("/health/ready", get(health_check))
         .route("/health/live", get(health_check))
         // Notification endpoints
-        .route("/api/v1/notifications/register-device", post(handlers::register_device))
-        .route("/api/v1/notifications/unregister-device", post(handlers::unregister_device))
-        .route("/api/v1/notifications/preferences", put(handlers::update_preferences))
+        .route(
+            "/api/v1/notifications/register-device",
+            post(handlers::register_device),
+        )
+        .route(
+            "/api/v1/notifications/unregister-device",
+            post(handlers::unregister_device),
+        )
+        .route(
+            "/api/v1/notifications/preferences",
+            put(handlers::update_preferences),
+        )
         // Apply middleware
         .layer(
             ServiceBuilder::new()
