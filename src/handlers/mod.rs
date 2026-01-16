@@ -6,7 +6,7 @@ pub mod federation;
 mod key_rotation;
 pub mod keys;
 pub mod media;
-pub mod messages;
+// pub mod messages;  // Removed: replaced by src/routes/messages.rs (Phase 2.8)
 pub mod session;
 mod ws_messages;
 

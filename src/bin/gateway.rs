@@ -18,15 +18,14 @@
 // ============================================================================
 
 use anyhow::{Context, Result};
-use axum::{
-    middleware,
-    routing::any,
-    Router,
-};
+use axum::{Router, http::StatusCode, middleware, response::Response, routing::any};
 use construct_server::auth::AuthManager;
 use construct_server::config::Config;
-use construct_server::gateway::middleware::{csrf_protection, jwt_verification, rate_limiting, GatewayMiddlewareState};
-use construct_server::gateway::router::{route_request, GatewayRouter};
+use construct_server::gateway::middleware::{
+    GatewayMiddlewareState, csrf_protection, jwt_verification, rate_limiting,
+};
+use construct_server::gateway::router::{GatewayRouter, route_request};
+use construct_server::metrics;
 use construct_server::queue::MessageQueue;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -62,8 +61,9 @@ async fn main() -> Result<()> {
     let queue = Arc::new(Mutex::new(MessageQueue::new(&config).await?));
 
     // Create gateway state
-    let gateway_state = GatewayRouter::create_state(config.clone(), auth_manager.clone(), queue.clone());
-    
+    let gateway_state =
+        GatewayRouter::create_state(config.clone(), auth_manager.clone(), queue.clone());
+
     // Create middleware state (for middleware layers)
     let middleware_state = Arc::new(GatewayMiddlewareState {
         config: config.clone(),
@@ -77,8 +77,11 @@ async fn main() -> Result<()> {
         .route("/health", axum::routing::get(health_check))
         .route("/health/ready", axum::routing::get(health_check))
         .route("/health/live", axum::routing::get(health_check))
+        // Metrics endpoint (bypass gateway and middleware)
+        .route("/metrics", axum::routing::get(metrics_endpoint))
         // Route all /api/v1/* requests through gateway with middleware
-        .route("/api/v1/*", any(route_request))
+        // Note: wildcard must be named in Axum (/*path instead of /*)
+        .route("/api/v1/*path", any(route_request))
         // Apply middleware (order matters - last added runs first)
         .layer(
             ServiceBuilder::new()
@@ -120,4 +123,19 @@ async fn main() -> Result<()> {
 /// Health check endpoint
 async fn health_check() -> &'static str {
     "ok"
+}
+
+/// Metrics endpoint (Prometheus format)
+async fn metrics_endpoint() -> Result<Response<String>, StatusCode> {
+    match metrics::gather_metrics() {
+        Ok(metrics_data) => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/plain; version=0.0.4")
+            .body(metrics_data)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?),
+        Err(e) => {
+            tracing::error!("Failed to gather metrics: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }

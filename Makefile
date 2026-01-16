@@ -181,6 +181,9 @@ docker-rebuild:
 
 deploy-server: check-before-deploy
 	@echo "🚀 Deploying WebSocket server to Fly.io..."
+	@echo "Creating app if it doesn't exist..."
+	@fly apps create construct-server 2>/dev/null || true
+	@echo "Deploying..."
 	fly deploy . --config ops/fly.toml --dockerfile ./ops/Dockerfile --app construct-server
 	@echo "✅ Server deployed. View logs: make logs-server"
 

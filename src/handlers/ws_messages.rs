@@ -57,20 +57,63 @@ use sqlx::Row;
 /// Handles message sending
 /// Delivers immediately if recipient is online, otherwise queues for later delivery
 /// IMPORTANT: Messages are NEVER persisted to database (Redis queue only)
+///
+/// Phase 2.8: Refactored into smaller functions for better maintainability
 pub async fn handle_send_message(
     handler: &mut ConnectionHandler,
     ctx: &AppContext,
     msg: ChatMessage,
 ) {
-    // ========================================================================
-    // CRITICAL: Prevent Message Spoofing (IDOR)
-    // ========================================================================
-    // Ensure the `from` field in the message matches the authenticated user's
-    // ID associated with this WebSocket connection.
+    // 1. Validate sender (prevent message spoofing)
+    let sender_id = match validate_sender(handler, ctx, &msg).await {
+        Ok(id) => id,
+        Err(_) => return, // Error already sent to client
+    };
+
+    // 2. Validate message size
+    if !validate_message_size(handler, ctx, &msg, &sender_id).await {
+        return; // Error already sent to client
+    }
+
+    // 3. Check rate limiting and user blocking
+    let mut queue = ctx.queue.lock().await;
+    if !check_rate_limiting(handler, ctx, &mut queue, &msg, &sender_id).await {
+        return; // Error already sent to client
+    }
+
+    // 4. Validate message structure
+    drop(queue);
+    if !validate_message_structure(handler, ctx, &msg).await {
+        return; // Error already sent to client
+    }
+
+    // 5. Try Message Gateway path (if available)
+    if try_message_gateway(handler, ctx, &msg, &sender_id).await {
+        return; // Message handled by gateway
+    }
+
+    // 6. Hybrid architecture: Kafka + Direct delivery
+    deliver_message_hybrid(handler, ctx, &msg).await;
+}
+
+// ============================================================================
+// Helper Functions (Phase 2.8: Extracted from handle_send_message)
+// ============================================================================
+
+// ============================================================================
+// Helper Functions (Phase 2.8: Extracted from handle_send_message)
+// ============================================================================
+
+/// Validates sender authentication and prevents message spoofing
+/// Returns sender_id if validation passes, sends error and returns Err if not
+async fn validate_sender(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    msg: &ChatMessage,
+) -> Result<String, ()> {
     let sender_id = match handler.user_id() {
         Some(id) => id.clone(),
         None => {
-            // This should ideally not be reached if the connection logic is sound
             tracing::error!("Unauthenticated user attempted to send a message");
             handler
                 .send_error(
@@ -78,7 +121,7 @@ pub async fn handle_send_message(
                     "Authentication is required to send messages",
                 )
                 .await;
-            return;
+            return Err(());
         }
     };
 
@@ -109,24 +152,27 @@ pub async fn handle_send_message(
                 "You are not allowed to send messages from another user's account.",
             )
             .await;
-        return;
+        return Err(());
     }
-    // ========================================================================
 
-    // SECURITY: Validate message size to prevent DoS and resource exhaustion
-    // ========================================================================
-    // Лимит 64 KB для WebSocket сообщений:
-    // - Достаточно для ~32K символов UTF-8 + криптографические метаданные
-    // - Медиафайлы (фото, видео, документы) должны загружаться на CDN отдельно
-    // - Превышение лимита = возможная атака или неправильное использование API
-    // ========================================================================
+    Ok(sender_id)
+}
+
+/// Validates message size to prevent DoS attacks
+/// Returns true if valid, sends error and returns false if not
+async fn validate_message_size(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    msg: &ChatMessage,
+    sender_id: &str,
+) -> bool {
     let message_size = msg.content.len();
     if message_size > crate::config::MAX_WEBSOCKET_MESSAGE_SIZE {
         tracing::warn!(
             size_bytes = message_size,
             size_kb = message_size / 1024,
             limit_kb = crate::config::MAX_WEBSOCKET_MESSAGE_SIZE / 1024,
-            sender_hash = %log_safe_id(&sender_id, &ctx.config.logging.hash_salt),
+            sender_hash = %log_safe_id(sender_id, &ctx.config.logging.hash_salt),
             "Message content too large - possible abuse or media sent inline instead of via CDN"
         );
         handler
@@ -139,20 +185,26 @@ pub async fn handle_send_message(
                 ),
             )
             .await;
-        return;
+        return false;
     }
+    true
+}
 
-    let mut queue = ctx.queue.lock().await;
-
-    // 0. SECURITY: IP-based rate limiting (protects against distributed attacks)
-    // Check IP rate limit BEFORE user_id rate limit to catch attacks from multiple accounts
+/// Checks rate limiting and user blocking
+/// Returns true if message can proceed, sends error and returns false if not
+async fn check_rate_limiting(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    queue: &mut tokio::sync::MutexGuard<'_, crate::queue::MessageQueue>,
+    msg: &ChatMessage,
+    _sender_id: &str,
+) -> bool {
+    // IP-based rate limiting
     let client_ip = handler.addr().ip().to_string();
     match queue.increment_ip_message_count(&client_ip).await {
         Ok(ip_count) => {
             let max_ip_messages = ctx.config.security.max_messages_per_ip_per_hour;
             if ip_count > max_ip_messages {
-                // SECURITY: Log IP rate limit but don't block yet (user_id check comes next)
-                // This helps detect distributed attacks from same IP
                 tracing::warn!(
                     ip = %client_ip,
                     count = ip_count,
@@ -160,18 +212,15 @@ pub async fn handle_send_message(
                     user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
                     "IP rate limit exceeded - possible distributed attack"
                 );
-                // Continue to user_id check - if both exceed limits, block
             }
         }
         Err(e) => {
             tracing::error!(error = %e, ip = %client_ip, "Failed to check IP rate limit");
-            // Continue processing but log error
         }
     }
 
-    // 1. Проверка блокировки пользователя
+    // Check if user is blocked
     if let Ok(Some(reason)) = queue.is_user_blocked(&msg.from).await {
-        // SECURITY: Always use hashed user_id in logs
         tracing::warn!(
             user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
             reason = %reason,
@@ -183,38 +232,37 @@ pub async fn handle_send_message(
                 &format!("Your account is temporarily blocked: {}", reason),
             )
             .await;
-        return;
+        return false;
     }
 
-    // 2. Replay protection - проверка уникальности сообщения
-    // For Double Ratchet, we use ephemeral_public_key and message_number for replay detection
+    // Replay protection
     let ephemeral_key_b64 =
         base64::engine::general_purpose::STANDARD.encode(&msg.ephemeral_public_key);
     match queue
         .check_message_replay(&msg.id, &msg.content, &ephemeral_key_b64)
         .await
     {
-        Ok(true) => {} // Сообщение уникальное, продолжаем
+        Ok(true) => {} // Message is unique, continue
         Ok(false) => {
             tracing::warn!(message_id = %msg.id, "Duplicate message detected");
             handler
                 .send_error("DUPLICATE_MESSAGE", "This message was already sent")
                 .await;
-            return;
+            return false;
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to check message replay");
-            // Продолжаем, но логируем ошибку
         }
     }
 
+    // User-based rate limiting
     match queue.increment_message_count(&msg.from).await {
         Ok(count) => {
             let max_messages = ctx.config.security.max_messages_per_hour;
             let block_threshold = max_messages + (max_messages / 2);
 
             if count > block_threshold {
-                // AUDIT: Log rate limit violation (user blocked)
+                // Block user
                 let user_id_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
                 let client_ip = Some(handler.addr().ip());
                 AuditLogger::log_rate_limit_violation(
@@ -240,9 +288,9 @@ pub async fn handle_send_message(
                         format!("Too many messages. Blocked for {} seconds.", block_duration);
                     handler.send_error("RATE_LIMIT_BLOCKED", &message).await;
                 }
-                return;
+                return false;
             } else if count > max_messages {
-                // AUDIT: Log rate limit warning (approaching limit)
+                // Warning
                 let user_id_hash = log_safe_id(&msg.from, &ctx.config.logging.hash_salt);
                 let client_ip = Some(handler.addr().ip());
                 AuditLogger::log_rate_limit_violation(
@@ -254,7 +302,6 @@ pub async fn handle_send_message(
                     max_messages,
                 );
 
-                // SECURITY: Always use hashed user_id in logs
                 tracing::warn!(
                     user_hash = %user_id_hash,
                     count = count,
@@ -266,7 +313,7 @@ pub async fn handle_send_message(
                         &format!("Slow down! ({}/{})", count, max_messages),
                     )
                     .await;
-                return;
+                return false;
             }
         }
         Err(e) => {
@@ -274,9 +321,17 @@ pub async fn handle_send_message(
         }
     }
 
-    // Validate ChatMessage structure
+    true
+}
+
+/// Validates message structure
+/// Returns true if valid, sends error and returns false if not
+async fn validate_message_structure(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    msg: &ChatMessage,
+) -> bool {
     if !msg.is_valid() {
-        // SECURITY: Always use hashed user_id in logs
         tracing::warn!(
             user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
             "Invalid chat message format"
@@ -284,12 +339,10 @@ pub async fn handle_send_message(
         handler
             .send_error("INVALID_MESSAGE_FORMAT", "Message validation failed")
             .await;
-        return;
+        return false;
     }
 
-    // Additional validation: check ephemeral_public_key length
     if msg.ephemeral_public_key.len() != 32 {
-        // SECURITY: Always use hashed user_id in logs
         tracing::warn!(
             user_hash = %log_safe_id(&msg.from, &ctx.config.logging.hash_salt),
             "Invalid ephemeral public key size"
@@ -300,114 +353,96 @@ pub async fn handle_send_message(
                 "Ephemeral public key must be 32 bytes",
             )
             .await;
-        return;
+        return false;
     }
 
-    drop(queue);
+    true
+}
 
-    // ========================================================================
-    // MESSAGE GATEWAY PATH (Phase 2+)
-    // If Message Gateway client is configured, delegate processing to it
-    // FALLBACK: If gateway is unavailable, use legacy local processing
-    // ========================================================================
-    if let Some(gateway_client) = &ctx.gateway_client {
-        tracing::debug!(
-            message_id = %msg.id,
-            "Forwarding message to Message Gateway service"
-        );
+/// Tries to send message through Message Gateway
+/// Returns true if message was handled by gateway, false if should fallback to local processing
+async fn try_message_gateway(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    msg: &ChatMessage,
+    sender_id: &str,
+) -> bool {
+    let gateway_client = match &ctx.gateway_client {
+        Some(client) => client,
+        None => return false, // No gateway, use local processing
+    };
 
-        let mut client = gateway_client.lock().await;
-        match client.submit_message(&msg, &sender_id).await {
-            Ok(()) => {
-                // Message successfully submitted to gateway
-                let ack = ServerMessage::Ack(crate::message::AckData {
-                    message_id: msg.id.clone(),
-                    status: "accepted".to_string(),
-                });
-                handler.send_msgpack(&ack).await.ok();
+    tracing::debug!(
+        message_id = %msg.id,
+        "Forwarding message to Message Gateway service"
+    );
 
-                tracing::info!(
+    let mut client = gateway_client.lock().await;
+    match client.submit_message(msg, sender_id).await {
+        Ok(()) => {
+            let ack = ServerMessage::Ack(crate::message::AckData {
+                message_id: msg.id.clone(),
+                status: "accepted".to_string(),
+            });
+            handler.send_msgpack(&ack).await.ok();
+
+            tracing::info!(
+                message_id = %msg.id,
+                "Message accepted by Message Gateway"
+            );
+            return true;
+        }
+        Err(e) => {
+            let error_msg = e.to_string();
+
+            // Check if this is a connection/unavailability error (should fallback)
+            let is_connection_error = error_msg.contains("Failed to connect")
+                || error_msg.contains("gRPC call failed")
+                || error_msg.contains("unavailable")
+                || error_msg.contains("deadline")
+                || error_msg.contains("timeout")
+                || error_msg.contains("refused");
+
+            if is_connection_error {
+                tracing::warn!(
                     message_id = %msg.id,
-                    "Message accepted by Message Gateway"
+                    error = %e,
+                    "Message Gateway unavailable - falling back to local processing"
                 );
-                return;
-            }
-            Err(e) => {
-                let error_msg = e.to_string();
+                return false; // Fallback to local processing
+            } else {
+                // Gateway rejected the message - don't fallback
+                tracing::warn!(
+                    message_id = %msg.id,
+                    error = %e,
+                    "Message Gateway rejected message"
+                );
 
-                // Check if this is a connection/unavailability error (should fallback)
-                let is_connection_error = error_msg.contains("Failed to connect")
-                    || error_msg.contains("gRPC call failed")
-                    || error_msg.contains("unavailable")
-                    || error_msg.contains("deadline")
-                    || error_msg.contains("timeout")
-                    || error_msg.contains("refused");
-
-                if is_connection_error {
-                    // HIGH AVAILABILITY: Gateway unavailable - fallback to legacy local processing
-                    tracing::warn!(
-                        message_id = %msg.id,
-                        error = %e,
-                        "Message Gateway unavailable - falling back to local processing"
-                    );
-                    // Continue to legacy path below (don't return)
+                // Parse error to send appropriate error code
+                if error_msg.contains("RATE_LIMIT") {
+                    handler.send_error("RATE_LIMIT_WARNING", &error_msg).await;
+                } else if error_msg.contains("USER_BLOCKED") {
+                    handler.send_error("USER_BLOCKED", &error_msg).await;
+                } else if error_msg.contains("DUPLICATE") {
+                    handler.send_error("DUPLICATE_MESSAGE", &error_msg).await;
                 } else {
-                    // Gateway is available but rejected the message (validation/rate limit/etc)
-                    // These are legitimate rejections - don't fallback
-                    tracing::warn!(
-                        message_id = %msg.id,
-                        error = %e,
-                        "Message Gateway rejected message"
-                    );
-
-                    // Parse error to send appropriate error code
-                    if error_msg.contains("RATE_LIMIT") {
-                        handler.send_error("RATE_LIMIT_WARNING", &error_msg).await;
-                    } else if error_msg.contains("USER_BLOCKED") {
-                        handler.send_error("USER_BLOCKED", &error_msg).await;
-                    } else if error_msg.contains("DUPLICATE") {
-                        handler.send_error("DUPLICATE_MESSAGE", &error_msg).await;
-                    } else {
-                        handler.send_error("VALIDATION_ERROR", &error_msg).await;
-                    }
-                    return;
+                    handler.send_error("VALIDATION_ERROR", &error_msg).await;
                 }
+                return true; // Handled (rejected)
             }
         }
     }
+}
 
-    // ========================================================================
-    // HYBRID ARCHITECTURE: Kafka First + Direct Delivery
-    // ========================================================================
-    //
-    // ПРОБЛЕМА предыдущих подходов:
-    // 1. "Kafka + Pub/Sub" (документация): Pub/Sub fire-and-forget → сообщения теряются
-    // 2. "Direct only" (первый фикс): Если сервер упадёт после tx.send() → сообщение потеряно
-    //
-    // РЕШЕНИЕ: Гибридный подход
-    // 1. СНАЧАЛА пишем в Kafka (SOURCE OF TRUTH) - гарантия сохранения
-    // 2. ПОТОМ пытаемся доставить напрямую через tx.send() (fast path)
-    // 3. Delivery-worker ТОЖЕ доставит из Kafka → клиент дедуплицирует по message_id
-    //
-    // Гарантии:
-    // ✅ Kafka ВСЕГДА имеет сообщение (даже если сервер упадёт)
-    // ✅ Быстрая доставка онлайн пользователям (~5-10ms)
-    // ✅ Если tx.send() не сработал - delivery-worker доставит из Kafka
-    // ✅ Клиент дедуплицирует по message_id (получит сообщение максимум 2 раза)
-    //
-    // ACK статусы:
-    // - "sent": Сообщение в Kafka + отправлено онлайн получателю
-    // - "queued": Сообщение в Kafka, получатель оффлайн
-    // - "delivered": Получатель подтвердил получение (через handle_acknowledge_message)
-    //
-    // ========================================================================
-
-    // STEP 1: ВСЕГДА пишем в Kafka ПЕРВЫМ (Source of Truth)
-    // Это гарантирует, что сообщение НЕ потеряется даже при crash
-    let envelope = KafkaMessageEnvelope::from(&msg);
+/// Delivers message using hybrid architecture (Kafka + Direct delivery)
+async fn deliver_message_hybrid(
+    handler: &mut ConnectionHandler,
+    ctx: &AppContext,
+    msg: &ChatMessage,
+) {
+    // STEP 1: Write to Kafka first (Source of Truth)
+    let envelope = KafkaMessageEnvelope::from(msg);
     if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
-        // Kafka недоступен - КРИТИЧЕСКАЯ ОШИБКА
-        // БЕЗ Kafka мы не можем гарантировать доставку
         tracing::error!(
             error = %e,
             message_id = %msg.id,
@@ -442,29 +477,24 @@ pub async fn handle_send_message(
         }
     }
 
-    // STEP 2: Попытка прямой доставки (fast path для онлайн получателей)
-    // Это дополнительная оптимизация - даже если не сработает, delivery-worker доставит
+    // STEP 2: Try direct delivery (fast path for online recipients)
     let recipient_tx = {
         let clients_read = ctx.clients.read().await;
         clients_read.get(&msg.to).cloned()
     };
 
     if let Some(tx) = recipient_tx {
-        // Получатель онлайн на этом сервере - пробуем доставить напрямую
         match tx.send(ServerMessage::Message(msg.clone())) {
             Ok(_) => {
-                // ✅ Сообщение отправлено в канал получателя (fast path)
                 tracing::info!(
                     message_id = %msg.id,
                     "📨 Message sent directly to online recipient (fast path) + persisted in Kafka"
                 );
 
-                // УМНАЯ ДЕДУПЛИКАЦИЯ: Помечаем сообщение как доставленное напрямую
-                // delivery-worker проверит этот ключ и пропустит доставку
+                // Mark as delivered directly to prevent duplicate delivery
                 {
                     let mut queue = ctx.queue.lock().await;
                     if let Err(e) = queue.mark_delivered_direct(&msg.id).await {
-                        // Не критично - в худшем случае клиент получит дубликат
                         tracing::warn!(
                             error = %e,
                             message_id = %msg.id,
@@ -473,18 +503,15 @@ pub async fn handle_send_message(
                     }
                 }
 
-                // ACK "sent" - сообщение в Kafka И отправлено получателю
+                // ACK "sent"
                 let ack = ServerMessage::Ack(crate::message::AckData {
                     message_id: msg.id.clone(),
                     status: "sent".to_string(),
                 });
-                if handler.send_msgpack(&ack).await.is_err() {
-                    return;
-                }
+                handler.send_msgpack(&ack).await.ok();
                 return;
             }
             Err(e) => {
-                // Канал получателя закрыт - не страшно, delivery-worker доставит из Kafka
                 tracing::debug!(
                     error = %e,
                     message_id = %msg.id,
@@ -494,15 +521,14 @@ pub async fn handle_send_message(
         }
     }
 
-    // STEP 3: Получатель оффлайн или прямая доставка не удалась
-    // Сообщение уже в Kafka - delivery-worker доставит когда получатель придёт онлайн
+    // STEP 3: Recipient offline or direct delivery failed
     tracing::info!(
         message_id = %msg.id,
         recipient_hash = %log_safe_id(&msg.to, &ctx.config.logging.hash_salt),
         "📤 Message queued in Kafka - recipient offline, delivery-worker will deliver"
     );
 
-    // ACK "queued" - сообщение в Kafka, ожидает доставки
+    // ACK "queued"
     let ack = ServerMessage::Ack(crate::message::AckData {
         message_id: msg.id.clone(),
         status: "queued".to_string(),
@@ -512,7 +538,7 @@ pub async fn handle_send_message(
     }
 
     // Send push notification to offline recipient
-    send_push_notification_for_message(ctx, &msg).await;
+    send_push_notification_for_message(ctx, msg).await;
 }
 
 /// Send push notification for a message to an offline recipient

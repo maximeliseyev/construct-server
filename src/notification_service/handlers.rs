@@ -9,11 +9,7 @@
 //
 // ============================================================================
 
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, extract::State, response::IntoResponse};
 use std::sync::Arc;
 
 use crate::error::AppError;

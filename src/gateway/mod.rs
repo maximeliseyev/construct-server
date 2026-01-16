@@ -18,12 +18,12 @@
 // ============================================================================
 
 pub mod circuit_breaker;
-pub mod router;
-pub mod service_client;
 pub mod discovery;
 pub mod middleware;
+pub mod router;
+pub mod service_client;
 
-pub use router::{GatewayRouter, GatewayState};
-pub use service_client::ServiceClient;
 pub use discovery::ServiceDiscovery;
 pub use middleware::GatewayMiddlewareState;
+pub use router::{GatewayRouter, GatewayState};
+pub use service_client::ServiceClient;

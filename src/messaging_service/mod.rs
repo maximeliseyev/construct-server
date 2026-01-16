@@ -54,16 +54,18 @@ impl MessagingServiceContext {
                 })
         );
 
-        crate::context::AppContext::new(
-            self.db_pool.clone(),
-            self.queue.clone(),
-            self.auth_manager.clone(),
-            clients,
-            self.config.clone(),
-            self.kafka_producer.clone(),
-            apns_client,
-            token_encryption,
-            uuid::Uuid::new_v4().to_string(),
-        )
+        // Create AppContext using builder pattern (Phase 2.8)
+        crate::context::AppContext::builder()
+            .with_db_pool(self.db_pool.clone())
+            .with_queue(self.queue.clone())
+            .with_auth_manager(self.auth_manager.clone())
+            .with_clients(clients)
+            .with_config(self.config.clone())
+            .with_kafka_producer(self.kafka_producer.clone())
+            .with_apns_client(apns_client)
+            .with_token_encryption(token_encryption)
+            .with_server_instance_id(uuid::Uuid::new_v4().to_string())
+            .build()
+            .expect("Failed to build AppContext for messaging service")
     }
 }

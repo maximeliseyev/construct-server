@@ -9,12 +9,7 @@
 //
 // ============================================================================
 
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use std::sync::Arc;
 
 use crate::auth_service::AuthServiceContext;

@@ -12,11 +12,13 @@
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::queue::MessageQueue;
-use crate::routes::csrf::{extract_csrf_token, has_custom_header, is_browser_request, validate_csrf_token};
+use crate::routes::csrf::{
+    extract_csrf_token, has_custom_header, is_browser_request, validate_csrf_token,
+};
 use crate::utils::extract_client_ip;
 use axum::{
     extract::{Request, State},
-    http::{header::AUTHORIZATION, StatusCode},
+    http::{StatusCode, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
 };
@@ -55,12 +57,10 @@ pub async fn jwt_verification(
         })?;
 
     // Extract token
-    let token = auth_header
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| {
-            tracing::warn!(path = %path, "Invalid Authorization header format");
-            StatusCode::UNAUTHORIZED
-        })?;
+    let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+        tracing::warn!(path = %path, "Invalid Authorization header format");
+        StatusCode::UNAUTHORIZED
+    })?;
 
     // Verify JWT token
     let claims = state.auth_manager.verify_token(token).map_err(|e| {
@@ -104,9 +104,7 @@ pub async fn rate_limiting(
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
-        .and_then(|token| {
-            state.auth_manager.verify_token(token).ok()
-        })
+        .and_then(|token| state.auth_manager.verify_token(token).ok())
         .and_then(|claims| Uuid::parse_str(&claims.sub).ok())
         .map(|id| id.to_string());
 
@@ -191,13 +189,12 @@ pub async fn csrf_protection(
                     .get(AUTHORIZATION)
                     .and_then(|v| v.to_str().ok())
                     .and_then(|h| h.strip_prefix("Bearer "))
-                    .and_then(|token| {
-                        state.auth_manager.verify_token(token).ok()
-                    })
+                    .and_then(|token| state.auth_manager.verify_token(token).ok())
                     .and_then(|claims| Uuid::parse_str(&claims.sub).ok());
 
                 if let Some(user_id) = user_id {
-                    if let Err(e) = validate_csrf_token(&state.config.csrf, t, &user_id.to_string()) {
+                    if let Err(e) = validate_csrf_token(&state.config.csrf, t, &user_id.to_string())
+                    {
                         tracing::warn!(
                             path = %path,
                             error = %e,
@@ -221,6 +218,10 @@ pub async fn csrf_protection(
 fn is_public_endpoint(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/auth/register" | "/api/v1/auth/login" | "/health" | "/health/ready" | "/health/live"
+        "/api/v1/auth/register"
+            | "/api/v1/auth/login"
+            | "/health"
+            | "/health/ready"
+            | "/health/live"
     )
 }

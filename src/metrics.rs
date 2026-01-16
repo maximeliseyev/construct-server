@@ -1,7 +1,9 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use prometheus::{
-    Encoder, Histogram, IntCounter, TextEncoder, opts, register_histogram, register_int_counter,
+    Encoder, GaugeVec, Histogram, HistogramVec, IntCounter, IntCounterVec, TextEncoder, opts,
+    register_gauge_vec, register_histogram, register_histogram_vec, register_int_counter,
+    register_int_counter_vec,
 };
 
 pub static CONNECTIONS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
@@ -84,6 +86,56 @@ pub static SHADOW_READ_PROCESSED: Lazy<IntCounter> = Lazy::new(|| {
         "Total messages processed in shadow-read mode"
     ))
     .expect("Failed to register SHADOW_READ_PROCESSED metric - this should only happen if the metric is registered twice")
+});
+
+// ============================================================================
+// Phase 2.6.6: Gateway Metrics
+// ============================================================================
+
+/// Gateway requests total (by service and status code)
+pub static GATEWAY_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        opts!(
+            "gateway_requests_total",
+            "Total number of requests processed by gateway"
+        ),
+        &["service", "status_code"]
+    )
+    .expect("Failed to register GATEWAY_REQUESTS_TOTAL metric")
+});
+
+/// Gateway request duration in seconds (histogram)
+pub static GATEWAY_REQUEST_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "gateway_request_duration_seconds",
+        "Request duration in seconds",
+        &["service"]
+    )
+    .expect("Failed to register GATEWAY_REQUEST_DURATION_SECONDS metric")
+});
+
+/// Circuit breaker state (0=Closed, 1=Open, 2=HalfOpen)
+pub static GATEWAY_CIRCUIT_BREAKER_STATE: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        opts!(
+            "gateway_circuit_breaker_state",
+            "Circuit breaker state (0=Closed, 1=Open, 2=HalfOpen)"
+        ),
+        &["service"]
+    )
+    .expect("Failed to register GATEWAY_CIRCUIT_BREAKER_STATE metric")
+});
+
+/// Service health status (1=healthy, 0=unhealthy)
+pub static GATEWAY_SERVICE_HEALTH: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        opts!(
+            "gateway_service_health",
+            "Service health status (1=healthy, 0=unhealthy)"
+        ),
+        &["service"]
+    )
+    .expect("Failed to register GATEWAY_SERVICE_HEALTH metric")
 });
 
 pub fn gather_metrics() -> Result<String> {

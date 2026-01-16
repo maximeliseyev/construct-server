@@ -255,6 +255,7 @@ fn extract_user_id_from_jwt_lightweight(token: &str) -> Result<String, ()> {
 ///
 /// This middleware should be applied to endpoints that don't require authentication.
 /// For authenticated endpoints, use the combined rate limiting in the handler.
+#[allow(dead_code)]
 pub async fn ip_rate_limiting(
     State(ctx): State<Arc<AppContext>>,
     req: Request,
@@ -325,6 +326,7 @@ pub async fn ip_rate_limiting(
 ///
 /// This middleware should be applied to authenticated endpoints.
 /// It requires AuthenticatedUser extractor to be applied first.
+#[allow(dead_code)]
 pub async fn combined_rate_limiting(
     State(ctx): State<Arc<AppContext>>,
     user: AuthenticatedUser,
