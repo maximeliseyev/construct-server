@@ -103,7 +103,7 @@ async fn main() -> Result<()> {
         .with_state(gateway_state);
 
     // Start server
-    let addr: SocketAddr = format!("0.0.0.0:{}", config.port)
+    let addr: SocketAddr = format!("[::]:{}", config.port)
         .parse()
         .context("Failed to parse bind address")?;
 

@@ -104,6 +104,8 @@ async fn test_ed25519_signature_verification_invalid() {
         master_identity_key: BASE64.encode(verifying_key.as_bytes()), // Correct public key
         bundle_data: BASE64.encode(canonical_bytes),
         signature: BASE64.encode(wrong_signature.to_bytes()), // Wrong signature
+        nonce: None,
+        timestamp: None,
     };
 
     // Validate should fail
@@ -153,6 +155,8 @@ async fn test_ed25519_signature_verification_tampered_data() {
         master_identity_key: BASE64.encode(verifying_key.as_bytes()),
         bundle_data: BASE64.encode(tampered_bytes), // Tampered data
         signature: BASE64.encode(signature.to_bytes()), // Original signature
+        nonce: None,
+        timestamp: None,
     };
 
     // Validate should fail
