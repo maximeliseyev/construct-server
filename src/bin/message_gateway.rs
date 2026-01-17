@@ -382,7 +382,7 @@ async fn main() -> Result<()> {
     let service = MessageGatewayServiceImpl::new(redis_conn, kafka_producer, config.clone());
 
     // Start gRPC server
-    let addr: SocketAddr = format!("0.0.0.0:{}", config.port)
+    let addr: SocketAddr = format!("[::]:{}", config.port)
         .parse()
         .context("Failed to parse bind address")?;
 

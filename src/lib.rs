@@ -525,7 +525,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let bind_address = format!("0.0.0.0:{}", app_config.port);
+    let bind_address = format!("[::]:{}", app_config.port);
 
     // Connect to database
     let db_pool = Arc::new(db::create_pool(&app_config.database_url, &app_config.db).await?);

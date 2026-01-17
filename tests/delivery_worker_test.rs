@@ -40,6 +40,7 @@ async fn create_test_state() -> WorkerState {
         heartbeat_interval_secs: 180,
         server_registry_ttl_secs: 270,
         message_ttl_days: 7,
+        access_token_ttl_hours: 1,
         session_ttl_days: 30,
         refresh_token_ttl_days: 90,
         jwt_issuer: "construct-test".to_string(),
@@ -65,6 +66,14 @@ async fn create_test_state() -> WorkerState {
             max_connections_per_user: 5,
             key_bundle_cache_hours: 1,
             rate_limit_block_duration_seconds: 3600,
+            ip_rate_limiting_enabled: true,
+            max_requests_per_ip_per_hour: 1000,
+            combined_rate_limiting_enabled: true,
+            max_requests_per_user_ip_per_hour: 500,
+            request_signing_required: false,
+            metrics_auth_enabled: false,
+            metrics_ip_whitelist: vec![],
+            metrics_bearer_token: None,
         },
         kafka: construct_server::config::KafkaConfig {
             enabled: false,
@@ -145,6 +154,20 @@ async fn create_test_state() -> WorkerState {
             upload_token_secret: "".to_string(),
             max_file_size: 100 * 1024 * 1024,
             rate_limit_per_hour: 50,
+        },
+        microservices: construct_server::config::MicroservicesConfig {
+            enabled: false,
+            auth_service_url: "http://localhost:8001".to_string(),
+            messaging_service_url: "http://localhost:8002".to_string(),
+            user_service_url: "http://localhost:8003".to_string(),
+            notification_service_url: "http://localhost:8004".to_string(),
+            discovery_mode: "static".to_string(),
+            service_timeout_secs: 30,
+            circuit_breaker: construct_server::config::CircuitBreakerConfig {
+                failure_threshold: 5,
+                success_threshold: 2,
+                timeout_secs: 60,
+            },
         },
         csrf: construct_server::config::CsrfConfig {
             enabled: false, // Disabled for tests

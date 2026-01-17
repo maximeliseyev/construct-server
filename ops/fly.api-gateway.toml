@@ -39,14 +39,15 @@ primary_region = 'ams'
 
   # Microservices configuration
   MICROSERVICES_ENABLED = "true"
-  MICROSERVICES_DISCOVERY_MODE = "static"
-  MICROSERVICES_SERVICE_TIMEOUT_SECS = "30"
+  SERVICE_DISCOVERY_MODE = "static"
+  SERVICE_TIMEOUT_SECS = "30"
   
   # Service URLs (will be set via secrets or internal DNS)
-  MICROSERVICES_AUTH_SERVICE_URL = "http://construct-auth-service.internal:8080"
-  MICROSERVICES_MESSAGING_SERVICE_URL = "http://construct-messaging-service.internal:8080"
-  MICROSERVICES_USER_SERVICE_URL = "http://construct-user-service.internal:8080"
-  MICROSERVICES_NOTIFICATION_SERVICE_URL = "http://construct-notification-service.internal:8080"
+  # Note: Variable names must match what's used in microservices.rs
+  AUTH_SERVICE_URL = "http://construct-auth-service.internal:8080"
+  MESSAGING_SERVICE_URL = "http://construct-messaging-service.internal:8080"
+  USER_SERVICE_URL = "http://construct-user-service.internal:8080"
+  NOTIFICATION_SERVICE_URL = "http://construct-notification-service.internal:8080"
   
   # Circuit breaker configuration
   CIRCUIT_BREAKER_FAILURE_THRESHOLD = "5"

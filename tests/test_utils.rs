@@ -42,6 +42,15 @@ pub async fn spawn_app() -> TestApp {
     );
     config.redis_url = "redis://127.0.0.1:6379".to_string(); // Point to local Redis
 
+    // Force HS256 mode for tests (disable RSA keys if they're set)
+    // This ensures tests work regardless of environment variables
+    config.jwt_private_key = None;
+    config.jwt_public_key = None;
+    // Ensure JWT_SECRET is set (required for HS256)
+    if config.jwt_secret.is_empty() {
+        config.jwt_secret = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0".to_string();
+    }
+
     let mut connection = PgConnection::connect(
         "postgres://construct:construct_dev_password@localhost:5432/postgres",
     )
@@ -103,6 +112,32 @@ pub async fn spawn_app() -> TestApp {
     tokio::spawn(construct_server::run_unified_server(app_context, listener));
 
     TestApp { address, db_pool }
+}
+
+/// Cleanup rate limiting keys from Redis for tests
+/// This ensures tests don't interfere with each other
+pub async fn cleanup_rate_limits(redis_url: &str) {
+    use redis::AsyncCommands;
+
+    let client = redis::Client::open(redis_url).ok();
+    if let Some(client) = client {
+        if let Ok(mut conn) = client.get_multiplexed_async_connection().await {
+            // Cleanup all rate limit keys (rate:*, rate:login:*, rate:register:*, etc.)
+            let patterns = vec![
+                "rate:*",
+                "rate:login:*",
+                "rate:register:*",
+                "rate:combined:*",
+            ];
+
+            for pattern in patterns {
+                let keys: Vec<String> = conn.keys(pattern).await.unwrap_or_default();
+                if !keys.is_empty() {
+                    let _: Result<(), _> = conn.del(&keys).await;
+                }
+            }
+        }
+    }
 }
 
 impl TestClient {
