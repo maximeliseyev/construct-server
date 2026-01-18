@@ -39,7 +39,16 @@ impl MessageProducer {
         if !config.enabled {
             info!("Kafka producer disabled (KAFKA_ENABLED=false)");
             // Create a dummy producer, which requires a minimal config.
-            let producer = create_client_config(config)?
+            // Suppress librdkafka logs when Kafka is disabled to reduce noise.
+            let mut client_config = create_client_config(config)?;
+            
+            // Set log level to 0 (no logging) to suppress librdkafka internal logs
+            // This prevents connection refused errors from cluttering logs
+            // Note: Some errors may still appear at the librdkafka level, but they're harmless
+            // when Kafka is intentionally disabled
+            client_config.set("log_level", "0"); // 0 = no logging
+            
+            let producer = client_config
                 .create()
                 .context("Failed to create disabled Kafka producer")?;
 

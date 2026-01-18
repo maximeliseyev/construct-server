@@ -135,7 +135,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Metrics (Prometheus)
 once_cell = "1.21.3"
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 
 # UUID
 uuid = { version = "1.11", features = ["v4", "serde"] }

@@ -127,7 +127,7 @@ impl Config {
         let redis_key_prefixes = RedisKeyPrefixes::from_env();
         let redis_channels = RedisChannels::from_env();
         let media = MediaConfig::from_env();
-        let csrf = CsrfConfig::from_env();
+        let csrf = CsrfConfig::from_env()?;
         let microservices = MicroservicesConfig::from_env();
 
         // Legacy federation aliases
@@ -169,24 +169,31 @@ impl Config {
             jwt_private_key: {
                 // Try to load from file path first, then from environment variable directly (PEM string)
                 std::env::var("JWT_PRIVATE_KEY").ok().map(|key| {
-                    // If it looks like a file path (contains path separators), try to read it
-                    if key.contains(std::path::MAIN_SEPARATOR) || key.starts_with("-----BEGIN") {
-                        if key.starts_with("-----BEGIN") {
-                            // PEM string in environment variable
+                    // Detect if PEM is stored directly in env var (security risk)
+                    let is_pem_in_env = key.starts_with("-----BEGIN") ||
+                        (!key.contains(std::path::MAIN_SEPARATOR) && !key.ends_with(".pem") && !key.ends_with(".key"));
+
+                    if is_pem_in_env && key.contains("PRIVATE") {
+                        // SECURITY WARNING: PEM in env var is visible in /proc, ps, logs
+                        tracing::warn!(
+                            "SECURITY: JWT_PRIVATE_KEY contains PEM data directly in environment variable. \
+                            This is insecure - the key is visible in /proc/*/environ, `ps aux`, and logs. \
+                            Recommended: Store key in a file and set JWT_PRIVATE_KEY=/path/to/private.pem"
+                        );
+                    }
+
+                    // If it looks like a file path, try to read it
+                    if key.contains(std::path::MAIN_SEPARATOR) || key.ends_with(".pem") || key.ends_with(".key") {
+                        std::fs::read_to_string(&key).unwrap_or_else(|e| {
+                            tracing::warn!(
+                                error = %e,
+                                path = %key,
+                                "Failed to read JWT_PRIVATE_KEY from file, using as-is"
+                            );
                             key
-                        } else {
-                            // File path - read the file
-                            std::fs::read_to_string(&key).unwrap_or_else(|e| {
-                                tracing::warn!(
-                                    error = %e,
-                                    path = %key,
-                                    "Failed to read JWT_PRIVATE_KEY from file, using as-is"
-                                );
-                                key
-                            })
-                        }
+                        })
                     } else {
-                        // Assume it's a PEM string in environment variable
+                        // PEM string directly in environment variable
                         key
                     }
                 })

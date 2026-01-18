@@ -479,7 +479,8 @@ pub async fn handle_change_password(
     let user = match db::get_user_by_id(&ctx.db_pool, &user_id).await {
         Ok(Some(user)) => user,
         Ok(None) => {
-            handler.send_error("USER_NOT_FOUND", "User not found").await;
+            // SECURITY: Don't reveal whether user exists - use generic error
+            handler.send_error("INVALID_SESSION", "Session is invalid or expired").await;
             return;
         }
         Err(e) => {
@@ -729,7 +730,8 @@ pub async fn handle_delete_account(
     let user = match db::get_user_by_id(&ctx.db_pool, &user_id).await {
         Ok(Some(user)) => user,
         Ok(None) => {
-            handler.send_error("USER_NOT_FOUND", "User not found").await;
+            // SECURITY: Don't reveal whether user exists - use generic error
+            handler.send_error("INVALID_SESSION", "Session is invalid or expired").await;
             return;
         }
         Err(e) => {
@@ -750,8 +752,9 @@ pub async fn handle_delete_account(
                 user_hash = %log_safe_id(&user_id.to_string(), &ctx.config.logging.hash_salt),
                 "Invalid password during account deletion"
             );
+            // SECURITY: Use generic error to prevent confirmation of user existence
             handler
-                .send_error("INVALID_PASSWORD", "Password is incorrect")
+                .send_error("INVALID_CREDENTIALS", "Verification failed")
                 .await;
             return;
         }

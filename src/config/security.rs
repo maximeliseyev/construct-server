@@ -153,26 +153,51 @@ pub struct CsrfConfig {
 }
 
 impl CsrfConfig {
-    pub(crate) fn from_env() -> Self {
-        Self {
-            enabled: std::env::var("CSRF_ENABLED")
-                .map(|v| v.to_lowercase() == "true")
-                .unwrap_or(true), // Enabled by default for security
-            secret: {
-                let secret = std::env::var("CSRF_SECRET").unwrap_or_else(|_| {
-                    // Generate a random secret if not provided (development mode)
-                    // In production, CSRF_SECRET should be set explicitly
-                    tracing::warn!(
-                        "CSRF_SECRET not set, using random secret. Set CSRF_SECRET in production!"
-                    );
-                    use rand::Rng;
-                    let mut rng = rand::thread_rng();
-                    (0..32)
-                        .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-                        .collect()
-                });
-                secret
-            },
+    pub(crate) fn from_env() -> anyhow::Result<Self> {
+        // Check if we're in production
+        let is_production = std::env::var("ENVIRONMENT")
+            .or_else(|_| std::env::var("FLY_APP_NAME"))
+            .or_else(|_| std::env::var("RAILWAY_ENVIRONMENT"))
+            .map(|v| v != "development" && v != "dev" && v != "local")
+            .unwrap_or(false);
+
+        let enabled = std::env::var("CSRF_ENABLED")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(true); // Enabled by default for security
+
+        let secret = match std::env::var("CSRF_SECRET") {
+            Ok(s) if s.len() >= 32 => s,
+            Ok(s) => {
+                anyhow::bail!(
+                    "CSRF_SECRET must be at least 32 characters long (got {}). \
+                    Generate with: openssl rand -hex 32",
+                    s.len()
+                );
+            }
+            Err(_) if is_production && enabled => {
+                anyhow::bail!(
+                    "CSRF_SECRET is REQUIRED in production when CSRF is enabled. \
+                    Generate with: openssl rand -hex 32"
+                );
+            }
+            Err(_) => {
+                // Development only: generate random secret with warning
+                tracing::warn!(
+                    "CSRF_SECRET not set - using random secret. \
+                    This means CSRF tokens will be invalidated on restart. \
+                    Set CSRF_SECRET in production!"
+                );
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                (0..32)
+                    .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                    .collect()
+            }
+        };
+
+        Ok(Self {
+            enabled,
+            secret,
             token_ttl_secs: std::env::var("CSRF_TOKEN_TTL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -184,6 +209,6 @@ impl CsrfConfig {
                 .unwrap_or_else(|_| "csrf_token".to_string()),
             header_name: std::env::var("CSRF_HEADER_NAME")
                 .unwrap_or_else(|_| "X-CSRF-Token".to_string()),
-        }
+        })
     }
 }

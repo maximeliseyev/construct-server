@@ -323,7 +323,8 @@ pub async fn handle_get_public_key(
             }
         }
         Ok(None) => {
-            handler.send_error("USER_NOT_FOUND", "User not found").await;
+            // SECURITY: Don't reveal whether user exists - use generic error
+            handler.send_error("KEY_BUNDLE_UNAVAILABLE", "Key bundle not available").await;
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to get user key bundle");
