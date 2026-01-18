@@ -216,6 +216,30 @@ impl ServiceClient {
                 self.update_circuit_breaker_metric(service_name, &breaker)
                     .await;
 
+                // Log error with context
+                let error_msg = e.to_string();
+                // Check if this is a connection error (common with proxy issues)
+                if error_msg.contains("invalid authority") 
+                    || error_msg.contains("client error")
+                    || error_msg.contains("SendRequest")
+                    || error_msg.contains("connection")
+                {
+                    // These are often proxy/infrastructure issues, log at warn level
+                    warn!(
+                        service = service_name,
+                        service_url = %service_url,
+                        error = %e,
+                        "Service request failed (possible proxy/infrastructure issue)"
+                    );
+                } else {
+                    error!(
+                        service = service_name,
+                        service_url = %service_url,
+                        error = %e,
+                        "Service request failed"
+                    );
+                }
+
                 Err(anyhow::anyhow!("Request failed: {}", e))
             }
         }

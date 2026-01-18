@@ -56,27 +56,56 @@ impl ApnsConfig {
             .parse()
             .unwrap_or(false);
 
-        let key = std::env::var("APNS_DEVICE_TOKEN_ENCRYPTION_KEY").unwrap_or_else(|_| {
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string()
-        });
+        // SECURITY: Device token encryption key is ALWAYS required in production
+        // Even if APNS is disabled, tokens might be stored for later use
+        let is_production = std::env::var("ENVIRONMENT")
+            .or_else(|_| std::env::var("FLY_APP_NAME")) // Fly.io sets this
+            .or_else(|_| std::env::var("RAILWAY_ENVIRONMENT")) // Railway sets this
+            .map(|v| v != "development" && v != "dev" && v != "local")
+            .unwrap_or(false);
 
-        // Only validate if APNs is enabled or if key is explicitly set (not default)
-        let is_default = key == "0000000000000000000000000000000000000000000000000000000000000000";
-
-        if !is_default {
-            // Key is set - validate format
-            if key.len() != 64 {
+        let key = match std::env::var("APNS_DEVICE_TOKEN_ENCRYPTION_KEY") {
+            Ok(k) => k,
+            Err(_) if is_production => {
                 anyhow::bail!(
-                    "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+                    "APNS_DEVICE_TOKEN_ENCRYPTION_KEY is REQUIRED in production. \
+                    Generate with: openssl rand -hex 32"
                 );
             }
-        } else if apns_enabled {
-            // APNs is enabled but key is default - require it to be changed
+            Err(_) => {
+                // Development only: use zero key with warning
+                tracing::warn!(
+                    "APNS_DEVICE_TOKEN_ENCRYPTION_KEY not set - using INSECURE default. \
+                    This is only acceptable for local development!"
+                );
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string()
+            }
+        };
+
+        let is_zero_key = key == "0000000000000000000000000000000000000000000000000000000000000000";
+
+        // Validate key format
+        if key.len() != 64 {
             anyhow::bail!(
-                "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be changed from default value (APNS_ENABLED=true requires a valid key)"
+                "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
             );
         }
-        // If APNs is disabled and key is default, allow it (service doesn't use APNs)
+
+        // In production, zero key is never acceptable
+        if is_production && is_zero_key {
+            anyhow::bail!(
+                "APNS_DEVICE_TOKEN_ENCRYPTION_KEY cannot be all zeros in production. \
+                Generate with: openssl rand -hex 32"
+            );
+        }
+
+        // If APNS is enabled, key must not be zero (even in dev)
+        if apns_enabled && is_zero_key {
+            anyhow::bail!(
+                "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be changed from default value \
+                (APNS_ENABLED=true requires a valid key). Generate with: openssl rand -hex 32"
+            );
+        }
 
         Ok(Self {
             enabled: apns_enabled,

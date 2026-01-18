@@ -70,7 +70,8 @@ pub async fn get_account(
             user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
             "User not found in database"
         );
-        AppError::Auth("User not found".to_string())
+        // SECURITY: Don't reveal whether user exists - use generic error
+        AppError::Auth("Session is invalid or expired".to_string())
     })?;
 
     tracing::debug!(
@@ -126,7 +127,8 @@ pub async fn update_account(
             tracing::error!(error = %e, "Failed to fetch user");
             AppError::Unknown(e.into())
         })?
-        .ok_or_else(|| AppError::Auth("User not found".to_string()))?;
+        .ok_or_else(|| // SECURITY: Don't reveal whether user exists - use generic error
+        AppError::Auth("Session is invalid or expired".to_string()))?;
 
     // Update username if provided
     if let Some(new_username) = &request.username {
@@ -258,7 +260,8 @@ pub async fn delete_account(
             tracing::error!(error = %e, "Failed to fetch user");
             AppError::Unknown(e.into())
         })?
-        .ok_or_else(|| AppError::Auth("User not found".to_string()))?;
+        .ok_or_else(|| // SECURITY: Don't reveal whether user exists - use generic error
+        AppError::Auth("Session is invalid or expired".to_string()))?;
 
     let password_valid = db::verify_password(&user_record, &request.password)
         .await
@@ -272,7 +275,8 @@ pub async fn delete_account(
             user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
             "Invalid password during account deletion"
         );
-        return Err(AppError::Auth("Invalid password".to_string()));
+        // SECURITY: Use generic error to prevent confirmation of user existence
+        return Err(AppError::Auth("Verification failed".to_string()));
     }
 
     // 3. Request signing verification (if enabled)

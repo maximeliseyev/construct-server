@@ -37,6 +37,7 @@ pub mod gateway;
 pub mod handlers;
 pub mod health;
 pub mod kafka;
+pub mod key_management;
 pub mod message;
 pub mod message_gateway;
 pub mod messaging_service;

@@ -52,9 +52,11 @@ pub async fn jwt_verification(
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
-            // Only warn for API endpoints, not for static files or root paths
-            if path.starts_with("/api/v1/") {
-                tracing::warn!(path = %path, "Missing Authorization header");
+            // Only warn for known API endpoints that require auth
+            // Unknown endpoints (like /api/v1/config) might be client-side routes or health checks
+            // Log at debug level to reduce noise
+            if path.starts_with("/api/v1/") && !path.contains("/health") {
+                tracing::debug!(path = %path, "Missing Authorization header for API endpoint");
             }
             StatusCode::UNAUTHORIZED
         })?;
