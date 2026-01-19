@@ -39,14 +39,32 @@ impl MessageProducer {
         if !config.enabled {
             info!("Kafka producer disabled (KAFKA_ENABLED=false)");
             // Create a dummy producer, which requires a minimal config.
-            // Suppress librdkafka logs when Kafka is disabled to reduce noise.
+            // Suppress librdkafka logs and minimize connection attempts when Kafka is disabled.
+            // 
+            // NOTE: Even with these settings, librdkafka may still attempt to connect and log
+            // connection errors. These errors are harmless when Kafka is intentionally disabled.
+            // To fully suppress them, set RDKAFKA_LOG_LEVEL=0 environment variable before
+            // starting the application.
+            
             let mut client_config = create_client_config(config)?;
             
-            // Set log level to 0 (no logging) to suppress librdkafka internal logs
-            // This prevents connection refused errors from cluttering logs
-            // Note: Some errors may still appear at the librdkafka level, but they're harmless
-            // when Kafka is intentionally disabled
-            client_config.set("log_level", "0"); // 0 = no logging
+            // Aggressively suppress librdkafka logs and minimize connection attempts
+            client_config
+                .set("log_level", "0") // 0 = no logging (suppresses most logs)
+                .set("log.connection.close", "false") // Don't log connection close events
+                .set("log.queue", "false") // Don't log queue events
+                .set("enable.auto.commit", "false") // Disable auto-commit
+                // Minimize connection attempts and timeouts to fail fast
+                .set("socket.connection.setup.timeout.ms", "1") // Very short timeout
+                .set("metadata.request.timeout.ms", "1") // Very short metadata timeout
+                .set("socket.timeout.ms", "1") // Very short socket timeout
+                .set("request.timeout.ms", "1") // Very short request timeout
+                // Disable retries and backoff to prevent repeated connection attempts
+                .set("retries", "0") // No retries
+                .set("retry.backoff.ms", "1") // Minimal backoff
+                // Suppress statistics and debug output
+                .set("statistics.interval.ms", "0") // Disable statistics
+                .set("debug", ""); // No debug output
             
             let producer = client_config
                 .create()

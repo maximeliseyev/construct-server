@@ -67,9 +67,22 @@ pub async fn jwt_verification(
         StatusCode::UNAUTHORIZED
     })?;
 
+    // ✅ DEBUG: Log token info for diagnostics
+    tracing::debug!(
+        path = %path,
+        token_length = token.len(),
+        token_prefix = &token[..token.len().min(30)],
+        "Attempting to verify JWT token"
+    );
+
     // Verify JWT token
     let claims = state.auth_manager.verify_token(token).map_err(|e| {
-        tracing::warn!(error = %e, path = %path, "JWT verification failed");
+        tracing::error!(
+            error = %e,
+            path = %path,
+            token_length = token.len(),
+            "JWT verification failed"
+        );
         StatusCode::UNAUTHORIZED
     })?;
 

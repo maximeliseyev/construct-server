@@ -20,6 +20,7 @@ use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
 use crate::handlers::session::Clients;
 use crate::kafka::MessageProducer;
+use crate::key_management::KeyManagementSystem;
 use crate::message_gateway::MessageGatewayClient;
 use crate::queue::MessageQueue;
 use std::sync::Arc;
@@ -66,6 +67,10 @@ pub struct AppContext {
     pub server_signer: Option<Arc<ServerSigner>>,
     /// Cache for remote server public keys (for signature verification)
     pub public_key_cache: Arc<PublicKeyCache>,
+    /// Key management system for automatic key rotation (optional)
+    /// When None: key management is disabled (uses static keys from config)
+    /// When Some: automatic rotation, Vault integration, hot reload
+    pub key_management: Option<Arc<KeyManagementSystem>>,
 }
 
 impl AppContext {
@@ -99,6 +104,7 @@ impl AppContext {
             delivery_ack_manager: None, // Disabled by default
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
+            key_management: None,        // Disabled by default
         }
     }
 
@@ -133,6 +139,7 @@ impl AppContext {
             delivery_ack_manager: None, // Disabled by default
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
+            key_management: None,        // Disabled by default
         }
     }
 
@@ -142,6 +149,12 @@ impl AppContext {
         manager: Arc<DeliveryAckManager<PostgresDeliveryStorage>>,
     ) -> Self {
         self.delivery_ack_manager = Some(manager);
+        self
+    }
+
+    /// Set key management system (builder pattern)
+    pub fn with_key_management(mut self, kms: Arc<KeyManagementSystem>) -> Self {
+        self.key_management = Some(kms);
         self
     }
 
@@ -293,6 +306,7 @@ pub struct AppContextBuilder {
     server_instance_id: Option<String>,
     gateway_client: Option<Arc<Mutex<MessageGatewayClient>>>,
     delivery_ack_manager: Option<Arc<DeliveryAckManager<PostgresDeliveryStorage>>>,
+    key_management: Option<Arc<KeyManagementSystem>>,
 }
 
 impl AppContextBuilder {
@@ -309,6 +323,7 @@ impl AppContextBuilder {
             server_instance_id: None,
             gateway_client: None,
             delivery_ack_manager: None,
+            key_management: None,
         }
     }
 
@@ -370,6 +385,11 @@ impl AppContextBuilder {
         self
     }
 
+    pub fn with_key_management(mut self, kms: Arc<KeyManagementSystem>) -> Self {
+        self.key_management = Some(kms);
+        self
+    }
+
     /// Build AppContext from builder
     ///
     /// Initializes server_signer and public_key_cache from config if available.
@@ -409,6 +429,7 @@ impl AppContextBuilder {
             delivery_ack_manager: self.delivery_ack_manager,
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
+            key_management: self.key_management,
         })
     }
 }

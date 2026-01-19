@@ -16,6 +16,20 @@
 #   messaging-service - construct-messaging-service
 #   notification-service - construct-notification-service
 #   (no argument) - all services
+#
+# JWT Configuration:
+#   - HS256 (legacy): Set JWT_SECRET (symmetric key)
+#   - RS256 (recommended): Set JWT_PRIVATE_KEY and JWT_PUBLIC_KEY (RSA keypair)
+#   - Key Management System: Requires RS256 + VAULT_ADDR
+#
+# Migration to RS256:
+#   1. Generate RSA keypair:
+#      openssl genrsa -out private.pem 4096
+#      openssl rsa -in private.pem -pubout -out public.pem
+#   2. Set in .env:
+#      JWT_PRIVATE_KEY="$(cat private.pem)"
+#      JWT_PUBLIC_KEY="$(cat public.pem)"
+#   3. Keep JWT_SECRET for backward compatibility during migration
 
 set -e
 
@@ -60,6 +74,21 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     --app construct-server
+
+  # Optional: JWT RSA keys for RS256 (if provided)
+  # Required for Key Management System support
+  if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
+    echo "Setting JWT RSA keys for RS256 algorithm..."
+    flyctl secrets set \
+      JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
+      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
+      --app construct-server
+    echo "✅ RS256 keys configured - Key Management System ready"
+  elif [ -n "$VAULT_ADDR" ]; then
+    echo "⚠️  Warning: Key Management System enabled but JWT_PRIVATE_KEY/JWT_PUBLIC_KEY not set"
+    echo "   RS256 keys are required for automatic key rotation"
+    echo "   Key Management System will not work until RS256 keys are configured"
+  fi
 fi
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
@@ -75,6 +104,13 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     --app construct-delivery-worker
+
+  # Optional: JWT public key for RS256 (only public key needed for verification)
+  if [ -n "$JWT_PUBLIC_KEY" ]; then
+    flyctl secrets set \
+      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
+      --app construct-delivery-worker
+  fi
 fi
 
 # ============================================================================
@@ -231,6 +267,208 @@ if [ -n "$DELIVERY_ACK_MODE" ] && [ "$DELIVERY_ACK_MODE" != "disabled" ]; then
 fi
 
 # ============================================================================
+# Key Management System secrets (if enabled)
+# ============================================================================
+#
+# IMPORTANT: Key Management System requires RS256 (RSA keys), not HS256 (JWT_SECRET)
+# - JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must be set for services using Key Management
+# - Key Management System uses Vault Transit engine with RSA-4096 keys
+# - JWT_SECRET (HS256) is not compatible with automatic key rotation
+#
+# Migration path:
+# 1. Generate RSA keypair: openssl genrsa -out private.pem 4096
+# 2. Extract public key: openssl rsa -in private.pem -pubout -out public.pem
+# 3. Set JWT_PRIVATE_KEY and JWT_PUBLIC_KEY in .env
+# 4. Set VAULT_ADDR and authentication (VAULT_TOKEN or VAULT_K8S_ROLE)
+# 5. Initialize keys in Vault (see docs/KEY_MANAGEMENT_PRODUCTION.md)
+# ============================================================================
+
+if [ -n "$VAULT_ADDR" ]; then
+  # Key Management System is enabled - set secrets for all services that use it
+  echo ""
+  echo "Setting up Key Management System secrets..."
+  
+  # Check if RS256 keys are set (required for Key Management System)
+  if [ -z "$JWT_PRIVATE_KEY" ] || [ -z "$JWT_PUBLIC_KEY" ]; then
+    echo ""
+    echo "⚠️  WARNING: Key Management System requires RS256 (JWT_PRIVATE_KEY/JWT_PUBLIC_KEY)"
+    echo "   JWT_SECRET (HS256) is not compatible with automatic key rotation"
+    echo ""
+    echo "   To enable Key Management System:"
+    echo "   1. Generate RSA keypair:"
+    echo "      openssl genrsa -out private.pem 4096"
+    echo "      openssl rsa -in private.pem -pubout -out public.pem"
+    echo "   2. Set in .env:"
+    echo "      JWT_PRIVATE_KEY=\"\$(cat private.pem)\""
+    echo "      JWT_PUBLIC_KEY=\"\$(cat public.pem)\""
+    echo "   3. Re-run this script"
+    echo ""
+    echo "   Key Management System will be disabled until RS256 keys are configured."
+  fi
+
+  # Set secrets for construct-server
+  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
+    echo "Setting Key Management secrets for construct-server..."
+    # Build secrets command dynamically based on what's set
+    if [ -n "$VAULT_TOKEN" ] && [ -n "$VAULT_K8S_ROLE" ]; then
+      # Both are set - use both
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-server
+    elif [ -n "$VAULT_TOKEN" ]; then
+      # Only VAULT_TOKEN is set
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-server
+    elif [ -n "$VAULT_K8S_ROLE" ]; then
+      # Only VAULT_K8S_ROLE is set
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-server
+    else
+      # Neither is set - just set VAULT_ADDR (will fail at runtime, but allow setup)
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-server
+    fi
+  fi
+
+  # Set secrets for construct-auth-service
+  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
+    echo "Setting Key Management secrets for construct-auth-service..."
+    if [ -n "$VAULT_TOKEN" ] && [ -n "$VAULT_K8S_ROLE" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-auth-service
+    elif [ -n "$VAULT_TOKEN" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-auth-service
+    elif [ -n "$VAULT_K8S_ROLE" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-auth-service
+    else
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-auth-service
+    fi
+  fi
+
+  # Set secrets for construct-messaging-service
+  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
+    echo "Setting Key Management secrets for construct-messaging-service..."
+    if [ -n "$VAULT_TOKEN" ] && [ -n "$VAULT_K8S_ROLE" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-messaging-service
+    elif [ -n "$VAULT_TOKEN" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-messaging-service
+    elif [ -n "$VAULT_K8S_ROLE" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-messaging-service
+    else
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-messaging-service
+    fi
+  fi
+
+  # Set secrets for construct-notification-service
+  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
+    echo "Setting Key Management secrets for construct-notification-service..."
+    if [ -n "$VAULT_TOKEN" ] && [ -n "$VAULT_K8S_ROLE" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-notification-service
+    elif [ -n "$VAULT_TOKEN" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_TOKEN="$VAULT_TOKEN" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-notification-service
+    elif [ -n "$VAULT_K8S_ROLE" ]; then
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-notification-service
+    else
+      flyctl secrets set \
+        VAULT_ADDR="$VAULT_ADDR" \
+        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
+        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
+        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
+        --app construct-notification-service
+    fi
+  fi
+else
+  echo ""
+  echo "ℹ️  Key Management System disabled (VAULT_ADDR not set)"
+  echo "   To enable: Set VAULT_ADDR and either VAULT_TOKEN or VAULT_K8S_ROLE in .env"
+fi
+
+# ============================================================================
 # Message Gateway secrets (if you want to use Message Gateway service)
 # ============================================================================
 #
@@ -277,6 +515,21 @@ if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
     --app construct-message-gateway
+
+  # Optional: JWT RSA keys for RS256 (if provided)
+  # Required for Key Management System support
+  if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
+    echo "Setting JWT RSA keys for RS256 algorithm..."
+    flyctl secrets set \
+      JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
+      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
+      --app construct-message-gateway
+    echo "✅ RS256 keys configured - Key Management System ready"
+  elif [ -n "$VAULT_ADDR" ]; then
+    echo "⚠️  Warning: Key Management System enabled but JWT_PRIVATE_KEY/JWT_PUBLIC_KEY not set"
+    echo "   RS256 keys are required for automatic key rotation"
+    echo "   Key Management System will not work until RS256 keys are configured"
+  fi
 
   # Instance domain and federation (required for MessageRouter to route messages)
   if [ -n "$INSTANCE_DOMAIN" ]; then
@@ -339,12 +592,14 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
     --app construct-api-gateway
 
   # Optional: JWT RSA keys for RS256 (if provided)
+  # Required for Key Management System support
   if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
     echo "Setting JWT RSA keys for RS256 algorithm..."
     flyctl secrets set \
       JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
       JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
       --app construct-api-gateway
+    echo "✅ RS256 keys configured"
   fi
 fi
 
@@ -368,11 +623,17 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
     --app construct-auth-service
 
   # Optional: JWT RSA keys for RS256 (if provided)
+  # Required for Key Management System support
   if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
+    echo "Setting JWT RSA keys for RS256 algorithm..."
     flyctl secrets set \
       JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
       JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
       --app construct-auth-service
+    echo "✅ RS256 keys configured - Key Management System ready"
+  elif [ -n "$VAULT_ADDR" ]; then
+    echo "⚠️  Warning: Key Management System enabled but JWT_PRIVATE_KEY/JWT_PUBLIC_KEY not set"
+    echo "   RS256 keys are required for automatic key rotation"
   fi
 fi
 

@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::handlers::session::Clients;
 use crate::kafka::MessageProducer;
+use crate::key_management::KeyManagementSystem;
 use crate::queue::MessageQueue;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ pub struct MessagingServiceContext {
     pub auth_manager: Arc<AuthManager>,
     pub kafka_producer: Arc<MessageProducer>,
     pub config: Arc<Config>,
+    pub key_management: Option<Arc<KeyManagementSystem>>,
 }
 
 impl MessagingServiceContext {

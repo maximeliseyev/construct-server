@@ -12,6 +12,7 @@ use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::handlers::session::Clients;
+use crate::key_management::KeyManagementSystem;
 use crate::queue::MessageQueue;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,6 +25,7 @@ pub struct AuthServiceContext {
     pub queue: Arc<Mutex<MessageQueue>>,
     pub auth_manager: Arc<AuthManager>,
     pub config: Arc<Config>,
+    pub key_management: Option<Arc<KeyManagementSystem>>,
 }
 
 impl AuthServiceContext {

@@ -122,7 +122,8 @@ CREATE INDEX idx_encrypted_data_needs_reencrypt
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS key_access_log (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
+    partition_date DATE NOT NULL DEFAULT CURRENT_DATE,
 
     key_id VARCHAR(64) NOT NULL,
     operation VARCHAR(20) NOT NULL,  -- 'sign', 'verify', 'encrypt', 'decrypt'
@@ -135,8 +136,8 @@ CREATE TABLE IF NOT EXISTS key_access_log (
     -- For anomaly detection
     request_count INTEGER DEFAULT 1,  -- Aggregated per minute
 
-    -- Partitioning hint
-    partition_date DATE NOT NULL DEFAULT CURRENT_DATE
+    -- PRIMARY KEY must include partition_date for partitioned tables
+    PRIMARY KEY (id, partition_date)
 ) PARTITION BY RANGE (partition_date);
 
 -- Create partitions for the next 12 months
@@ -324,7 +325,7 @@ BEGIN
     );
 
     -- Notify (this would trigger an alert in production)
-    NOTIFY key_emergency_revocation, p_key_id;
+    PERFORM pg_notify('key_emergency_revocation', p_key_id);
 END;
 $$ LANGUAGE plpgsql;
 

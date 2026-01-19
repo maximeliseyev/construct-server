@@ -11,7 +11,9 @@
 	status-server status-worker status-gateway status-media status-all \
 	status-api-gateway status-auth-service status-user-service status-messaging-service status-notification-service \
 	status-microservices status-everything \
-	db-migrate db-up db-down
+	db-migrate db-up db-down \
+	generate-jwt-keys vault-dev-up vault-dev-down vault-dev-status vault-dev-init \
+	key-mgmt-check key-mgmt-init
 
 # ============================================================================
 # Help
@@ -100,11 +102,22 @@ help:
 	@echo "  make db-up              Start local PostgreSQL + Redis"
 	@echo "  make db-down            Stop local databases"
 	@echo ""
+	@echo "🔑 Key Management & RS256:"
+	@echo "  make generate-jwt-keys  Generate RSA keypair for RS256 (JWT_PRIVATE_KEY/JWT_PUBLIC_KEY)"
+	@echo "  make vault-dev-up       Start Vault in dev mode (Docker)"
+	@echo "  make vault-dev-down     Stop Vault dev container"
+	@echo "  make vault-dev-status   Check Vault dev status"
+	@echo "  make vault-dev-init     Initialize Vault dev with Transit keys"
+	@echo "  make key-mgmt-check     Check Key Management System configuration"
+	@echo "  make key-mgmt-init      Initialize Key Management System in database"
+	@echo ""
 	@echo "💡 Common Workflows:"
 	@echo "  Development:   make docker-up && make docker-logs"
 	@echo "  Deploy:        make deploy-all"
 	@echo "  Deploy microservices: make deploy-microservices"
 	@echo "  First deploy:  make secrets-all && make deploy-all"
+	@echo "  RS256 setup:   make generate-jwt-keys && make vault-dev-up && make vault-dev-init"
+	@echo "  Key Management: make vault-dev-up && make vault-dev-init && make key-mgmt-init"
 	@echo "  Monitoring:    make status-all && make logs-server"
 	@echo "  Monitor microservices: make status-microservices && make logs-api-gateway"
 	@echo "  Monitor everything: make status-everything"
@@ -507,3 +520,211 @@ db-up:
 db-down:
 	@echo "🛑 Stopping local databases..."
 	docker-compose -f ops/docker-compose.yml stop postgres redis
+
+# ============================================================================
+# Key Management & RS256
+# ============================================================================
+
+generate-jwt-keys:
+	@echo "🔑 Generating RSA keypair for RS256..."
+	@if [ -f jwt-private.pem ] || [ -f jwt-public.pem ]; then \
+		echo "⚠️  Warning: jwt-private.pem or jwt-public.pem already exists"; \
+		echo "   Delete them first if you want to regenerate:"; \
+		echo "   rm -f jwt-private.pem jwt-public.pem"; \
+		exit 1; \
+	fi
+	@openssl genrsa -out jwt-private.pem 4096
+	@openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem
+	@echo "✅ RSA keypair generated:"
+	@echo "   Private key: jwt-private.pem"
+	@echo "   Public key:  jwt-public.pem"
+	@echo ""
+	@echo "📝 Add to .env file:"
+	@echo "   JWT_PRIVATE_KEY=\"\$$(cat jwt-private.pem)\""
+	@echo "   JWT_PUBLIC_KEY=\"\$$(cat jwt-public.pem)\""
+	@echo ""
+	@echo "⚠️  Keep jwt-private.pem secure and never commit it to git!"
+
+vault-dev-up:
+	@echo "🔐 Starting Vault in dev mode (Docker)..."
+	@if docker ps -a --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
+		echo "⚠️  Vault container already exists. Starting it..."; \
+		docker start vault-dev || true; \
+	else \
+		docker run -d --name vault-dev \
+			-p 8200:8200 \
+			-e 'VAULT_DEV_ROOT_TOKEN_ID=dev-root-token' \
+			-e 'VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200' \
+			vault:latest; \
+	fi
+	@sleep 2
+	@echo "✅ Vault started at http://127.0.0.1:8200"
+	@echo "   Root token: dev-root-token"
+	@echo ""
+	@echo "📝 Add to .env file:"
+	@echo "   VAULT_ADDR=http://127.0.0.1:8200"
+	@echo "   VAULT_TOKEN=dev-root-token"
+	@echo ""
+	@echo "💡 Next steps:"
+	@echo "   make vault-dev-init    Initialize Transit keys"
+
+vault-dev-down:
+	@echo "🛑 Stopping Vault dev container..."
+	@docker stop vault-dev 2>/dev/null || echo "Vault container not running"
+	@echo "✅ Vault stopped"
+
+vault-dev-status:
+	@echo "📊 Checking Vault dev status..."
+	@if ! docker ps --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
+		echo "❌ Vault container is not running"; \
+		echo "   Start it with: make vault-dev-up"; \
+		exit 1; \
+	fi
+	@echo "✅ Vault container is running"
+	@echo ""
+	@echo "Testing connection..."
+	@VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root-token vault status 2>/dev/null || \
+		(echo "❌ Cannot connect to Vault. Is it running?" && exit 1)
+	@echo "✅ Vault is accessible"
+	@echo ""
+	@echo "Checking Transit engine..."
+	@VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root-token vault secrets list 2>/dev/null | grep -q transit && \
+		echo "✅ Transit engine is enabled" || \
+		echo "⚠️  Transit engine not enabled. Run: make vault-dev-init"
+
+vault-dev-init:
+	@echo "🔧 Initializing Vault dev with Transit keys..."
+	@if ! docker ps --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
+		echo "❌ Vault container is not running"; \
+		echo "   Start it first: make vault-dev-up"; \
+		exit 1; \
+	fi
+	@export VAULT_ADDR=http://127.0.0.1:8200 && \
+	export VAULT_TOKEN=dev-root-token && \
+		echo "Enabling Transit secrets engine..." && \
+		vault secrets enable transit 2>/dev/null || echo "Transit engine already enabled" && \
+		echo "" && \
+		echo "Creating Transit keys..." && \
+		vault write transit/keys/jwt-signing type=rsa-4096 auto_rotate_period=0 deletion_allowed=false && \
+		echo "✅ Created jwt-signing key" && \
+		vault write transit/keys/apns-encryption type=chacha20-poly1305 auto_rotate_period=0 deletion_allowed=false && \
+		echo "✅ Created apns-encryption key" && \
+		vault write transit/keys/federation-signing type=ed25519 auto_rotate_period=0 deletion_allowed=false && \
+		echo "✅ Created federation-signing key" && \
+		vault write transit/keys/database-encryption type=aes256-gcm96 auto_rotate_period=0 deletion_allowed=false && \
+		echo "✅ Created database-encryption key" && \
+		echo "" && \
+		echo "✅ Vault initialized with all Transit keys!"
+	@echo ""
+	@echo "💡 Next steps:"
+	@echo "   1. Make sure VAULT_ADDR and VAULT_TOKEN are in .env"
+	@echo "   2. Run database migrations: make db-migrate"
+	@echo "   3. Initialize keys in database: make key-mgmt-init"
+
+key-mgmt-check:
+	@echo "🔍 Checking Key Management System configuration..."
+	@if [ ! -f .env ]; then \
+		echo "❌ .env file not found"; \
+		exit 1; \
+	fi
+	@echo "Checking environment variables..."
+	@grep -q "^VAULT_ADDR=" .env 2>/dev/null && \
+		echo "✅ VAULT_ADDR is set" || \
+		echo "⚠️  VAULT_ADDR is not set in .env"
+	@grep -q "^VAULT_TOKEN=" .env 2>/dev/null && \
+		echo "✅ VAULT_TOKEN is set" || \
+		(grep -q "^VAULT_K8S_ROLE=" .env 2>/dev/null && \
+			echo "✅ VAULT_K8S_ROLE is set (Kubernetes auth)" || \
+			echo "⚠️  Neither VAULT_TOKEN nor VAULT_K8S_ROLE is set")
+	@grep -q "^JWT_PRIVATE_KEY=" .env 2>/dev/null && \
+		echo "✅ JWT_PRIVATE_KEY is set (RS256)" || \
+		echo "⚠️  JWT_PRIVATE_KEY is not set (RS256 required for Key Management)"
+	@grep -q "^JWT_PUBLIC_KEY=" .env 2>/dev/null && \
+		echo "✅ JWT_PUBLIC_KEY is set (RS256)" || \
+		echo "⚠️  JWT_PUBLIC_KEY is not set (RS256 required for Key Management)"
+	@echo ""
+	@echo "Checking Vault connection..."
+	@if grep -q "^VAULT_ADDR=" .env 2>/dev/null; then \
+		VAULT_ADDR=$$(grep "^VAULT_ADDR=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'"); \
+		if grep -q "^VAULT_TOKEN=" .env 2>/dev/null; then \
+			VAULT_TOKEN=$$(grep "^VAULT_TOKEN=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'"); \
+			export VAULT_ADDR && export VAULT_TOKEN && \
+			vault status >/dev/null 2>&1 && \
+				echo "✅ Vault is accessible" || \
+				echo "❌ Cannot connect to Vault at $$VAULT_ADDR"; \
+		else \
+			echo "⚠️  Cannot test Vault connection (VAULT_TOKEN not set)"; \
+		fi; \
+	else \
+		echo "⚠️  Cannot test Vault connection (VAULT_ADDR not set)"; \
+	fi
+
+key-mgmt-init:
+	@echo "🔧 Initializing Key Management System in database..."
+	@echo "This will insert initial key records into the master_keys table."
+	@echo ""
+	@echo "⚠️  Make sure you have:"
+	@echo "   1. Run database migrations: make db-migrate"
+	@echo "   2. Initialized Vault with Transit keys: make vault-dev-init"
+	@echo "   3. Set VAULT_ADDR and VAULT_TOKEN in .env"
+	@echo ""
+	@read -p "Continue? [y/N] " REPLY; \
+	if [ "$$REPLY" != "y" ] && [ "$$REPLY" != "Y" ]; then \
+		echo "Cancelled."; \
+		exit 1; \
+	fi
+	@if [ -z "$$DATABASE_URL" ]; then \
+		if [ -f .env ]; then \
+			export $$(grep -v '^#' .env | xargs); \
+		fi; \
+	fi
+	@if [ -z "$$DATABASE_URL" ]; then \
+		echo "❌ DATABASE_URL not set. Set it in .env or environment."; \
+		exit 1; \
+	fi
+	@echo "Connecting to database..."
+	@psql "$$DATABASE_URL" -c "SELECT COUNT(*) FROM master_keys WHERE key_type = 'jwt' AND status = 'active';" >/dev/null 2>&1 || \
+		(echo "❌ Cannot connect to database or master_keys table doesn't exist." && \
+		 echo "   Run migrations first: make db-migrate" && exit 1)
+	@echo "Inserting initial keys..."
+	@psql "$$DATABASE_URL" <<SQL
+-- Insert initial JWT key
+INSERT INTO master_keys (
+    key_type, vault_path, vault_version, status, activated_at,
+    key_id, algorithm, rotation_reason, rotated_by
+) VALUES (
+    'jwt', 'jwt-signing', 1, 'active', NOW(),
+    'jwt_' || gen_random_uuid(), 'RS256', 'initial', 'system:init'
+) ON CONFLICT DO NOTHING;
+
+-- Insert initial APNS key
+INSERT INTO master_keys (
+    key_type, vault_path, vault_version, status, activated_at,
+    key_id, algorithm, rotation_reason, rotated_by
+) VALUES (
+    'apns', 'apns-encryption', 1, 'active', NOW(),
+    'apns_' || gen_random_uuid(), 'ChaCha20-Poly1305', 'initial', 'system:init'
+) ON CONFLICT DO NOTHING;
+
+-- Insert initial Federation key
+INSERT INTO master_keys (
+    key_type, vault_path, vault_version, status, activated_at,
+    key_id, algorithm, rotation_reason, rotated_by
+) VALUES (
+    'federation', 'federation-signing', 1, 'active', NOW(),
+    'federation_' || gen_random_uuid(), 'Ed25519', 'initial', 'system:init'
+) ON CONFLICT DO NOTHING;
+
+-- Insert initial Database encryption key
+INSERT INTO master_keys (
+    key_type, vault_path, vault_version, status, activated_at,
+    key_id, algorithm, rotation_reason, rotated_by
+) VALUES (
+    'database', 'database-encryption', 1, 'active', NOW(),
+    'database_' || gen_random_uuid(), 'AES-256-GCM', 'initial', 'system:init'
+) ON CONFLICT DO NOTHING;
+SQL
+	@echo "✅ Key Management System initialized in database"
+	@echo ""
+	@echo "💡 Verify with:"
+	@echo "   psql \$$DATABASE_URL -c \"SELECT key_type, key_id, status FROM master_keys;\""

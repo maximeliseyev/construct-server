@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{decode_header, Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -154,54 +154,132 @@ impl AuthManager {
     }
 
     /// Verify JWT token with support for both RS256 and HS256 (backward compatibility)
+    /// 
+    /// This method first tries to decode the token header to determine the algorithm,
+    /// then uses the appropriate key for verification. This ensures tokens created with
+    /// RS256 can be verified even if the service was initialized in HS256 mode (and vice versa),
+    /// as long as the appropriate keys are available.
     pub fn verify_token(&self, token: &str) -> Result<Claims> {
         // First, try to decode the token header to determine algorithm
-        // If we can't decode the header, try both algorithms
+        let token_algorithm = match decode_header(token) {
+            Ok(header) => Some(header.alg),
+            Err(_) => {
+                // If we can't decode the header, we'll try both algorithms
+                None
+            }
+        };
 
-        // Try primary algorithm first (current algorithm)
-        match self.current_algorithm {
-            JwtAlgorithm::RS256 => {
-                // Try RS256 first
-                let mut validation = Validation::new(Algorithm::RS256);
-                validation.set_issuer(&[self.issuer.clone()]);
+        // Helper function to verify with a specific algorithm
+        let verify_with_algorithm = |alg: Algorithm, key: &DecodingKey| -> Result<Claims> {
+            let mut validation = Validation::new(alg);
+            validation.set_issuer(&[self.issuer.clone()]);
+            let token_data = decode::<Claims>(token, key, &validation)?;
+            Ok(token_data.claims)
+        };
 
-                match decode::<Claims>(token, &self.decoding_key, &validation) {
-                    Ok(token_data) => Ok(token_data.claims),
-                    Err(_) => {
-                        // If RS256 fails and we have legacy HS256 support, try that
-                        if let Some(ref legacy_key) = self.legacy_decoding_key {
-                            tracing::debug!("RS256 verification failed, trying legacy HS256");
-                            let mut legacy_validation = Validation::new(Algorithm::HS256);
-                            legacy_validation.set_issuer(&[self.issuer.clone()]);
-                            match decode::<Claims>(token, legacy_key, &legacy_validation) {
-                                Ok(token_data) => {
-                                    tracing::info!(
-                                        "Successfully verified legacy HS256 token - user should re-login for RS256 token"
-                                    );
-                                    Ok(token_data.claims)
+        // If we know the algorithm from the header, try that first
+        if let Some(alg) = token_algorithm {
+            match alg {
+                Algorithm::RS256 => {
+                    // Token is RS256 - need RSA public key
+                    if matches!(self.current_algorithm, JwtAlgorithm::RS256) {
+                        // We have RSA keys configured
+                        match verify_with_algorithm(Algorithm::RS256, &self.decoding_key) {
+                            Ok(claims) => return Ok(claims),
+                            Err(e) => {
+                                tracing::debug!(error = %e, "RS256 verification failed with primary key");
+                                // Try legacy HS256 if available
+                                if let Some(ref legacy_key) = self.legacy_decoding_key {
+                                    tracing::debug!("Trying legacy HS256 as fallback");
+                                    if let Ok(claims) = verify_with_algorithm(Algorithm::HS256, legacy_key) {
+                                        tracing::info!(
+                                            "Successfully verified legacy HS256 token - user should re-login for RS256 token"
+                                        );
+                                        return Ok(claims);
+                                    }
                                 }
-                                Err(e) => Err(anyhow::anyhow!(
-                                    "Token verification failed (RS256 and HS256): {}",
+                                return Err(anyhow::anyhow!(
+                                    "Failed to verify RS256 token: {}. Make sure JWT_PUBLIC_KEY matches the key used to sign the token.",
                                     e
-                                )),
+                                ));
                             }
-                        } else {
-                            // No legacy support, return RS256 error
-                            Err(anyhow::anyhow!(
-                                "Token verification failed: RS256 decode error"
-                            ))
                         }
+                    } else {
+                        // Token is RS256 but we don't have RSA keys configured
+                        return Err(anyhow::anyhow!(
+                            "Token uses RS256 algorithm, but JWT_PUBLIC_KEY is not configured. \
+                            Please set JWT_PUBLIC_KEY to verify RS256 tokens, or ensure tokens are created with HS256."
+                        ));
                     }
                 }
-            }
-            JwtAlgorithm::HS256 => {
-                // Legacy HS256 mode
-                let mut validation = Validation::new(Algorithm::HS256);
-                validation.set_issuer(&[self.issuer.clone()]);
-                let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
-                    .context("Failed to verify HS256 token")?;
-                Ok(token_data.claims)
+                Algorithm::HS256 => {
+                    // Token is HS256 - need symmetric secret
+                    if let Some(ref legacy_key) = self.legacy_decoding_key {
+                        // We have legacy HS256 support
+                        match verify_with_algorithm(Algorithm::HS256, legacy_key) {
+                            Ok(claims) => return Ok(claims),
+                            Err(e) => {
+                                tracing::debug!(error = %e, "HS256 verification failed with legacy key");
+                            }
+                        }
+                    }
+                    if matches!(self.current_algorithm, JwtAlgorithm::HS256) {
+                        // We're in HS256 mode
+                        match verify_with_algorithm(Algorithm::HS256, &self.decoding_key) {
+                            Ok(claims) => return Ok(claims),
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
+                                    "Failed to verify HS256 token: {}. Make sure JWT_SECRET matches the secret used to sign the token.",
+                                    e
+                                ));
+                            }
+                        }
+                    } else {
+                        // Token is HS256 but we don't have JWT_SECRET configured
+                        return Err(anyhow::anyhow!(
+                            "Token uses HS256 algorithm, but JWT_SECRET is not configured. \
+                            Please set JWT_SECRET to verify HS256 tokens, or ensure tokens are created with RS256."
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unsupported JWT algorithm: {:?}. Only RS256 and HS256 are supported.",
+                        alg
+                    ));
+                }
             }
         }
+
+        // If we couldn't determine the algorithm from the header, try both (if available)
+        // This provides backward compatibility for tokens with malformed headers
+        tracing::debug!("Could not determine algorithm from token header, trying both algorithms");
+
+        // Try RS256 first if we have RSA keys
+        if matches!(self.current_algorithm, JwtAlgorithm::RS256) {
+            if let Ok(claims) = verify_with_algorithm(Algorithm::RS256, &self.decoding_key) {
+                return Ok(claims);
+            }
+        }
+
+        // Try HS256 if we have a secret
+        if let Some(ref legacy_key) = self.legacy_decoding_key {
+            if let Ok(claims) = verify_with_algorithm(Algorithm::HS256, legacy_key) {
+                tracing::info!("Successfully verified token as HS256 (fallback)");
+                return Ok(claims);
+            }
+        }
+        if matches!(self.current_algorithm, JwtAlgorithm::HS256) {
+            if let Ok(claims) = verify_with_algorithm(Algorithm::HS256, &self.decoding_key) {
+                return Ok(claims);
+            }
+        }
+
+        // Both failed
+        Err(anyhow::anyhow!(
+            "Token verification failed: Could not verify token with any available algorithm. \
+            Token may be invalid, expired, or signed with a different key. \
+            Ensure JWT_PUBLIC_KEY (for RS256) or JWT_SECRET (for HS256) matches the key used to sign the token."
+        ))
     }
 }

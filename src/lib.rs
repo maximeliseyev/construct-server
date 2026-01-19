@@ -696,6 +696,43 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .context("Failed to initialize AuthManager - check JWT configuration (JWT_SECRET or JWT_PRIVATE_KEY/JWT_PUBLIC_KEY)")?
     );
 
+    // Initialize Key Management System (optional, requires VAULT_ADDR)
+    let key_management = match key_management::KeyManagementConfig::from_env() {
+        Ok(kms_config) => {
+            tracing::info!("Initializing Key Management System...");
+            match key_management::KeyManagementSystem::new(
+                db_pool.clone(),
+                kms_config,
+            )
+            .await
+            {
+                Ok(kms) => {
+                    // Start background tasks (key refresh, rotation)
+                    if let Err(e) = kms.start().await {
+                        tracing::error!(error = %e, "Failed to start key management background tasks");
+                        return Err(format!("Failed to start key management system: {}", e).into());
+                    }
+                    tracing::info!("Key Management System initialized and started");
+                    Some(Arc::new(kms))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to initialize Key Management System - continuing without automatic key rotation"
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::info!(
+                error = %e,
+                "Key Management System disabled (VAULT_ADDR not configured or invalid config)"
+            );
+            None
+        }
+    };
+
     // WebSocket listener
     let listener = TcpListener::bind(&bind_address).await?;
     tracing::info!("Construct server listening on {} (WebSocket)", bind_address);
@@ -723,6 +760,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Add delivery ACK manager if initialized
     if let Some(manager) = delivery_ack_manager {
         app_context = app_context.with_delivery_ack_manager(manager);
+    }
+
+    // Add key management system if initialized
+    if let Some(kms) = key_management {
+        app_context = app_context.with_key_management(kms);
     }
 
     // Spawn background task to listen for messages from delivery worker
