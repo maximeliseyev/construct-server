@@ -1,5 +1,7 @@
 # Rust
 Cargo.lock
+.cargo/
+target/
 
 # Python
 test_*.py
@@ -8,9 +10,6 @@ __pycache__/
 venv/
 *.egg-info/
 .mypy_cache/
-
-# Rust
-target/
 
 # sqlx query cache
 .sqlx/*

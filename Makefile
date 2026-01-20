@@ -687,43 +687,46 @@ key-mgmt-init:
 		(echo "❌ Cannot connect to database or master_keys table doesn't exist." && \
 		 echo "   Run migrations first: make db-migrate" && exit 1)
 	@echo "Inserting initial keys..."
-	@psql "$$DATABASE_URL" <<SQL
--- Insert initial JWT key
-INSERT INTO master_keys (
-    key_type, vault_path, vault_version, status, activated_at,
-    key_id, algorithm, rotation_reason, rotated_by
-) VALUES (
-    'jwt', 'jwt-signing', 1, 'active', NOW(),
-    'jwt_' || gen_random_uuid(), 'RS256', 'initial', 'system:init'
-) ON CONFLICT DO NOTHING;
-
--- Insert initial APNS key
-INSERT INTO master_keys (
-    key_type, vault_path, vault_version, status, activated_at,
-    key_id, algorithm, rotation_reason, rotated_by
-) VALUES (
-    'apns', 'apns-encryption', 1, 'active', NOW(),
-    'apns_' || gen_random_uuid(), 'ChaCha20-Poly1305', 'initial', 'system:init'
-) ON CONFLICT DO NOTHING;
-
--- Insert initial Federation key
-INSERT INTO master_keys (
-    key_type, vault_path, vault_version, status, activated_at,
-    key_id, algorithm, rotation_reason, rotated_by
-) VALUES (
-    'federation', 'federation-signing', 1, 'active', NOW(),
-    'federation_' || gen_random_uuid(), 'Ed25519', 'initial', 'system:init'
-) ON CONFLICT DO NOTHING;
-
--- Insert initial Database encryption key
-INSERT INTO master_keys (
-    key_type, vault_path, vault_version, status, activated_at,
-    key_id, algorithm, rotation_reason, rotated_by
-) VALUES (
-    'database', 'database-encryption', 1, 'active', NOW(),
-    'database_' || gen_random_uuid(), 'AES-256-GCM', 'initial', 'system:init'
-) ON CONFLICT DO NOTHING;
-SQL
+	@TMPFILE=$$(mktemp) && \
+	printf '%s\n' \
+		"-- Insert initial JWT key" \
+		"INSERT INTO master_keys (" \
+		"    key_type, vault_path, vault_version, status, activated_at," \
+		"    key_id, algorithm, rotation_reason, rotated_by" \
+		") VALUES (" \
+		"    'jwt', 'jwt-signing', 1, 'active', NOW()," \
+		"    'jwt_' || gen_random_uuid(), 'RS256', 'initial', 'system:init'" \
+		") ON CONFLICT DO NOTHING;" \
+		"" \
+		"-- Insert initial APNS key" \
+		"INSERT INTO master_keys (" \
+		"    key_type, vault_path, vault_version, status, activated_at," \
+		"    key_id, algorithm, rotation_reason, rotated_by" \
+		") VALUES (" \
+		"    'apns', 'apns-encryption', 1, 'active', NOW()," \
+		"    'apns_' || gen_random_uuid(), 'ChaCha20-Poly1305', 'initial', 'system:init'" \
+		") ON CONFLICT DO NOTHING;" \
+		"" \
+		"-- Insert initial Federation key" \
+		"INSERT INTO master_keys (" \
+		"    key_type, vault_path, vault_version, status, activated_at," \
+		"    key_id, algorithm, rotation_reason, rotated_by" \
+		") VALUES (" \
+		"    'federation', 'federation-signing', 1, 'active', NOW()," \
+		"    'federation_' || gen_random_uuid(), 'Ed25519', 'initial', 'system:init'" \
+		") ON CONFLICT DO NOTHING;" \
+		"" \
+		"-- Insert initial Database encryption key" \
+		"INSERT INTO master_keys (" \
+		"    key_type, vault_path, vault_version, status, activated_at," \
+		"    key_id, algorithm, rotation_reason, rotated_by" \
+		") VALUES (" \
+		"    'database', 'database-encryption', 1, 'active', NOW()," \
+		"    'database_' || gen_random_uuid(), 'AES-256-GCM', 'initial', 'system:init'" \
+		") ON CONFLICT DO NOTHING;" \
+		> $$TMPFILE && \
+	psql "$$DATABASE_URL" -f $$TMPFILE && \
+	rm -f $$TMPFILE
 	@echo "✅ Key Management System initialized in database"
 	@echo ""
 	@echo "💡 Verify with:"
