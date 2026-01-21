@@ -40,14 +40,14 @@ impl MessageProducer {
             info!("Kafka producer disabled (KAFKA_ENABLED=false)");
             // Create a dummy producer, which requires a minimal config.
             // Suppress librdkafka logs and minimize connection attempts when Kafka is disabled.
-            // 
+            //
             // NOTE: Even with these settings, librdkafka may still attempt to connect and log
             // connection errors. These errors are harmless when Kafka is intentionally disabled.
             // To fully suppress them, set RDKAFKA_LOG_LEVEL=0 environment variable before
             // starting the application.
-            
+
             let mut client_config = create_client_config(config)?;
-            
+
             // Aggressively suppress librdkafka logs and minimize connection attempts
             client_config
                 .set("log_level", "0") // 0 = no logging (suppresses most logs)
@@ -65,7 +65,7 @@ impl MessageProducer {
                 // Suppress statistics and debug output
                 .set("statistics.interval.ms", "0") // Disable statistics
                 .set("debug", ""); // No debug output
-            
+
             let producer = client_config
                 .create()
                 .context("Failed to create disabled Kafka producer")?;

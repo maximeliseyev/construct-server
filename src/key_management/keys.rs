@@ -8,8 +8,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::db::DbPool;
 use super::vault::VaultClient;
+use crate::db::DbPool;
 
 /// Types of managed keys
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -117,7 +117,7 @@ impl KeyManager {
               AND (revoked_at IS NULL)
               AND (deprecated_at IS NULL OR deprecated_at > NOW() - $1::interval)
             ORDER BY key_type, status = 'active' DESC, activated_at DESC
-            "#
+            "#,
         )
         .bind(format!("{} seconds", grace_period_secs))
         .fetch_all(db)
@@ -138,7 +138,10 @@ impl KeyManager {
 
             // For JWT keys, fetch the public key from Vault for local verification
             let public_key = if key_type == KeyType::Jwt {
-                match vault.get_public_key(&row.vault_path, row.vault_version).await {
+                match vault
+                    .get_public_key(&row.vault_path, row.vault_version)
+                    .await
+                {
                     Ok(Some(pk)) => Some(pk.into_bytes()),
                     Ok(None) => None,
                     Err(e) => {
@@ -210,11 +213,7 @@ impl KeyManager {
     }
 
     /// Sign JWT claims using the active JWT key
-    pub async fn sign_jwt<T: Serialize>(
-        &self,
-        vault: &VaultClient,
-        claims: &T,
-    ) -> Result<String> {
+    pub async fn sign_jwt<T: Serialize>(&self, vault: &VaultClient, claims: &T) -> Result<String> {
         let key = self
             .get_active_key(KeyType::Jwt)
             .ok_or_else(|| anyhow::anyhow!("No active JWT key"))?;
@@ -247,9 +246,7 @@ impl KeyManager {
             .await?;
 
         // Extract just the signature part from Vault's format (vault:v1:...)
-        let sig_part = signature
-            .strip_prefix("vault:v1:")
-            .unwrap_or(&signature);
+        let sig_part = signature.strip_prefix("vault:v1:").unwrap_or(&signature);
 
         Ok(format!("{}.{}", message, sig_part))
     }
@@ -316,11 +313,7 @@ impl KeyManager {
     }
 
     /// Decrypt data
-    pub async fn decrypt(
-        &self,
-        vault: &VaultClient,
-        encrypted: &EncryptedData,
-    ) -> Result<Vec<u8>> {
+    pub async fn decrypt(&self, vault: &VaultClient, encrypted: &EncryptedData) -> Result<Vec<u8>> {
         let key = self
             .get_key_by_id(&encrypted.key_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown key ID: {}", encrypted.key_id))?;

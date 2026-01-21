@@ -183,17 +183,14 @@ fn extract_user_id_from_jwt(ctx: &AppContext, headers: &HeaderMap) -> Result<Uui
     );
 
     // Verify and decode JWT
-    let claims = ctx
-        .auth_manager
-        .verify_token(token)
-        .map_err(|e| {
-            tracing::error!(
-                error = %e,
-                token_length = token.len(),
-                "JWT verification failed"
-            );
-            AppError::Auth(format!("Invalid or expired token: {}", e))
-        })?;
+    let claims = ctx.auth_manager.verify_token(token).map_err(|e| {
+        tracing::error!(
+            error = %e,
+            token_length = token.len(),
+            "JWT verification failed"
+        );
+        AppError::Auth(format!("Invalid or expired token: {}", e))
+    })?;
 
     // Note: Token invalidation check is done in middleware or handler level
     // because this function is synchronous and Redis operations are async.

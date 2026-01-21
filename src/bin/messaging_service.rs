@@ -68,6 +68,14 @@ async fn main() -> Result<()> {
     );
     info!("Connected to database");
 
+    // Apply database migrations
+    info!("Applying database migrations...");
+    sqlx::migrate!()
+        .run(&*db_pool)
+        .await
+        .context("Failed to apply database migrations")?;
+    info!("Database migrations applied successfully");
+
     // Initialize Redis
     info!("Connecting to Redis...");
     let queue = Arc::new(Mutex::new(

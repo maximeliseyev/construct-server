@@ -155,11 +155,34 @@ pub struct CsrfConfig {
 impl CsrfConfig {
     pub(crate) fn from_env() -> anyhow::Result<Self> {
         // Check if we're in production
-        let is_production = std::env::var("ENVIRONMENT")
-            .or_else(|_| std::env::var("FLY_APP_NAME"))
-            .or_else(|_| std::env::var("RAILWAY_ENVIRONMENT"))
-            .map(|v| v != "development" && v != "dev" && v != "local")
-            .unwrap_or(false);
+        // Production indicators (any of these means production):
+        // 1. ENVIRONMENT is set and not "development"/"dev"/"local"
+        // 2. FLY_APP_NAME is set (Fly.io always sets this)
+        // 3. FLY_REGION is set (Fly.io always sets this)
+        // 4. RAILWAY_ENVIRONMENT is set and not "development"
+        // 5. Explicit PRODUCTION=true
+        let is_production = std::env::var("PRODUCTION")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or_else(|_| {
+                // Check various production indicators
+                std::env::var("ENVIRONMENT")
+                    .map(|v| {
+                        let env_lower = v.to_lowercase();
+                        env_lower != "development" && env_lower != "dev" && env_lower != "local"
+                    })
+                    .or_else(|_| {
+                        // Fly.io always sets FLY_APP_NAME and FLY_REGION
+                        if std::env::var("FLY_APP_NAME").is_ok()
+                            || std::env::var("FLY_REGION").is_ok()
+                        {
+                            Ok(true)
+                        } else {
+                            std::env::var("RAILWAY_ENVIRONMENT")
+                                .map(|v| v.to_lowercase() != "development")
+                        }
+                    })
+                    .unwrap_or(false)
+            });
 
         let enabled = std::env::var("CSRF_ENABLED")
             .map(|v| v.to_lowercase() == "true")
@@ -177,7 +200,8 @@ impl CsrfConfig {
             Err(_) if is_production && enabled => {
                 anyhow::bail!(
                     "CSRF_SECRET is REQUIRED in production when CSRF is enabled. \
-                    Generate with: openssl rand -hex 32"
+                    Generate with: openssl rand -hex 32. \
+                    Set it via: fly secrets set CSRF_SECRET=\"$(openssl rand -hex 32)\" -a <app-name>"
                 );
             }
             Err(_) => {

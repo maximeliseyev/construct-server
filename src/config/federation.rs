@@ -86,9 +86,7 @@ impl ApnsConfig {
 
         // Validate key format
         if key.len() != 64 {
-            anyhow::bail!(
-                "APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
-            );
+            anyhow::bail!("APNS_DEVICE_TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)");
         }
 
         // In production, zero key is never acceptable

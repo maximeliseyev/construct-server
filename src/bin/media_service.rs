@@ -1,5 +1,5 @@
 // ============================================================================
-// Construct Media Server - Privacy-Focused Media Storage
+// Construct Media Service - Privacy-Focused Media Storage
 // ============================================================================
 //
 // SECURITY DESIGN:
@@ -653,7 +653,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    info!("=== Construct Media Server Starting ===");
+    info!("=== Construct Media Service Starting ===");
 
     // Load configuration
     let config = MediaConfig::from_env()?;

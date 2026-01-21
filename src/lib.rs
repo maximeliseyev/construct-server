@@ -1,26 +1,10 @@
 use anyhow::{Context, Result};
-use bytes::Bytes;
-use http_body_util::Full;
-use redis::AsyncCommands;
-use std::collections::HashMap;
-
 use std::sync::Arc;
-
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::sync::{Mutex, RwLock};
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite;
+use tokio::sync::Mutex;
 use tracing;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
-
-// Re-export IncomingBody for use in handlers
-pub use hyper::body::Incoming as IncomingBody;
 
 pub mod apns;
 pub mod audit;
@@ -34,7 +18,12 @@ pub mod e2e;
 pub mod error;
 pub mod federation;
 pub mod gateway;
-pub mod handlers;
+// WebSocket handlers removed - all clients use REST API now
+// Only federation handlers and session type remain
+pub mod handlers {
+    pub mod federation; // Used in routes/federation.rs
+    pub mod session; // Only for Clients type (used in AppContext)
+}
 pub mod health;
 pub mod kafka;
 pub mod key_management;
@@ -57,460 +46,39 @@ pub mod delivery_worker;
 use auth::AuthManager;
 use config::Config;
 use context::AppContext;
-use error::AppError;
-use handlers::{handle_websocket, session::Clients};
 use kafka::MessageProducer;
 use queue::MessageQueue;
 
-// Old http_handler removed - now using Axum router (Phase 2.1)
+// Monolithic server - simplified to HTTP-only (WebSocket removed)
+// NOTE: This is kept for development/testing only. Production uses microservices.
+pub async fn run_http_server(app_context: AppContext, listener: TcpListener) {
+    use tower::ServiceBuilder;
+    use tower_http::trace::TraceLayer;
 
-pub async fn run_unified_server(app_context: AppContext, listener: TcpListener) {
-    // Phase 2.1 - Axum router integration
     // Create Axum router for HTTP routes
-    let app_context_arc = Arc::new(app_context.clone());
-    let axum_router = Arc::new(routes::create_router(app_context_arc.clone()));
+    let app_context_arc = Arc::new(app_context);
+    let app = routes::create_router(app_context_arc)
+        .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()));
 
-    loop {
-        let (stream, addr) = match listener.accept().await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to accept socket: {}", e);
-                continue;
-            }
-        };
-
-        let ctx = app_context.clone();
-        let router = axum_router.clone();
-
-        tokio::spawn(async move {
-            let io = TokioIo::new(stream);
-
-            let service = service_fn(move |mut req: Request<IncomingBody>| {
-                let ctx = ctx.clone();
-                let router = router.clone();
-                async move {
-                    // Check if this is a WebSocket upgrade request
-                    if req
-                        .headers()
-                        .get("upgrade")
-                        .and_then(|v| v.to_str().ok())
-                        .map(|v| v.eq_ignore_ascii_case("websocket"))
-                        .unwrap_or(false)
-                    {
-                        // Handle WebSocket upgrade (keep existing logic)
-                        let key = match req.headers().get(hyper::header::SEC_WEBSOCKET_KEY) {
-                            Some(key) => key.clone(),
-                            None => {
-                                let mut res = Response::new(Full::new(Bytes::from(
-                                    "Bad Request: Missing Sec-WebSocket-Key",
-                                )));
-                                *res.status_mut() = StatusCode::BAD_REQUEST;
-                                return Ok(res);
-                            }
-                        };
-
-                        let ctx_clone = ctx.clone();
-                        tokio::spawn(async move {
-                            match hyper::upgrade::on(&mut req).await {
-                                Ok(upgraded) => {
-                                    let io = TokioIo::new(upgraded);
-                                    let ws_stream = WebSocketStream::from_raw_socket(
-                                        io,
-                                        tungstenite::protocol::Role::Server,
-                                        None,
-                                    )
-                                    .await;
-                                    use handlers::WebSocketStreamType;
-                                    handle_websocket(
-                                        WebSocketStreamType::Upgraded(ws_stream),
-                                        addr,
-                                        ctx_clone,
-                                    )
-                                    .await;
-                                }
-                                Err(e) => {
-                                    tracing::error!("WebSocket upgrade error: {}", e);
-                                }
-                            }
-                        });
-
-                        // Build the response with the derived key.
-                        let derived_key = tungstenite::handshake::derive_accept_key(key.as_bytes());
-                        let mut res = Response::new(Full::new(Bytes::new()));
-                        *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-
-                        // SECURITY: Replace unwrap() with proper error handling
-                        res.headers_mut().insert(
-                            hyper::header::UPGRADE,
-                            "websocket".parse().map_err(|e| {
-                                tracing::error!(error = %e, "Failed to parse UPGRADE header (this should never happen)");
-                                AppError::HttpHeader(e)
-                            })?,
-                        );
-                        res.headers_mut().insert(
-                            hyper::header::CONNECTION,
-                            "Upgrade".parse().map_err(|e| {
-                                tracing::error!(error = %e, "Failed to parse CONNECTION header (this should never happen)");
-                                AppError::HttpHeader(e)
-                            })?,
-                        );
-                        res.headers_mut().insert(
-                            hyper::header::SEC_WEBSOCKET_ACCEPT,
-                            derived_key.parse().map_err(|e| {
-                                tracing::error!(error = %e, "Failed to parse SEC_WEBSOCKET_ACCEPT header");
-                                AppError::HttpHeader(e)
-                            })?,
-                        );
-                        Ok::<Response<Full<Bytes>>, AppError>(res)
-                    } else {
-                        // Handle regular HTTP with Axum router
-                        // Use tower::Service trait to call the router
-                        use axum::body::Body as AxumBody;
-                        use axum::extract::Request as AxumRequest;
-                        use http_body_util::BodyExt;
-
-                        // Convert hyper::Request to axum::Request
-                        let (parts, body) = req.into_parts();
-                        let body_bytes = match body.collect().await {
-                            Ok(collected) => collected.to_bytes(),
-                            Err(e) => {
-                                tracing::error!(error = %e, "Failed to read request body");
-                                let mut res =
-                                    Response::new(Full::new(Bytes::from("Internal Server Error")));
-                                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                return Ok(res);
-                            }
-                        };
-
-                        let axum_body = AxumBody::from(body_bytes.to_vec());
-                        let mut axum_request = AxumRequest::builder()
-                            .uri(parts.uri)
-                            .method(parts.method)
-                            .body(axum_body)
-                            .map_err(|e| {
-                                tracing::error!(error = %e, "Failed to build axum request");
-                                AppError::Hyper(format!("Failed to build request: {}", e))
-                            })?;
-
-                        // Copy headers
-                        for (key, value) in parts.headers {
-                            if let (Some(name), Ok(val)) =
-                                (key, axum::http::HeaderValue::from_bytes(value.as_bytes()))
-                            {
-                                axum_request.headers_mut().insert(name, val);
-                            }
-                        }
-
-                        // Process through Axum router using tower::ServiceExt::oneshot
-                        use tower::ServiceExt;
-                        let router_clone = (*router).clone();
-                        let axum_response =
-                            router_clone.oneshot(axum_request).await.map_err(|e| {
-                                tracing::error!(error = %e, "Axum router error");
-                                AppError::Unknown(anyhow::anyhow!("Router error: {}", e))
-                            })?;
-
-                        // Convert axum::Response back to hyper::Response
-                        let (parts, body) = axum_response.into_parts();
-                        let body_bytes =
-                            axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
-                                tracing::error!(error = %e, "Failed to read response body");
-                                AppError::Hyper(format!("Failed to read response: {}", e))
-                            })?;
-
-                        let mut hyper_response = Response::builder().status(parts.status);
-
-                        for (key, value) in parts.headers {
-                            if let (Some(name), Ok(val)) = (
-                                key,
-                                hyper::header::HeaderValue::from_bytes(value.as_bytes()),
-                            ) {
-                                hyper_response = hyper_response.header(name, val);
-                            }
-                        }
-
-                        hyper_response
-                            .body(Full::new(Bytes::from(body_bytes.to_vec())))
-                            .map_err(|e| {
-                                tracing::error!(error = %e, "Failed to build hyper response");
-                                AppError::Hyper(format!("Failed to build response: {}", e))
-                            })
-                    }
-                }
-            });
-
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service)
-                .with_upgrades()
-                .await
-            {
-                tracing::error!("Connection error: {:?}", err);
-            }
-        });
-    }
+    tracing::info!("Starting HTTP server (WebSocket support removed)");
+    axum::serve(listener, app)
+        .await
+        .expect("HTTP server failed");
 }
 
-/// Spawns a background task that listens for messages from the delivery worker
-/// and forwards them to connected clients
-///
-/// Phase 2.8: Refactored into smaller functions for better maintainability
-fn spawn_delivery_listener(
-    queue: Arc<Mutex<MessageQueue>>,
-    clients: Clients,
-    server_instance_id: String,
-    config: Arc<Config>,
+// WebSocket delivery listener removed - all clients use REST API now
+// Delivery worker writes to Redis Streams, clients poll via GET /api/v1/messages
+
+// Legacy code removed - kept for reference only
+#[allow(dead_code)]
+fn _spawn_delivery_listener_removed(
+    _queue: Arc<Mutex<MessageQueue>>,
+    _clients: (),
+    _server_instance_id: String,
+    _config: Arc<Config>,
 ) {
-    // ========================================================================
-    // SIMPLIFIED DELIVERY LISTENER
-    // ========================================================================
-    //
-    // АРХИТЕКТУРА: Polling Redis List (без Pub/Sub)
-    //
-    // delivery-worker сохраняет сообщения в Redis List:
-    //   delivery_queue:{server_instance_id}
-    //
-    // Этот listener периодически опрашивает очередь и доставляет сообщения
-    // клиентам через tx.send() → WebSocket
-    //
-    // Преимущества:
-    // - Нет зависимости от Pub/Sub (который был ненадёжным)
-    // - Redis Lists persistent - сообщения НЕ теряются
-    // - Простая архитектура с минимумом точек отказа
-    //
-    // ========================================================================
-
-    let poll_interval = config.delivery_poll_interval_ms;
-    let dead_letter_queue = config.redis_channels.dead_letter_queue.clone();
-    let redis_url = config.redis_url.clone();
-
-    tracing::info!(
-        server_instance_id = %server_instance_id,
-        poll_interval_ms = poll_interval,
-        "🚀 Spawning delivery listener (simplified architecture - polling Redis List)"
-    );
-
-    tokio::spawn(async move {
-        // Initialize dead-letter queue connection
-        let mut dlq_conn = init_dlq_connection(&redis_url).await;
-
-        tracing::info!(
-            server_instance_id = %server_instance_id,
-            "✅ Delivery listener started - polling delivery_queue:{}", server_instance_id
-        );
-
-        // Main polling loop - simple and reliable
-        loop {
-            // Sleep before polling (configurable interval)
-            tokio::time::sleep(tokio::time::Duration::from_millis(poll_interval)).await;
-
-            // Poll the delivery queue
-            let messages = match poll_delivery_queue(&queue, &server_instance_id).await {
-                Ok(msgs) => msgs,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to poll delivery queue");
-                    continue;
-                }
-            };
-
-            if messages.is_empty() {
-                continue;
-            }
-
-            tracing::debug!(
-                count = messages.len(),
-                "Received messages from delivery queue"
-            );
-
-            // Process each message
-            for message_bytes in messages {
-                process_delivery_message(
-                    &message_bytes,
-                    &clients,
-                    &mut dlq_conn,
-                    &dead_letter_queue,
-                )
-                .await;
-            }
-        }
-    });
-}
-
-// ============================================================================
-// Helper Functions (Phase 2.8: Extracted from spawn_delivery_listener)
-// ============================================================================
-
-/// Initializes Redis connection for dead-letter queue
-async fn init_dlq_connection(redis_url: &str) -> Option<redis::aio::MultiplexedConnection> {
-    match redis::Client::open(redis_url) {
-        Ok(client) => match client.get_multiplexed_async_connection().await {
-            Ok(conn) => Some(conn),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "Failed to get Redis connection for DLQ - malformed messages will be dropped"
-                );
-                None
-            }
-        },
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "Failed to create Redis client for DLQ - malformed messages will be dropped"
-            );
-            None
-        }
-    }
-}
-
-/// Polls the delivery queue for new messages
-async fn poll_delivery_queue(
-    queue: &Arc<Mutex<MessageQueue>>,
-    server_instance_id: &str,
-) -> Result<Vec<Vec<u8>>, anyhow::Error> {
-    let mut queue_guard = queue.lock().await;
-    queue_guard.poll_delivery_queue(server_instance_id).await
-}
-
-/// Processes a single delivery message and forwards it to the appropriate client
-async fn process_delivery_message(
-    message_bytes: &[u8],
-    clients: &Clients,
-    dlq_conn: &mut Option<redis::aio::MultiplexedConnection>,
-    dead_letter_queue: &str,
-) {
-    // Try to parse as KafkaMessageEnvelope (Phase 5 format from delivery-worker)
-    if let Ok(envelope) = rmp_serde::from_slice::<kafka::KafkaMessageEnvelope>(message_bytes) {
-        deliver_kafka_envelope(&envelope, clients).await;
-        return;
-    }
-
-    // Try to parse as ChatMessage (old format)
-    if let Ok(chat_msg) = rmp_serde::from_slice::<message::ChatMessage>(message_bytes) {
-        deliver_chat_message(&chat_msg, clients).await;
-        return;
-    }
-
-    // Try to parse as JSON (v3 format)
-    if let Ok(json_str) = std::str::from_utf8(message_bytes) {
-        if let Ok(v3_msg) = serde_json::from_str::<e2e::EncryptedMessageV3>(json_str) {
-            deliver_v3_message(&v3_msg, clients).await;
-            return;
-        }
-    }
-
-    // If none of the formats match, move to dead-letter queue
-    tracing::error!(
-        "Failed to parse message from delivery_queue. Expected KafkaMessageEnvelope (MessagePack), ChatMessage (MessagePack), or EncryptedMessageV3 (JSON). Moving to dead-letter queue."
-    );
-    if let Some(conn) = dlq_conn {
-        let _: Result<(), _> = conn.lpush(dead_letter_queue, message_bytes).await;
-    }
-}
-
-/// Delivers a KafkaMessageEnvelope to the recipient via WebSocket
-async fn deliver_kafka_envelope(envelope: &kafka::KafkaMessageEnvelope, clients: &Clients) {
-    // Convert KafkaMessageEnvelope to ChatMessage for WebSocket delivery
-    let ephemeral_key = envelope
-        .ephemeral_public_key
-        .as_ref()
-        .and_then(|k| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok())
-        .unwrap_or_else(|| vec![0u8; 32]);
-
-    let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.timestamp, 0)
-        .unwrap_or_else(chrono::Utc::now)
-        .timestamp() as u64;
-
-    let chat_msg = message::ChatMessage {
-        id: envelope.message_id.clone(),
-        from: envelope.sender_id.clone(),
-        to: envelope.recipient_id.clone(),
-        content: envelope.encrypted_payload.clone(),
-        ephemeral_public_key: ephemeral_key,
-        message_number: envelope.message_number.unwrap_or(0),
-        timestamp,
-    };
-
-    deliver_to_websocket(
-        &envelope.recipient_id,
-        message::ServerMessage::Message(chat_msg),
-        clients,
-        Some(&envelope.message_id),
-    )
-    .await;
-}
-
-/// Delivers a ChatMessage to the recipient via WebSocket
-async fn deliver_chat_message(chat_msg: &message::ChatMessage, clients: &Clients) {
-    deliver_to_websocket(
-        &chat_msg.to,
-        message::ServerMessage::Message(chat_msg.clone()),
-        clients,
-        Some(&chat_msg.id),
-    )
-    .await;
-}
-
-/// Delivers an EncryptedMessageV3 to the recipient via WebSocket
-async fn deliver_v3_message(v3_msg: &e2e::EncryptedMessageV3, clients: &Clients) {
-    deliver_to_websocket(
-        &v3_msg.recipient_id,
-        message::ServerMessage::EncryptedV3(v3_msg.clone()),
-        clients,
-        None,
-    )
-    .await;
-}
-
-/// Delivers a message to a WebSocket client
-async fn deliver_to_websocket(
-    recipient_id: &str,
-    server_msg: message::ServerMessage,
-    clients: &Clients,
-    message_id: Option<&str>,
-) {
-    let clients_guard = clients.read().await;
-    if let Some(tx) = clients_guard.get(recipient_id) {
-        if tx.send(server_msg).is_err() {
-            if let Some(id) = message_id {
-                tracing::warn!(
-                    recipient_id = %recipient_id,
-                    message_id = %id,
-                    "Failed to send message to client (channel closed)"
-                );
-            } else {
-                tracing::warn!(
-                    recipient_id = %recipient_id,
-                    "Failed to send message to client (channel closed)"
-                );
-            }
-        } else {
-            if let Some(id) = message_id {
-                tracing::info!(
-                    recipient_id = %recipient_id,
-                    message_id = %id,
-                    "Delivered offline message to online client"
-                );
-            } else {
-                tracing::info!(
-                    recipient_id = %recipient_id,
-                    "Delivered offline message to online client"
-                );
-            }
-        }
-    } else {
-        if let Some(id) = message_id {
-            tracing::warn!(
-                recipient_id = %recipient_id,
-                message_id = %id,
-                "Client not found for message delivery"
-            );
-        } else {
-            tracing::warn!(
-                recipient_id = %recipient_id,
-                "Client not found for message delivery"
-            );
-        }
-    }
+    // WebSocket delivery removed - clients use REST API long polling instead
+    // Delivery worker writes to Redis Streams, clients poll via GET /api/v1/messages
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -700,12 +268,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let key_management = match key_management::KeyManagementConfig::from_env() {
         Ok(kms_config) => {
             tracing::info!("Initializing Key Management System...");
-            match key_management::KeyManagementSystem::new(
-                db_pool.clone(),
-                kms_config,
-            )
-            .await
-            {
+            match key_management::KeyManagementSystem::new(db_pool.clone(), kms_config).await {
                 Ok(kms) => {
                     // Start background tasks (key refresh, rotation)
                     if let Err(e) = kms.start().await {
@@ -733,27 +296,31 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // WebSocket listener
+    // HTTP listener (WebSocket removed - all clients use REST API)
     let listener = TcpListener::bind(&bind_address).await?;
-    tracing::info!("Construct server listening on {} (WebSocket)", bind_address);
+    tracing::info!("Construct server listening on {} (HTTP only)", bind_address);
 
+    // Create empty clients map (not used for REST API, but required by AppContext for now)
+    // TODO: Make clients optional in AppContext
+    use std::collections::HashMap;
+    use tokio::sync::RwLock;
+    // Create a dummy Clients type for compatibility
+    type Clients =
+        Arc<RwLock<HashMap<String, tokio::sync::mpsc::UnboundedSender<message::ServerMessage>>>>;
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
-
-    // Generate unique server instance ID for delivery worker coordination
     let server_instance_id = uuid::Uuid::new_v4().to_string();
-    tracing::info!("Server instance ID: {}", server_instance_id);
 
-    // Create application context using builder pattern (Phase 2.8)
+    // Create application context using builder pattern
     let mut app_context = AppContext::builder()
         .with_db_pool(db_pool.clone())
         .with_queue(queue.clone())
         .with_auth_manager(auth_manager.clone())
-        .with_clients(clients.clone())
+        .with_clients(clients)
         .with_config(app_config.clone())
         .with_kafka_producer(kafka_producer.clone())
         .with_apns_client(apns_client.clone())
         .with_token_encryption(token_encryption.clone())
-        .with_server_instance_id(server_instance_id.clone())
+        .with_server_instance_id(server_instance_id)
         .build()
         .expect("Failed to build AppContext");
 
@@ -767,26 +334,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         app_context = app_context.with_key_management(kms);
     }
 
-    // Spawn background task to listen for messages from delivery worker
-    spawn_delivery_listener(
-        queue.clone(),
-        clients.clone(),
-        server_instance_id.clone(),
-        app_config.clone(),
-    );
+    // NOTE: WebSocket delivery listener and server registry removed
+    // - Clients use REST API long polling (GET /api/v1/messages)
+    // - Delivery worker writes to Redis Streams
+    // - No need for server instance registration or WebSocket delivery
 
-    // Spawn heartbeat task to register this server in Redis
-    server_registry::spawn_server_heartbeat(
-        app_config.clone(),
-        queue.clone(),
-        server_instance_id.clone(),
-        app_config.delivery_queue_prefix.clone(),
-    );
-
-    let unified_server = run_unified_server(app_context, listener);
+    let http_server = run_http_server(app_context, listener);
 
     tokio::select! {
-        _ = unified_server => {
+        _ = http_server => {
             tracing::info!("Server shut down.");
         },
         _ = signal::ctrl_c() => {

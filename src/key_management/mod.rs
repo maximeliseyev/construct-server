@@ -11,10 +11,10 @@
 //
 // ============================================================================
 
-pub mod vault;
-pub mod rotation;
 pub mod audit;
 pub mod keys;
+pub mod rotation;
+pub mod vault;
 
 use crate::db::DbPool;
 use anyhow::Result;
@@ -143,9 +143,7 @@ impl KeyManagementSystem {
         vault: Arc<VaultClient>,
         interval_secs: u64,
     ) {
-        let mut interval = tokio::time::interval(
-            std::time::Duration::from_secs(interval_secs)
-        );
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
 
         loop {
             interval.tick().await;

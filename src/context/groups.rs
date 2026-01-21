@@ -15,7 +15,7 @@ use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
 use crate::handlers::session::Clients;
 use crate::kafka::MessageProducer;
-use crate::message_gateway::MessageGatewayClient;
+// MessageGatewayClient removed - was only used for WebSocket
 use crate::queue::MessageQueue;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -54,11 +54,7 @@ pub struct FederationContext {
     pub public_key_cache: Arc<PublicKeyCache>,
 }
 
-/// Gateway-related dependencies
-#[derive(Clone)]
-pub struct GatewayContext {
-    pub gateway_client: Option<Arc<Mutex<MessageGatewayClient>>>,
-}
+// GatewayContext removed - message gateway was only used for WebSocket
 
 /// Delivery-related dependencies
 #[derive(Clone)]

@@ -294,8 +294,9 @@ pub enum ServerMessage {
     DeviceTokenRegistered,
     DeviceTokenUnregistered,
     DeviceTokenPreferencesUpdated,
-    MediaToken(crate::handlers::media::MediaTokenResponse),
-    MediaTokenError(crate::handlers::media::MediaTokenError),
+    // MediaToken and MediaTokenError removed - media upload tokens now handled via REST API
+    // MediaToken(MediaTokenResponse),
+    // MediaTokenError(MediaTokenError),
 }
 
 // ============================================================================

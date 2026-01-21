@@ -354,10 +354,12 @@ async fn test_update_account_password_too_short() {
 
     let body: serde_json::Value = response.json().await.unwrap();
     assert!(body.get("error").is_some());
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("at least 8 characters"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("at least 8 characters")
+    );
 }
 
 #[tokio::test]
@@ -390,10 +392,12 @@ async fn test_update_account_username_not_implemented() {
 
     let body: serde_json::Value = response.json().await.unwrap();
     assert!(body.get("error").is_some());
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("not yet implemented"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("not yet implemented")
+    );
 }
 
 #[tokio::test]
@@ -424,10 +428,12 @@ async fn test_update_account_no_fields() {
 
     let body: serde_json::Value = response.json().await.unwrap();
     assert!(body.get("error").is_some());
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("No update fields provided"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("No update fields provided")
+    );
 }
 
 #[tokio::test]
@@ -589,10 +595,12 @@ async fn test_delete_account_missing_confirm() {
 
     let body: serde_json::Value = response.json().await.unwrap();
     assert!(body.get("error").is_some());
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("explicit confirmation"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("explicit confirmation")
+    );
 
     // Verify account still exists
     let login_request = json!({
@@ -641,10 +649,12 @@ async fn test_delete_account_confirm_false() {
 
     let body: serde_json::Value = response.json().await.unwrap();
     assert!(body.get("error").is_some());
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("explicit confirmation"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("explicit confirmation")
+    );
 }
 
 #[tokio::test]

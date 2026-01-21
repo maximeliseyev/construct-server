@@ -32,7 +32,7 @@ use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
 use crate::handlers::session::Clients;
 use crate::kafka::MessageProducer;
-use crate::message_gateway::MessageGatewayClient;
+// MessageGatewayClient removed - was only used for WebSocket
 use crate::queue::MessageQueue;
 
 /// Trait for database operations (for testing and dependency injection)
@@ -46,7 +46,7 @@ pub trait DatabaseProvider: Send + Sync {
 pub trait MessageProvider: Send + Sync {
     fn queue(&self) -> &Arc<Mutex<MessageQueue>>;
     fn kafka_producer(&self) -> &Arc<MessageProducer>;
-    fn gateway_client(&self) -> Option<&Arc<Mutex<MessageGatewayClient>>>;
+    // gateway_client removed
 }
 
 /// Trait for authentication operations (for testing and dependency injection)
@@ -117,9 +117,7 @@ impl MessageProvider for crate::context::AppContext {
         &self.kafka_producer
     }
 
-    fn gateway_client(&self) -> Option<&Arc<Mutex<MessageGatewayClient>>> {
-        self.gateway_client.as_ref()
-    }
+    // gateway_client removed
 }
 
 impl AuthProvider for crate::context::AppContext {

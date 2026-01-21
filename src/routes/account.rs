@@ -127,8 +127,10 @@ pub async fn update_account(
             tracing::error!(error = %e, "Failed to fetch user");
             AppError::Unknown(e.into())
         })?
-        .ok_or_else(|| // SECURITY: Don't reveal whether user exists - use generic error
-        AppError::Auth("Session is invalid or expired".to_string()))?;
+        .ok_or_else(
+            || // SECURITY: Don't reveal whether user exists - use generic error
+        AppError::Auth("Session is invalid or expired".to_string()),
+        )?;
 
     // Update username if provided
     if let Some(new_username) = &request.username {
@@ -260,8 +262,10 @@ pub async fn delete_account(
             tracing::error!(error = %e, "Failed to fetch user");
             AppError::Unknown(e.into())
         })?
-        .ok_or_else(|| // SECURITY: Don't reveal whether user exists - use generic error
-        AppError::Auth("Session is invalid or expired".to_string()))?;
+        .ok_or_else(
+            || // SECURITY: Don't reveal whether user exists - use generic error
+        AppError::Auth("Session is invalid or expired".to_string()),
+        )?;
 
     let password_valid = db::verify_password(&user_record, &request.password)
         .await

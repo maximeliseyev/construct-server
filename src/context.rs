@@ -21,7 +21,7 @@ use crate::federation::{PublicKeyCache, ServerSigner};
 use crate::handlers::session::Clients;
 use crate::kafka::MessageProducer;
 use crate::key_management::KeyManagementSystem;
-use crate::message_gateway::MessageGatewayClient;
+// MessageGatewayClient removed - was only used for WebSocket message processing
 use crate::queue::MessageQueue;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -30,7 +30,7 @@ use tokio::sync::Mutex;
 ///
 /// **Phase 2.7 Refactoring:** This structure will be refactored into logical groups:
 /// - DatabaseContext (db_pool)
-/// - MessageContext (queue, kafka_producer, gateway_client)
+/// - MessageContext (queue, kafka_producer)
 /// - AuthContext (auth_manager, clients)
 /// - NotificationContext (apns_client, token_encryption)
 /// - FederationContext (server_signer, public_key_cache)
@@ -56,7 +56,8 @@ pub struct AppContext {
     /// Message Gateway client for delegating message processing (Phase 2+)
     /// When None: process messages locally (legacy mode)
     /// When Some: forward to Message Gateway service via gRPC
-    pub gateway_client: Option<Arc<Mutex<MessageGatewayClient>>>,
+    // gateway_client removed - was only used for WebSocket message processing via message-gateway
+    // REST API routes send directly to Kafka
     /// Delivery ACK manager for privacy-preserving message delivery confirmations
     /// When None: delivery ACK system is disabled
     /// When Some: track and route delivery acknowledgments
@@ -100,48 +101,15 @@ impl AppContext {
             apns_client,
             token_encryption,
             server_instance_id,
-            gateway_client: None,       // Legacy mode by default
+            // gateway_client removed
             delivery_ack_manager: None, // Disabled by default
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
-            key_management: None,        // Disabled by default
+            key_management: None, // Disabled by default
         }
     }
 
-    /// Creates a new application context with Message Gateway client
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_gateway(
-        db_pool: Arc<DbPool>,
-        queue: Arc<Mutex<MessageQueue>>,
-        auth_manager: Arc<AuthManager>,
-        clients: Clients,
-        config: Arc<Config>,
-        kafka_producer: Arc<MessageProducer>,
-        apns_client: Arc<ApnsClient>,
-        token_encryption: Arc<DeviceTokenEncryption>,
-        server_instance_id: String,
-        gateway_client: Arc<Mutex<MessageGatewayClient>>,
-    ) -> Self {
-        // Initialize server signer if signing key is configured
-        let server_signer = Self::init_server_signer(&config);
-
-        Self {
-            db_pool,
-            queue,
-            auth_manager,
-            clients,
-            config,
-            kafka_producer,
-            apns_client,
-            token_encryption,
-            server_instance_id,
-            gateway_client: Some(gateway_client),
-            delivery_ack_manager: None, // Disabled by default
-            server_signer,
-            public_key_cache: Arc::new(PublicKeyCache::new()),
-            key_management: None,        // Disabled by default
-        }
-    }
+    // new_with_gateway removed - message gateway was only used for WebSocket
 
     /// Set delivery ACK manager (builder pattern)
     pub fn with_delivery_ack_manager(
@@ -200,7 +168,7 @@ impl AppContext {
         MessageContextRef {
             queue: &self.queue,
             kafka_producer: &self.kafka_producer,
-            gateway_client: self.gateway_client.as_ref(),
+            // gateway_client removed
         }
     }
 
@@ -257,7 +225,7 @@ pub struct DatabaseContextRef<'a> {
 pub struct MessageContextRef<'a> {
     pub queue: &'a Arc<Mutex<MessageQueue>>,
     pub kafka_producer: &'a Arc<MessageProducer>,
-    pub gateway_client: Option<&'a Arc<Mutex<MessageGatewayClient>>>,
+    // gateway_client removed
 }
 
 /// Auth context reference (Phase 2.7)
@@ -304,7 +272,7 @@ pub struct AppContextBuilder {
     apns_client: Option<Arc<ApnsClient>>,
     token_encryption: Option<Arc<DeviceTokenEncryption>>,
     server_instance_id: Option<String>,
-    gateway_client: Option<Arc<Mutex<MessageGatewayClient>>>,
+    // gateway_client removed
     delivery_ack_manager: Option<Arc<DeliveryAckManager<PostgresDeliveryStorage>>>,
     key_management: Option<Arc<KeyManagementSystem>>,
 }
@@ -321,7 +289,7 @@ impl AppContextBuilder {
             apns_client: None,
             token_encryption: None,
             server_instance_id: None,
-            gateway_client: None,
+            // gateway_client removed
             delivery_ack_manager: None,
             key_management: None,
         }
@@ -372,10 +340,7 @@ impl AppContextBuilder {
         self
     }
 
-    pub fn with_gateway_client(mut self, gateway_client: Arc<Mutex<MessageGatewayClient>>) -> Self {
-        self.gateway_client = Some(gateway_client);
-        self
-    }
+    // with_gateway_client removed - message gateway was only used for WebSocket
 
     pub fn with_delivery_ack_manager(
         mut self,
@@ -425,7 +390,7 @@ impl AppContextBuilder {
             server_instance_id: self
                 .server_instance_id
                 .ok_or_else(|| "server_instance_id is required".to_string())?,
-            gateway_client: self.gateway_client,
+            // gateway_client removed
             delivery_ack_manager: self.delivery_ack_manager,
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),

@@ -177,11 +177,9 @@ impl VaultClient {
     /// Kubernetes authentication
     async fn k8s_login(client: &Client, vault_addr: &str, role: &str) -> Result<String> {
         // Read service account token
-        let jwt = tokio::fs::read_to_string(
-            "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        )
-        .await
-        .context("Failed to read K8s service account token")?;
+        let jwt = tokio::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/token")
+            .await
+            .context("Failed to read K8s service account token")?;
 
         let url = format!("{}/v1/auth/kubernetes/login", vault_addr);
         let request = K8sLoginRequest { jwt: &jwt, role };
@@ -313,7 +311,7 @@ impl VaultClient {
 
         let plaintext = base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
-            &response.data.plaintext
+            &response.data.plaintext,
         )?;
 
         Ok(plaintext)

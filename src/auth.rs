@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode_header, Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -154,7 +156,7 @@ impl AuthManager {
     }
 
     /// Verify JWT token with support for both RS256 and HS256 (backward compatibility)
-    /// 
+    ///
     /// This method first tries to decode the token header to determine the algorithm,
     /// then uses the appropriate key for verification. This ensures tokens created with
     /// RS256 can be verified even if the service was initialized in HS256 mode (and vice versa),
@@ -191,7 +193,9 @@ impl AuthManager {
                                 // Try legacy HS256 if available
                                 if let Some(ref legacy_key) = self.legacy_decoding_key {
                                     tracing::debug!("Trying legacy HS256 as fallback");
-                                    if let Ok(claims) = verify_with_algorithm(Algorithm::HS256, legacy_key) {
+                                    if let Ok(claims) =
+                                        verify_with_algorithm(Algorithm::HS256, legacy_key)
+                                    {
                                         tracing::info!(
                                             "Successfully verified legacy HS256 token - user should re-login for RS256 token"
                                         );

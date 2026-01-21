@@ -14,8 +14,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::db::DbPool;
 use super::keys::KeyType;
+use crate::db::DbPool;
 
 /// Audit event types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ pub async fn log_rotation_started(
             key_type, old_key_id, new_key_id,
             event_type, initiated_by, reason, success
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#
+        "#,
     )
     .bind(key_type.to_string())
     .bind(old_key_id)
@@ -115,7 +115,7 @@ pub async fn log_rotation_completed(
             key_type, new_key_id,
             event_type, initiated_by, success, duration_ms
         ) VALUES ($1, $2, $3, $4, $5, $6)
-        "#
+        "#,
     )
     .bind(key_type.to_string())
     .bind(new_key_id)
@@ -153,7 +153,7 @@ pub async fn log_rotation_failed(
             key_type, event_type, initiated_by,
             success, error_code, error_message, duration_ms
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#
+        "#,
     )
     .bind(key_type.to_string())
     .bind("rotation_failed")
@@ -184,12 +184,11 @@ pub async fn log_emergency_revocation(
     initiated_by: &str,
 ) -> Result<()> {
     // Get key type from key_id
-    let key_type: Option<String> = sqlx::query_scalar(
-        "SELECT key_type FROM master_keys WHERE key_id = $1"
-    )
-    .bind(key_id)
-    .fetch_optional(db)
-    .await?;
+    let key_type: Option<String> =
+        sqlx::query_scalar("SELECT key_type FROM master_keys WHERE key_id = $1")
+            .bind(key_id)
+            .fetch_optional(db)
+            .await?;
 
     let key_type = key_type.unwrap_or_else(|| "unknown".to_string());
 
@@ -206,7 +205,7 @@ pub async fn log_emergency_revocation(
             event_type, initiated_by, reason, success,
             metadata
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#
+        "#,
     )
     .bind(&key_type)
     .bind(key_id)
@@ -245,7 +244,7 @@ pub async fn log_key_access(
         INSERT INTO key_access_log (
             key_id, operation, service_name, success, error_code
         ) VALUES ($1, $2, $3, $4, $5)
-        "#
+        "#,
     )
     .bind(key_id)
     .bind(operation)
@@ -285,7 +284,7 @@ pub async fn get_recent_audit_entries(
         WHERE key_type = $1
         ORDER BY event_at DESC
         LIMIT $2
-        "#
+        "#,
     )
     .bind(key_type.to_string())
     .bind(limit)
@@ -315,11 +314,7 @@ pub struct AuditEntryRow {
 
 /// Get key access statistics for anomaly detection
 #[allow(dead_code)]
-pub async fn get_access_stats(
-    db: &DbPool,
-    key_id: &str,
-    hours: i32,
-) -> Result<AccessStats> {
+pub async fn get_access_stats(db: &DbPool, key_id: &str, hours: i32) -> Result<AccessStats> {
     let row: AccessStatsRow = sqlx::query_as(
         r#"
         SELECT
@@ -330,7 +325,7 @@ pub async fn get_access_stats(
         FROM key_access_log
         WHERE key_id = $1
           AND accessed_at > NOW() - ($2 || ' hours')::INTERVAL
-        "#
+        "#,
     )
     .bind(key_id)
     .bind(hours.to_string())

@@ -219,7 +219,7 @@ impl ServiceClient {
                 // Log error with context
                 let error_msg = e.to_string();
                 // Check if this is a connection error (common with proxy issues)
-                if error_msg.contains("invalid authority") 
+                if error_msg.contains("invalid authority")
                     || error_msg.contains("client error")
                     || error_msg.contains("SendRequest")
                     || error_msg.contains("connection")

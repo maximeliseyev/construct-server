@@ -17,11 +17,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::db::DbPool;
+use super::KeyManagementConfig;
 use super::audit;
 use super::keys::{KeyManager, KeyType};
 use super::vault::VaultClient;
-use super::KeyManagementConfig;
+use crate::db::DbPool;
 
 /// Rotation policy for a key type
 #[derive(Debug, Clone)]
