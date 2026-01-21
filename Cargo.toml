@@ -7,21 +7,20 @@ edition = "2024"
 name = "construct_server"
 path = "src/lib.rs"
 
-[[bin]]
-name = "construct-server"
-path = "src/main.rs"
+# [[bin]]
+# name = "construct-server"
+# path = "src/main.rs"
 
 [[bin]]
 name = "delivery-worker"
 path = "src/bin/delivery_worker.rs"
 
-[[bin]]
-name = "message-gateway"
-path = "src/bin/message_gateway.rs"
+# message-gateway binary removed - was only used for WebSocket message processing
+# REST API routes send directly to Kafka
 
 [[bin]]
-name = "media-server"
-path = "src/bin/media_server.rs"
+name = "media-service"
+path = "src/bin/media_service.rs"
 
 [[bin]]
 name = "gateway"
@@ -56,7 +55,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 bytes = "1.8"
 
-# HTTP framework для media-server и main server
+# HTTP framework для media-service и main server
 axum = { version = "0.7", features = ["multipart"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }

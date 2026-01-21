@@ -44,21 +44,21 @@ RUN apt-get update && apt-get install -y \
 ENV PATH="/usr/local/bin:${PATH}"
 
 # Copy all binaries from builder with execute permissions
+# Note: construct-server kept for development/testing only (HTTP-only, no WebSocket)
 COPY --from=builder --chmod=+x /app/target/release/construct-server /usr/local/bin/construct-server
 COPY --from=builder --chmod=+x /app/target/release/delivery-worker /usr/local/bin/delivery-worker
-COPY --from=builder --chmod=+x /app/target/release/message-gateway /usr/local/bin/message-gateway
-COPY --from=builder --chmod=+x /app/target/release/media-server /usr/local/bin/media-server
 # Microservices binaries (Phase 2.6)
 COPY --from=builder --chmod=+x /app/target/release/gateway /usr/local/bin/gateway
 COPY --from=builder --chmod=+x /app/target/release/auth-service /usr/local/bin/auth-service
 COPY --from=builder --chmod=+x /app/target/release/user-service /usr/local/bin/user-service
 COPY --from=builder --chmod=+x /app/target/release/messaging-service /usr/local/bin/messaging-service
 COPY --from=builder --chmod=+x /app/target/release/notification-service /usr/local/bin/notification-service
+COPY --from=builder --chmod=+x /app/target/release/media-service /usr/local/bin/media-service
 
 # Copy migrations for the main server
 COPY migrations /app/migrations
 
-# Create data directory for media-server (will be mounted as volume in production)
+# Create data directory for media-service (will be mounted as volume in production)
 RUN mkdir -p /data/media
 
 # Expose port (used by all services)

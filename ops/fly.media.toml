@@ -1,18 +1,18 @@
 # ============================================================================
-# Construct Media Server - Fly.io Configuration
+# Construct Media Service - Fly.io Configuration
 # ============================================================================
 #
-# Privacy-focused media storage server with:
+# Privacy-focused media storage service with:
 # - No IP logging
 # - No user tracking
 # - Auto-deletion after TTL
 # - E2E encrypted blob storage only
 #
-# Deploy: flyctl deploy --config ops/fly.media.toml
+# Deploy: flyctl deploy --config ops/fly.media.toml --app construct-media-service
 #
 # ============================================================================
 
-app = "construct-media"
+app = "construct-media-service"
 primary_region = "ams"
 
 [build]
@@ -20,7 +20,7 @@ primary_region = "ams"
 
 # Command to run (override default CMD)
 [processes]
-  app = "media-server"
+  app = "media-service"
 
 [env]
   RUST_LOG = "info"

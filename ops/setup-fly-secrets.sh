@@ -6,16 +6,14 @@
 #   ./ops/setup-fly-secrets.sh [service]
 #
 # Services:
-#   server - construct-server
 #   worker - construct-delivery-worker
-#   gateway - construct-message-gateway
-#   media - construct-media
+#   media-service - construct-media-service
 #   api-gateway - construct-api-gateway
 #   auth-service - construct-auth-service
 #   user-service - construct-user-service
 #   messaging-service - construct-messaging-service
 #   notification-service - construct-notification-service
-#   (no argument) - all services
+#   (no argument) - all microservices + worker
 #
 # JWT Configuration:
 #   - HS256 (legacy): Set JWT_SECRET (symmetric key)
@@ -42,9 +40,6 @@ fi
 # Load .env file
 source .env
 
-# Initialize gateway setup flag
-SHOULD_SETUP_GATEWAY=false
-
 # Get service name from argument
 SERVICE="${1:-all}"
 
@@ -55,41 +50,8 @@ echo ""
 # ============================================================================
 # Service-specific secret setup
 # ============================================================================
-
-if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-  echo ""
-  echo "Setting up secrets for construct-server..."
-  # Create app if it doesn't exist
-  if ! flyctl status --app construct-server >/dev/null 2>&1; then
-    echo "Creating construct-server app..."
-    flyctl apps create construct-server
-  fi
-  flyctl secrets set \
-    DATABASE_URL="$DATABASE_URL" \
-    REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
-    JWT_ISSUER="$JWT_ISSUER" \
-    LOG_HASH_SALT="$LOG_HASH_SALT" \
-    ONLINE_CHANNEL="$ONLINE_CHANNEL" \
-    DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
-    OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
-    --app construct-server
-
-  # Optional: JWT RSA keys for RS256 (if provided)
-  # Required for Key Management System support
-  if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
-    echo "Setting JWT RSA keys for RS256 algorithm..."
-    flyctl secrets set \
-      JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-server
-    echo "✅ RS256 keys configured - Key Management System ready"
-  elif [ -n "$VAULT_ADDR" ]; then
-    echo "⚠️  Warning: Key Management System enabled but JWT_PRIVATE_KEY/JWT_PUBLIC_KEY not set"
-    echo "   RS256 keys are required for automatic key rotation"
-    echo "   Key Management System will not work until RS256 keys are configured"
-  fi
-fi
+# Note: Monolithic server (construct-server) and message-gateway removed
+# All clients now use REST API through microservices
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
   echo ""
@@ -118,23 +80,7 @@ fi
 # ============================================================================
 
 if [ "$KAFKA_ENABLED" = "true" ]; then
-  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-    echo ""
-    echo "Setting up Kafka secrets for construct-server..."
-    flyctl secrets set \
-      KAFKA_ENABLED="$KAFKA_ENABLED" \
-      KAFKA_BROKERS="$KAFKA_BROKERS" \
-      KAFKA_TOPIC="$KAFKA_TOPIC" \
-      KAFKA_CONSUMER_GROUP="$KAFKA_CONSUMER_GROUP" \
-      KAFKA_SSL_ENABLED="$KAFKA_SSL_ENABLED" \
-      KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
-      KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
-      KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
-      KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
-      KAFKA_PRODUCER_LINGER_MS="$KAFKA_PRODUCER_LINGER_MS" \
-      KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
-      --app construct-server
-  fi
+  # Kafka secrets are set per-service below (messaging-service, worker)
 
   if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
     echo ""
@@ -153,108 +99,12 @@ if [ "$KAFKA_ENABLED" = "true" ]; then
 fi
 
 # ============================================================================
-# APNs secrets (if encryption key is set)
+# APNs, Federation, Delivery ACK, Key Management
 # ============================================================================
+# These are now handled per-service below (notification-service, etc.)
 
-if [ -n "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" != "CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32" ]; then
-  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-    echo ""
-    echo "Setting up APNs device token encryption key for construct-server..."
-    flyctl secrets set \
-      APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
-      --app construct-server
-
-    # Optional: Set other APNs configs if they exist
-    if [ -n "$APNS_ENABLED" ]; then
-      flyctl secrets set \
-        APNS_ENABLED="$APNS_ENABLED" \
-        --app construct-server
-    fi
-
-    if [ -n "$APNS_ENVIRONMENT" ]; then
-      flyctl secrets set \
-        APNS_ENVIRONMENT="$APNS_ENVIRONMENT" \
-        --app construct-server
-    fi
-
-    if [ -n "$APNS_KEY_ID" ]; then
-      flyctl secrets set \
-        APNS_KEY_ID="$APNS_KEY_ID" \
-        APNS_TEAM_ID="$APNS_TEAM_ID" \
-        APNS_BUNDLE_ID="$APNS_BUNDLE_ID" \
-        APNS_TOPIC="$APNS_TOPIC" \
-        --app construct-server
-    fi
-  fi
-fi
-
-# ============================================================================
-# Federation and Domain Configuration
-# ============================================================================
-
-if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-  if [ -n "$INSTANCE_DOMAIN" ]; then
-    echo ""
-    echo "Setting up federation domain configuration for construct-server..."
-    flyctl secrets set \
-      INSTANCE_DOMAIN="$INSTANCE_DOMAIN" \
-      --app construct-server
-  fi
-
-  if [ -n "$FEDERATION_BASE_DOMAIN" ]; then
-    flyctl secrets set \
-      FEDERATION_BASE_DOMAIN="$FEDERATION_BASE_DOMAIN" \
-      --app construct-server
-  fi
-
-  if [ -n "$FEDERATION_ENABLED" ]; then
-    flyctl secrets set \
-      FEDERATION_ENABLED="$FEDERATION_ENABLED" \
-      --app construct-server
-  fi
-
-  if [ -n "$DEEP_LINK_BASE_URL" ]; then
-    flyctl secrets set \
-      DEEP_LINK_BASE_URL="$DEEP_LINK_BASE_URL" \
-      --app construct-server
-  fi
-
-  # Server Signing Key for S2S federation authentication
-  # Generate with: openssl rand -base64 32
-  if [ -n "$SERVER_SIGNING_KEY" ]; then
-    echo ""
-    echo "Setting up server signing key for S2S federation..."
-    flyctl secrets set \
-      SERVER_SIGNING_KEY="$SERVER_SIGNING_KEY" \
-      --app construct-server
-
-    # Also set for message gateway if it uses federation
-    if [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
-      flyctl secrets set \
-        SERVER_SIGNING_KEY="$SERVER_SIGNING_KEY" \
-        --app construct-message-gateway
-    fi
-  fi
-fi
-
-# ============================================================================
-# Delivery ACK secrets (if enabled)
-# ============================================================================
-
+# Delivery ACK secrets (if enabled) - only for worker
 if [ -n "$DELIVERY_ACK_MODE" ] && [ "$DELIVERY_ACK_MODE" != "disabled" ]; then
-  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-    echo ""
-    echo "Setting up Delivery ACK secrets for construct-server..."
-    flyctl secrets set \
-      DELIVERY_ACK_MODE="$DELIVERY_ACK_MODE" \
-      DELIVERY_SECRET_KEY="$DELIVERY_SECRET_KEY" \
-      DELIVERY_EXPIRY_DAYS="$DELIVERY_EXPIRY_DAYS" \
-      DELIVERY_CLEANUP_INTERVAL_SECS="$DELIVERY_CLEANUP_INTERVAL_SECS" \
-      DELIVERY_ACK_ENABLE_BATCHING="$DELIVERY_ACK_ENABLE_BATCHING" \
-      DELIVERY_ACK_BATCH_BUFFER_SECS="$DELIVERY_ACK_BATCH_BUFFER_SECS" \
-      --app construct-server
-  fi
-
   if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
     echo ""
     echo "Setting up Delivery ACK secrets for construct-delivery-worker..."
@@ -306,48 +156,7 @@ if [ -n "$VAULT_ADDR" ]; then
     echo "   Key Management System will be disabled until RS256 keys are configured."
   fi
 
-  # Set secrets for construct-server
-  if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-    echo "Setting Key Management secrets for construct-server..."
-    # Build secrets command dynamically based on what's set
-    if [ -n "$VAULT_TOKEN" ] && [ -n "$VAULT_K8S_ROLE" ]; then
-      # Both are set - use both
-      flyctl secrets set \
-        VAULT_ADDR="$VAULT_ADDR" \
-        VAULT_TOKEN="$VAULT_TOKEN" \
-        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
-        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
-        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
-        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
-        --app construct-server
-    elif [ -n "$VAULT_TOKEN" ]; then
-      # Only VAULT_TOKEN is set
-      flyctl secrets set \
-        VAULT_ADDR="$VAULT_ADDR" \
-        VAULT_TOKEN="$VAULT_TOKEN" \
-        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
-        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
-        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
-        --app construct-server
-    elif [ -n "$VAULT_K8S_ROLE" ]; then
-      # Only VAULT_K8S_ROLE is set
-      flyctl secrets set \
-        VAULT_ADDR="$VAULT_ADDR" \
-        VAULT_K8S_ROLE="$VAULT_K8S_ROLE" \
-        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
-        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
-        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
-        --app construct-server
-    else
-      # Neither is set - just set VAULT_ADDR (will fail at runtime, but allow setup)
-      flyctl secrets set \
-        VAULT_ADDR="$VAULT_ADDR" \
-        ${KEY_REFRESH_INTERVAL_SECS:+KEY_REFRESH_INTERVAL_SECS="$KEY_REFRESH_INTERVAL_SECS"} \
-        ${KEY_GRACE_PERIOD_SECS:+KEY_GRACE_PERIOD_SECS="$KEY_GRACE_PERIOD_SECS"} \
-        ${KEY_AUTO_ROTATION_ENABLED:+KEY_AUTO_ROTATION_ENABLED="$KEY_AUTO_ROTATION_ENABLED"} \
-        --app construct-server
-    fi
-  fi
+  # Key Management secrets are set per-service below (auth-service, messaging-service, etc.)
 
   # Set secrets for construct-auth-service
   if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
@@ -469,102 +278,9 @@ else
 fi
 
 # ============================================================================
-# Message Gateway secrets (if you want to use Message Gateway service)
+# Message Gateway removed - was only used for WebSocket message processing
+# REST API routes send directly to Kafka
 # ============================================================================
-#
-# Required variables for message-gateway:
-# - Core: DATABASE_URL, REDIS_URL, JWT_SECRET, JWT_ISSUER, LOG_HASH_SALT
-# - Queues: ONLINE_CHANNEL, DELIVERY_QUEUE_PREFIX, OFFLINE_QUEUE_PREFIX
-# - Routing: INSTANCE_DOMAIN, FEDERATION_ENABLED (for MessageRouter)
-# - Kafka: All Kafka config if enabled
-#
-# Note: This section runs if ENABLE_MESSAGE_GATEWAY=true OR if running for
-#       gateway-specific deployment (make secrets-gateway)
-# ============================================================================
-
-# Check if we should set up message-gateway secrets
-# Either ENABLE_MESSAGE_GATEWAY is true, or we're running gateway-specific setup
-if [ "$SERVICE" = "gateway" ]; then
-  # Explicitly requested for gateway
-  SHOULD_SETUP_GATEWAY=true
-elif [ "$SERVICE" = "all" ] && [ -n "$ENABLE_MESSAGE_GATEWAY" ] && [ "$ENABLE_MESSAGE_GATEWAY" = "true" ]; then
-  # Enabled via .env variable (only when setting up all services)
-  SHOULD_SETUP_GATEWAY=true
-elif [ "$SERVICE" = "all" ]; then
-  # Check if app exists (might want to set up secrets even if not explicitly enabled)
-  # Use flyctl status as it's faster and returns error if app doesn't exist
-  if flyctl status --app construct-message-gateway >/dev/null 2>&1; then
-    SHOULD_SETUP_GATEWAY=true
-    echo ""
-    echo "ℹ️  Message Gateway app exists but ENABLE_MESSAGE_GATEWAY not set to 'true'"
-    echo "   Setting up secrets anyway (use ENABLE_MESSAGE_GATEWAY=true to suppress this message)"
-  fi
-fi
-
-if [ "$SHOULD_SETUP_GATEWAY" = "true" ]; then
-  echo ""
-  echo "Setting up Message Gateway secrets..."
-  flyctl secrets set \
-    DATABASE_URL="$DATABASE_URL" \
-    REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
-    JWT_ISSUER="$JWT_ISSUER" \
-    LOG_HASH_SALT="$LOG_HASH_SALT" \
-    ONLINE_CHANNEL="$ONLINE_CHANNEL" \
-    DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
-    OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
-    APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
-    --app construct-message-gateway
-
-  # Optional: JWT RSA keys for RS256 (if provided)
-  # Required for Key Management System support
-  if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
-    echo "Setting JWT RSA keys for RS256 algorithm..."
-    flyctl secrets set \
-      JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-message-gateway
-    echo "✅ RS256 keys configured - Key Management System ready"
-  elif [ -n "$VAULT_ADDR" ]; then
-    echo "⚠️  Warning: Key Management System enabled but JWT_PRIVATE_KEY/JWT_PUBLIC_KEY not set"
-    echo "   RS256 keys are required for automatic key rotation"
-    echo "   Key Management System will not work until RS256 keys are configured"
-  fi
-
-  # Instance domain and federation (required for MessageRouter to route messages)
-  if [ -n "$INSTANCE_DOMAIN" ]; then
-    flyctl secrets set \
-      INSTANCE_DOMAIN="$INSTANCE_DOMAIN" \
-      --app construct-message-gateway
-  fi
-
-  if [ -n "$FEDERATION_ENABLED" ]; then
-    flyctl secrets set \
-      FEDERATION_ENABLED="$FEDERATION_ENABLED" \
-      --app construct-message-gateway
-  fi
-
-  # Kafka secrets for Message Gateway
-  if [ "$KAFKA_ENABLED" = "true" ]; then
-    flyctl secrets set \
-      KAFKA_ENABLED="$KAFKA_ENABLED" \
-      KAFKA_BROKERS="$KAFKA_BROKERS" \
-      KAFKA_TOPIC="$KAFKA_TOPIC" \
-      KAFKA_CONSUMER_GROUP="$KAFKA_CONSUMER_GROUP" \
-      KAFKA_SSL_ENABLED="$KAFKA_SSL_ENABLED" \
-      KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
-      KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
-      KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
-      KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
-      KAFKA_PRODUCER_LINGER_MS="$KAFKA_PRODUCER_LINGER_MS" \
-      KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
-      --app construct-message-gateway
-  fi
-else
-  echo ""
-  echo "ℹ️  Skipping Message Gateway secrets setup"
-  echo "   (Set ENABLE_MESSAGE_GATEWAY=true in .env or use 'make secrets-gateway')"
-fi
 
 # ============================================================================
 # Microservices secrets
@@ -579,6 +295,13 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
     flyctl apps create construct-api-gateway
   fi
   # Base secrets
+  # Note: CSRF_SECRET is required for API Gateway (it uses CSRF protection middleware)
+  # If CSRF_SECRET is not set, generate it automatically
+  if [ -z "$CSRF_SECRET" ]; then
+    echo "⚠️  CSRF_SECRET not set - generating random secret..."
+    CSRF_SECRET=$(openssl rand -hex 32)
+  fi
+  
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
@@ -588,7 +311,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
-    CSRF_SECRET="${CSRF_SECRET:-$(openssl rand -hex 32)}" \
+    CSRF_SECRET="$CSRF_SECRET" \
     --app construct-api-gateway
 
   # Optional: JWT RSA keys for RS256 (if provided)
@@ -611,6 +334,8 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
     echo "Creating construct-auth-service app..."
     flyctl apps create construct-auth-service
   fi
+  # Note: CSRF_ENABLED=false because auth-service doesn't use CSRF middleware
+  # (CSRF is handled by API Gateway)
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
@@ -620,6 +345,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
+    CSRF_ENABLED="false" \
     --app construct-auth-service
 
   # Optional: JWT RSA keys for RS256 (if provided)
@@ -645,6 +371,8 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "user-service" ]; then
     echo "Creating construct-user-service app..."
     flyctl apps create construct-user-service
   fi
+  # Note: CSRF_ENABLED=false because user-service doesn't use CSRF middleware
+  # (CSRF is handled by API Gateway)
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
@@ -654,6 +382,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "user-service" ]; then
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
+    CSRF_ENABLED="false" \
     --app construct-user-service
 
   # Optional: JWT public key for RS256 (only public key needed for verification)
@@ -672,6 +401,8 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
     echo "Creating construct-messaging-service app..."
     flyctl apps create construct-messaging-service
   fi
+  # Note: CSRF_ENABLED=false because messaging-service doesn't use CSRF middleware
+  # (CSRF is handled by API Gateway)
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
@@ -681,6 +412,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
+    CSRF_ENABLED="false" \
     --app construct-messaging-service
 
   # Optional: JWT public key for RS256 (only public key needed for verification)
@@ -714,6 +446,8 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
     echo "Creating construct-notification-service app..."
     flyctl apps create construct-notification-service
   fi
+  # Note: CSRF_ENABLED=false because notification-service doesn't use CSRF middleware
+  # (CSRF is handled by API Gateway)
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
@@ -723,6 +457,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
+    CSRF_ENABLED="false" \
     --app construct-notification-service
 
   # Optional: JWT public key for RS256 (only public key needed for verification)
@@ -769,18 +504,40 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
   fi
 fi
 
+if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "media-service" ]; then
+  echo ""
+  echo "Setting up secrets for construct-media-service..."
+  # Create app if it doesn't exist
+  if ! flyctl status --app construct-media-service >/dev/null 2>&1; then
+    echo "Creating construct-media-service app..."
+    flyctl apps create construct-media-service
+  fi
+  
+  # Required: MEDIA_UPLOAD_TOKEN_SECRET (must match the secret used by other services to generate tokens)
+  if [ -z "$MEDIA_UPLOAD_TOKEN_SECRET" ]; then
+    echo "⚠️  MEDIA_UPLOAD_TOKEN_SECRET not set - generating random secret..."
+    MEDIA_UPLOAD_TOKEN_SECRET=$(openssl rand -hex 32)
+    echo "   Generated secret: $MEDIA_UPLOAD_TOKEN_SECRET"
+    echo "   ⚠️  IMPORTANT: Save this secret and use it in other services to generate upload tokens!"
+  fi
+  
+  flyctl secrets set \
+    MEDIA_UPLOAD_TOKEN_SECRET="$MEDIA_UPLOAD_TOKEN_SECRET" \
+    ${MEDIA_ADMIN_TOKEN:+MEDIA_ADMIN_TOKEN="$MEDIA_ADMIN_TOKEN"} \
+    ${MEDIA_DATA_DIR:+MEDIA_DATA_DIR="$MEDIA_DATA_DIR"} \
+    ${MEDIA_MAX_FILE_SIZE:+MEDIA_MAX_FILE_SIZE="$MEDIA_MAX_FILE_SIZE"} \
+    ${MEDIA_TTL_DAYS:+MEDIA_TTL_DAYS="$MEDIA_TTL_DAYS"} \
+    ${MEDIA_PORT:+MEDIA_PORT="$MEDIA_PORT"} \
+    --app construct-media-service
+  echo "✅ Media Service secrets configured"
+fi
+
 echo ""
 echo "=== ✅ All secrets have been set! ==="
 echo ""
 echo "To verify:"
-if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-  echo "  flyctl secrets list --app construct-server"
-fi
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
   echo "  flyctl secrets list --app construct-delivery-worker"
-fi
-if [ "$SHOULD_SETUP_GATEWAY" = "true" ] && ([ "$SERVICE" = "all" ] || [ "$SERVICE" = "gateway" ]); then
-  echo "  flyctl secrets list --app construct-message-gateway"
 fi
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
   echo "  flyctl secrets list --app construct-api-gateway"
@@ -797,16 +554,13 @@ fi
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
   echo "  flyctl secrets list --app construct-notification-service"
 fi
+if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "media-service" ]; then
+  echo "  flyctl secrets list --app construct-media-service"
+fi
 echo ""
 echo "To deploy:"
-if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "server" ]; then
-  echo "  make deploy-server"
-fi
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
   echo "  make deploy-worker"
-fi
-if [ "$SHOULD_SETUP_GATEWAY" = "true" ] && ([ "$SERVICE" = "all" ] || [ "$SERVICE" = "gateway" ]); then
-  echo "  make deploy-gateway"
 fi
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
   echo "  make deploy-api-gateway"
@@ -822,4 +576,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
 fi
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
   echo "  make deploy-notification-service"
+fi
+if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "media-service" ]; then
+  echo "  make deploy-media-service"
 fi

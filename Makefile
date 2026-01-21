@@ -1,16 +1,16 @@
-.PHONY: help build run-server run-worker run-gateway run-media test check clean \
+.PHONY: help build run-worker run-media-service test check clean \
 	docker-up docker-down docker-logs docker-build docker-rebuild \
-	deploy-server deploy-worker deploy-gateway deploy-media deploy-all check-before-deploy \
-	deploy-api-gateway deploy-auth-service deploy-user-service deploy-messaging-service deploy-notification-service \
+	deploy-worker check-before-deploy \
+	deploy-api-gateway deploy-auth-service deploy-user-service deploy-messaging-service deploy-notification-service deploy-media-service \
 	deploy-microservices \
-	secrets-server secrets-worker secrets-gateway secrets-media secrets-all \
-	secrets-api-gateway secrets-auth-service secrets-user-service secrets-messaging-service secrets-notification-service \
-	logs-server logs-worker logs-gateway logs-media \
+	secrets-worker secrets-media-service \
+	secrets-api-gateway secrets-auth-service secrets-user-service secrets-messaging-service secrets-notification-service secrets-media-service \
+	logs-worker logs-media-service \
 	logs-api-gateway logs-auth-service logs-user-service logs-messaging-service logs-notification-service \
 	logs-microservices \
-	status-server status-worker status-gateway status-media status-all \
+	status-worker status-media-service \
 	status-api-gateway status-auth-service status-user-service status-messaging-service status-notification-service \
-	status-microservices status-everything \
+	status-microservices \
 	db-migrate db-up db-down \
 	generate-jwt-keys vault-dev-up vault-dev-down vault-dev-status vault-dev-init \
 	key-mgmt-check key-mgmt-init
@@ -26,28 +26,22 @@ help:
 	@echo ""
 	@echo "📦 Local Development:"
 	@echo "  make build              Build all binaries (release mode)"
-	@echo "  make run-server         Run WebSocket server locally"
 	@echo "  make run-worker         Run delivery worker locally"
-	@echo "  make run-gateway        Run message gateway locally"
-	@echo "  make run-media          Run media server locally"
+	@echo "  make run-media-service  Run media service locally"
 	@echo "  make test               Run all tests"
 	@echo "  make check              Check code (clippy + fmt)"
 	@echo "  make fmt                Format code"
 	@echo "  make clean              Clean build artifacts"
 	@echo ""
 	@echo "🐳 Docker (Local Stack):"
-	@echo "  make docker-up          Start all services (server + worker + db + redis)"
+	@echo "  make docker-up          Start all services (db + redis)"
 	@echo "  make docker-down        Stop all docker-compose services"
 	@echo "  make docker-logs        View docker-compose logs (tail -f)"
 	@echo "  make docker-build       Rebuild docker images"
 	@echo "  make docker-rebuild     Rebuild & restart all services"
 	@echo ""
 	@echo "🚀 Fly.io Deployment:"
-	@echo "  make deploy-server      Deploy WebSocket server to Fly.io"
 	@echo "  make deploy-worker      Deploy delivery worker to Fly.io"
-	@echo "  make deploy-gateway     Deploy message gateway (gRPC) to Fly.io"
-	@echo "  make deploy-media      Deploy media server to Fly.io"
-	@echo "  make deploy-all         Deploy all services (monolithic + workers)"
 	@echo ""
 	@echo "🚀 Microservices Deployment:"
 	@echo "  make deploy-api-gateway         Deploy API Gateway to Fly.io"
@@ -55,14 +49,11 @@ help:
 	@echo "  make deploy-user-service        Deploy User Service to Fly.io"
 	@echo "  make deploy-messaging-service   Deploy Messaging Service to Fly.io"
 	@echo "  make deploy-notification-service Deploy Notification Service to Fly.io"
+	@echo "  make deploy-media-service       Deploy Media Service to Fly.io"
 	@echo "  make deploy-microservices      Deploy all microservices"
 	@echo ""
 	@echo "🔐 Fly.io Secrets Management:"
-	@echo "  make secrets-server     Set secrets for construct-server"
 	@echo "  make secrets-worker     Set secrets for construct-delivery-worker"
-	@echo "  make secrets-gateway    Set secrets for construct-message-gateway"
-	@echo "  make secrets-media      Set secrets for construct-media"
-	@echo "  make secrets-all        Set secrets for all services (from .env.deploy)"
 	@echo ""
 	@echo "🔐 Microservices Secrets:"
 	@echo "  make secrets-api-gateway         Set secrets for API Gateway"
@@ -70,17 +61,13 @@ help:
 	@echo "  make secrets-user-service        Set secrets for User Service"
 	@echo "  make secrets-messaging-service   Set secrets for Messaging Service"
 	@echo "  make secrets-notification-service Set secrets for Notification Service"
+	@echo "  make secrets-media-service       Set secrets for Media Service"
 	@echo ""
 	@echo "📊 Fly.io Monitoring:"
-	@echo "  make logs-server        View WebSocket server logs"
 	@echo "  make logs-worker        View delivery worker logs"
-	@echo "  make logs-gateway       View message gateway logs"
-	@echo "  make logs-media         View media server logs"
-	@echo "  make status-server      Show construct-server status"
+	@echo "  make logs-media-service View media service logs"
 	@echo "  make status-worker      Show construct-delivery-worker status"
-	@echo "  make status-gateway     Show construct-message-gateway status"
-	@echo "  make status-media       Show construct-media status"
-	@echo "  make status-all         Show status of all services"
+	@echo "  make status-media-service Show construct-media-service status"
 	@echo ""
 	@echo "📊 Microservices Monitoring:"
 	@echo "  make logs-api-gateway         View API Gateway logs"
@@ -94,7 +81,6 @@ help:
 	@echo "  make status-messaging-service Show Messaging Service status"
 	@echo "  make status-notification-service Show Notification Service status"
 	@echo "  make status-microservices     Show status of all microservices"
-	@echo "  make status-everything        Show status of all services (monolithic + microservices)"
 	@echo "  make logs-microservices       View recent logs from all microservices"
 	@echo ""
 	@echo "🗄️  Database:"
@@ -113,14 +99,11 @@ help:
 	@echo ""
 	@echo "💡 Common Workflows:"
 	@echo "  Development:   make docker-up && make docker-logs"
-	@echo "  Deploy:        make deploy-all"
 	@echo "  Deploy microservices: make deploy-microservices"
-	@echo "  First deploy:  make secrets-all && make deploy-all"
+	@echo "  First deploy:  make secrets-api-gateway && make deploy-microservices"
 	@echo "  RS256 setup:   make generate-jwt-keys && make vault-dev-up && make vault-dev-init"
 	@echo "  Key Management: make vault-dev-up && make vault-dev-init && make key-mgmt-init"
-	@echo "  Monitoring:    make status-all && make logs-server"
 	@echo "  Monitor microservices: make status-microservices && make logs-api-gateway"
-	@echo "  Monitor everything: make status-everything"
 
 # ============================================================================
 # Local Development
@@ -130,21 +113,13 @@ build:
 	@echo "🔨 Building all binaries..."
 	cargo build --release --bins
 
-run-server:
-	@echo "🚀 Running WebSocket server locally..."
-	RUST_LOG=info cargo run --bin construct-server
-
 run-worker:
 	@echo "⚙️  Running delivery worker locally..."
 	RUST_LOG=info cargo run --bin delivery-worker
 
-run-gateway:
-	@echo "🌐 Running message gateway locally..."
-	RUST_LOG=info cargo run --bin message-gateway
-
-run-media:
-	@echo "📸 Running media server locally..."
-	RUST_LOG=info MEDIA_UPLOAD_TOKEN_SECRET=dev-secret-minimum-32-chars-long cargo run --bin media-server
+run-media-service:
+	@echo "📸 Running media service locally..."
+	RUST_LOG=info MEDIA_UPLOAD_TOKEN_SECRET=dev-secret-minimum-32-chars-long cargo run --bin media-service
 
 test:
 	@echo "🧪 Running tests..."
@@ -192,28 +167,10 @@ docker-rebuild:
 # Fly.io Deployment
 # ============================================================================
 
-deploy-server: check-before-deploy
-	@echo "🚀 Deploying WebSocket server to Fly.io..."
-	@echo "Creating app if it doesn't exist..."
-	@fly apps create construct-server 2>/dev/null || true
-	@echo "Deploying..."
-	fly deploy . --config ops/fly.toml --dockerfile ./ops/Dockerfile --app construct-server
-	@echo "✅ Server deployed. View logs: make logs-server"
-
 deploy-worker: check-before-deploy
 	@echo "⚙️  Deploying delivery worker to Fly.io..."
 	fly deploy . --config ops/fly.worker.toml --dockerfile ./ops/Dockerfile --app construct-delivery-worker
 	@echo "✅ Worker deployed. View logs: make logs-worker"
-
-deploy-gateway: check-before-deploy
-	@echo "🌐 Deploying message gateway to Fly.io..."
-	fly deploy . --config ops/fly.gateway.toml --dockerfile ./ops/Dockerfile --app construct-message-gateway
-	@echo "✅ Gateway deployed. View logs: make logs-gateway"
-
-deploy-media: check-before-deploy
-	@echo "📸 Deploying media server to Fly.io..."
-	fly deploy . --config ops/fly.media.toml --dockerfile ./ops/Dockerfile --app construct-media
-	@echo "✅ Media server deployed. View logs: make logs-media"
 
 check-before-deploy:
 	@if [ -z "$$SKIP_CHECK" ]; then \
@@ -221,27 +178,6 @@ check-before-deploy:
 		cargo check --release || (echo "❌ Compilation failed! Fix errors before deploying." && exit 1); \
 		echo "✓ Code compiles successfully"; \
 	fi
-
-deploy-all:
-	@echo "🔍 Checking code compilation before deploying all services..."
-	@cargo check --release || (echo "❌ Compilation failed! Fix errors before deploying." && exit 1)
-	@echo "✓ Code compiles successfully"
-	@echo ""
-	@echo "🚀 Deploying all services to Fly.io..."
-	@echo ""
-	@echo "1/4 Deploying WebSocket server..."
-	@SKIP_CHECK=1 make deploy-server
-	@echo ""
-	@echo "2/4 Deploying delivery worker..."
-	@SKIP_CHECK=1 make deploy-worker
-	@echo ""
-	@echo "3/4 Deploying message gateway..."
-	@SKIP_CHECK=1 make deploy-gateway
-	@echo ""
-	@echo "4/4 Deploying media server..."
-	@SKIP_CHECK=1 make deploy-media
-	@echo ""
-	@echo "✅ All services deployed!"
 
 # ============================================================================
 # Microservices Deployment
@@ -277,6 +213,12 @@ deploy-notification-service: check-before-deploy
 	@fly deploy . --config ops/fly.notification-service.toml --dockerfile ./ops/Dockerfile --app construct-notification-service
 	@echo "✅ Notification Service deployed. View logs: make logs-notification-service"
 
+deploy-media-service: check-before-deploy
+	@echo "📸 Deploying Media Service to Fly.io..."
+	@fly apps create construct-media-service 2>/dev/null || true
+	@fly deploy . --config ops/fly.media.toml --dockerfile ./ops/Dockerfile --app construct-media-service
+	@echo "✅ Media Service deployed. View logs: make logs-media-service"
+
 deploy-microservices:
 	@echo "🔍 Checking code compilation before deploying all microservices..."
 	@cargo check --release || (echo "❌ Compilation failed! Fix errors before deploying." && exit 1)
@@ -284,20 +226,23 @@ deploy-microservices:
 	@echo ""
 	@echo "🚀 Deploying all microservices to Fly.io..."
 	@echo ""
-	@echo "1/5 Deploying API Gateway..."
+	@echo "1/6 Deploying API Gateway..."
 	@SKIP_CHECK=1 make deploy-api-gateway
 	@echo ""
-	@echo "2/5 Deploying Auth Service..."
+	@echo "2/6 Deploying Auth Service..."
 	@SKIP_CHECK=1 make deploy-auth-service
 	@echo ""
-	@echo "3/5 Deploying User Service..."
+	@echo "3/6 Deploying User Service..."
 	@SKIP_CHECK=1 make deploy-user-service
 	@echo ""
-	@echo "4/5 Deploying Messaging Service..."
+	@echo "4/6 Deploying Messaging Service..."
 	@SKIP_CHECK=1 make deploy-messaging-service
 	@echo ""
-	@echo "5/5 Deploying Notification Service..."
+	@echo "5/6 Deploying Notification Service..."
 	@SKIP_CHECK=1 make deploy-notification-service
+	@echo ""
+	@echo "6/6 Deploying Media Service..."
+	@SKIP_CHECK=1 make deploy-media-service
 	@echo ""
 	@echo "✅ All microservices deployed!"
 
@@ -305,34 +250,10 @@ deploy-microservices:
 # Fly.io Secrets Management
 # ============================================================================
 
-secrets-server:
-	@echo "🔐 Setting secrets for construct-server from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh server
-
 secrets-worker:
 	@echo "🔐 Setting secrets for construct-delivery-worker from .env..."
 	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
 	@bash ops/setup-fly-secrets.sh worker
-
-secrets-gateway:
-	@echo "🔐 Setting secrets for construct-message-gateway from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh gateway
-
-secrets-media:
-	@echo "🔐 Setting secrets for construct-media..."
-	@echo "Required: MEDIA_UPLOAD_TOKEN_SECRET (must match construct-server)"
-	@echo "Optional: MEDIA_ADMIN_TOKEN"
-	@echo ""
-	@echo "Example:"
-	@echo "  fly secrets set MEDIA_UPLOAD_TOKEN_SECRET=\$$(openssl rand -hex 32) --app construct-media"
-
-secrets-all:
-	@echo "🔐 Setting secrets for all services from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh
-	@echo "✅ All secrets set!"
 
 # ============================================================================
 # Microservices Secrets Management
@@ -363,82 +284,30 @@ secrets-notification-service:
 	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
 	@bash ops/setup-fly-secrets.sh notification-service
 
+secrets-media-service:
+	@echo "🔐 Setting secrets for construct-media-service from .env..."
+	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
+	@bash ops/setup-fly-secrets.sh media-service
+
 # ============================================================================
 # Fly.io Monitoring
 # ============================================================================
-
-logs-server:
-	@echo "📋 Viewing construct-server logs..."
-	fly logs -a construct-server
 
 logs-worker:
 	@echo "📋 Viewing construct-delivery-worker logs..."
 	fly logs -a construct-delivery-worker
 
-logs-gateway:
-	@echo "📋 Viewing construct-message-gateway logs..."
-	fly logs -a construct-message-gateway
-
-logs-media:
-	@echo "📋 Viewing construct-media logs..."
-	fly logs -a construct-media
-
-status-server:
-	@echo "📊 construct-server status:"
-	@fly status -a construct-server
+logs-media-service:
+	@echo "📋 Viewing construct-media-service logs..."
+	fly logs -a construct-media-service
 
 status-worker:
 	@echo "📊 construct-delivery-worker status:"
 	@fly status -a construct-delivery-worker
 
-status-gateway:
-	@echo "📊 construct-message-gateway status:"
-	@fly status -a construct-message-gateway
-
-status-media:
-	@echo "📊 construct-media status:"
-	@fly status -a construct-media
-
-status-all:
-	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║  Fly.io Services Status (Monolithic)                          ║"
-	@echo "╚════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@make status-server
-	@echo ""
-	@make status-worker
-	@echo ""
-	@make status-gateway
-	@echo ""
-	@make status-media
-
-status-microservices:
-	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║  Microservices Status                                         ║"
-	@echo "╚════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@make status-api-gateway
-	@echo ""
-	@make status-auth-service
-	@echo ""
-	@make status-user-service
-	@echo ""
-	@make status-messaging-service
-	@echo ""
-	@make status-notification-service
-
-status-everything:
-	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║  All Services Status (Monolithic + Microservices)            ║"
-	@echo "╚════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@make status-all
-	@echo ""
-	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║  Microservices                                                ║"
-	@echo "╚════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@make status-microservices
+status-media-service:
+	@echo "📊 construct-media-service status:"
+	@fly status -a construct-media-service
 
 # ============================================================================
 # Microservices Monitoring
@@ -464,6 +333,10 @@ logs-notification-service:
 	@echo "📋 Viewing Notification Service logs..."
 	@fly logs --app construct-notification-service
 
+logs-media-service:
+	@echo "📋 Viewing Media Service logs..."
+	@fly logs --app construct-media-service
+
 status-api-gateway:
 	@echo "📊 API Gateway status:"
 	@fly status --app construct-api-gateway || echo "❌ App not found or not deployed"
@@ -483,6 +356,10 @@ status-messaging-service:
 status-notification-service:
 	@echo "📊 Notification Service status:"
 	@fly status --app construct-notification-service || echo "❌ App not found or not deployed"
+
+status-media-service:
+	@echo "📊 Media Service status:"
+	@fly status --app construct-media-service || echo "❌ App not found or not deployed"
 
 # Combined monitoring commands
 logs-microservices:
