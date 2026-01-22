@@ -14,16 +14,16 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests
+# Copy workspace files
 COPY Cargo.toml Cargo.lock ./
-
-# Copy build script and proto files (needed for gRPC code generation)
-COPY build.rs ./
-COPY proto ./proto
-
-# Copy source
-COPY src ./src
-COPY migrations ./migrations
+COPY shared ./shared
+COPY auth-service ./auth-service
+COPY messaging-service ./messaging-service
+COPY user-service ./user-service
+COPY notification-service ./notification-service
+COPY gateway ./gateway
+COPY media-service ./media-service
+COPY delivery-worker ./delivery-worker
 
 # Build all binaries in release mode
 RUN cargo build --release --bins
@@ -44,8 +44,6 @@ RUN apt-get update && apt-get install -y \
 ENV PATH="/usr/local/bin:${PATH}"
 
 # Copy all binaries from builder with execute permissions
-# Note: construct-server kept for development/testing only (HTTP-only, no WebSocket)
-COPY --from=builder --chmod=+x /app/target/release/construct-server /usr/local/bin/construct-server
 COPY --from=builder --chmod=+x /app/target/release/delivery-worker /usr/local/bin/delivery-worker
 # Microservices binaries (Phase 2.6)
 COPY --from=builder --chmod=+x /app/target/release/gateway /usr/local/bin/gateway
@@ -56,7 +54,7 @@ COPY --from=builder --chmod=+x /app/target/release/notification-service /usr/loc
 COPY --from=builder --chmod=+x /app/target/release/media-service /usr/local/bin/media-service
 
 # Copy migrations for the main server
-COPY migrations /app/migrations
+COPY shared/migrations /app/migrations
 
 # Create data directory for media-service (will be mounted as volume in production)
 RUN mkdir -p /data/media
