@@ -31,7 +31,6 @@ use construct_server_shared::db::DbPool;
 use construct_server_shared::queue::MessageQueue;
 use serde_json::json;
 use std::env;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower::ServiceBuilder;
@@ -217,14 +216,9 @@ async fn main() -> Result<()> {
         .with_state(context);
 
     // Start server
-    let addr: SocketAddr = config
-        .bind_address
-        .parse()
-        .context("Failed to parse bind address")?;
+    info!("Auth Service listening on {}", config.bind_address);
 
-    info!("Auth Service listening on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(&addr)
+    let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .context("Failed to bind to address")?;
 

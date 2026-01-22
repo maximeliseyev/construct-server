@@ -27,7 +27,6 @@ use construct_server_shared::gateway::middleware::{
 use construct_server_shared::gateway::router::{GatewayRouter, route_request};
 use construct_server_shared::metrics;
 use construct_server_shared::queue::MessageQueue;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower::ServiceBuilder;
@@ -103,14 +102,9 @@ async fn main() -> Result<()> {
         .with_state(gateway_state);
 
     // Start server
-    let addr: SocketAddr = config
-        .bind_address
-        .parse()
-        .context("Failed to parse bind address")?;
+    info!("API Gateway listening on {}", config.bind_address);
 
-    info!("API Gateway listening on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(&addr)
+    let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .context("Failed to bind to address")?;
 
