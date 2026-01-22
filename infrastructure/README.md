@@ -1,14 +1,72 @@
 # Construct Server - Production Deployment
 
-This directory contains Terraform configuration and Docker Compose setup for deploying Construct Server microservices to a VPS (DigitalOcean).
+This directory contains Terraform configuration and Docker Compose setup for deploying Construct Server microservices across multiple VPS servers (DigitalOcean/Hetzner).
+
+## 🏗️ Architecture Overview
+
+The production deployment uses a **5-server architecture** for optimal performance, security, and scalability:
+
+```
+Internet
+    ↓
+┌─────────────────────────────────────┐
+│   Gateway Server  (VPS #1)         │
+│  ┌─────────────────────────────────┐ │
+│  │   Load Balancer (Caddy)        │ │
+│  │   • SSL/TLS Termination        │ │
+│  │   • Rate Limiting              │ │
+│  │   • Request Routing            │ │
+│  └─────────────────────────────────┘ │
+└─────────────────────────────────────┘
+                    │
+          Private Network (10.x.x.x)
+                    │
+    ┌───────────────┼───────────────┐
+    │               │               │
+┌───▼───┐       ┌───▼───┐       ┌───▼───┐
+│  App  │       │  DB   │       │Message│
+│Server │       │Server │       │Server │
+│(VPS#2)│       │(VPS#5)│       │(VPS#3)│
+│       │       │       │       │       │
+│ Auth  │◄─────►│  DB   │◄──────┤ Queue │
+│ User  │       │ Cache │       │       │
+│ Notify│       │       │       │Messaging
+└───────┘       └───────┘       │Delivery│
+                                │Worker │
+                    ┌───────────┼────────┐
+                    │           │        │
+                ┌───▼───┐   ┌───▼───┐
+                │ Media │   │Monitoring
+                │Server │   │(Optional)
+                │(VPS#4)│   └────────┘
+                │ Files │
+                └───────┘
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Gateway VPS   │    │   Core VPS      │    │ Message VPS     │    │  Media VPS      │
+│                 │    │                 │    │                 │    │  (Optional)     │
+│ • Load Balancer │    │ • PostgreSQL    │    │ • Redpanda      │    │ • Media Service │
+│ • API Gateway   │    │ • Redis Primary │    │ • Redis Replica │    │ • Monitoring    │
+│ • SSL/TLS       │    │ • Auth Service  │    │ • Messaging     │    │                 │
+│ • Rate Limiting │    │ • User Service  │    │ • Delivery      │    └─────────────────┘
+│                 │    │ • Notification  │    │   Worker        │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌─────────────────┐
+                    │   Domain Name   │
+                    │ your-domain.com │
+                    └─────────────────┘
+```
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-1. **DigitalOcean Account** with API token
+1. **Cloud Provider Account** (DigitalOcean/Hetzner) with API access
 2. **SSH Key Pair** for server access
-3. **Domain Name** (optional but recommended)
+3. **Domain Name** (required for production)
 4. **Terraform** installed locally
 5. **Git** repository access
 
@@ -28,17 +86,33 @@ cp ../.env.prod.example ../.env.prod
 Create a `terraform.tfvars` file:
 
 ```hcl
+# Provider settings
 do_token = "your-digitalocean-api-token"
+region = "nyc1"
+
+# SSH Configuration
 ssh_public_key_path = "~/.ssh/id_rsa.pub"
 ssh_allowed_ips = ["your-ip/32"]  # Restrict SSH access
-region = "nyc1"
-droplet_size = "s-2vcpu-4gb"
-domain_name = "your-domain.com"
 admin_username = "construct"
+
+# Domain Configuration
+domain_name = "your-domain.com"
+
+# Server Specifications
+gateway_droplet_size = "s-1vcpu-1gb"    # Gateway server
+core_droplet_size = "s-2vcpu-4gb"       # Core services + DB
+message_droplet_size = "s-2vcpu-4gb"    # Message services + Queue
+media_droplet_size = "s-2vcpu-4gb"      # Media + monitoring
+
+# Enable optional media server
+enable_media_server = true
 
 # Sensitive variables
 db_password = "your-secure-db-password"
+redis_password = "your-secure-redis-password"
 jwt_secret = "your-256-bit-jwt-secret-hex"
+apns_device_token_encryption_key = "your-64-char-apns-key"
+log_hash_salt = "your-64-char-log-salt"
 ```
 
 ### 3. Deploy Infrastructure
@@ -56,38 +130,99 @@ terraform apply
 
 ### 4. Deploy Application
 
-After Terraform creates the server:
+After Terraform creates the servers, deploy to each server individually:
 
+#### Database Server Deployment (Start First):
 ```bash
-# Get the server IP from Terraform output
-terraform output droplet_ip
+# Get database server IP
+terraform output db_server
+# SSH: ssh construct@<db-ip>
 
-# SSH to the server
-ssh construct@<server-ip>
-
-# Clone your repository
 git clone <your-repo-url>
 cd construct-server
 
-# Copy production environment
 cp infrastructure/.env.prod.example infrastructure/.env.prod
 # Edit .env.prod with production values
 
-# Deploy services
-docker-compose -f infrastructure/docker-compose.prod.yml up -d
+# Deploy database services
+./infrastructure/deploy.sh db
+```
+
+#### Gateway Server Deployment:
+```bash
+# Get gateway server IP
+terraform output gateway_server
+# SSH: ssh construct@<gateway-ip>
+
+# Same setup steps, then:
+./infrastructure/deploy.sh gateway
+```
+
+#### Application Server Deployment:
+```bash
+# Get app server IP
+terraform output app_server
+# SSH: ssh construct@<app-ip>
+
+# Same setup steps, then:
+./infrastructure/deploy.sh app
+```
+
+#### Message Server Deployment:
+```bash
+# Get message server IP
+terraform output message_server
+# SSH: ssh construct@<message-ip>
+
+# Same setup steps, then:
+./infrastructure/deploy.sh message
+```
+
+#### Media Server Deployment (Optional):
+```bash
+# Get media server IP (if enabled)
+terraform output media_server
+# SSH: ssh construct@<media-ip>
+
+# Same setup steps, then:
+./infrastructure/deploy.sh media
 ```
 
 ## 📋 Services Overview
 
+### Gateway Server (VPS #1)
 | Service | Port | Purpose |
 |---------|------|---------|
-| API Gateway | 80/443 | Entry point, routing, middleware |
+| API Gateway | 80/443 | Load balancer, SSL termination, routing |
+| Caddy | 80/443 | Reverse proxy with automatic HTTPS |
+
+### Application Server (VPS #2)
+| Service | Port | Purpose |
+|---------|------|---------|
 | Auth Service | 8001 | Authentication & JWT tokens |
-| Messaging Service | 8002 | Message sending & long polling |
-| User Service | 8003 | User profiles & key management |
-| Notification Service | 8004 | Push notifications |
-| Media Service | 8005 | File uploads & storage |
+| User Service | 8002 | User profiles & key management |
+| Notification Service | 8003 | Push notifications |
+
+### Database Server (VPS #5)
+| Service | Port | Purpose |
+|---------|------|---------|
+| PostgreSQL | 5432 | Primary database with optimizations |
+| Redis Primary | 6379 | Primary cache & session storage |
+
+### Message Server (VPS #3)
+| Service | Port | Purpose |
+|---------|------|---------|
+| Redpanda | 9092 | Kafka-compatible message broker |
+| Redis Replica | 6379 | Cache replica for message processing |
+| Messaging Service | 8004 | Message sending & real-time updates |
 | Delivery Worker | N/A | Background message processing |
+
+### Media Server (VPS #4 - Optional)
+| Service | Port | Purpose |
+|---------|------|---------|
+| Media Service | 8005 | File uploads & storage |
+| Prometheus | 9090 | Metrics collection |
+| Grafana | 3000 | Monitoring dashboard |
 
 ## 🔧 Configuration
 
@@ -206,15 +341,56 @@ docker-compose -f infrastructure/docker-compose.prod.yml exec auth-service bash
 
 ## 🏗️ Architecture
 
+### Network Architecture
 ```
 Internet
     ↓
-[API Gateway] (Port 80/443)
-    ↓
-[Auth|Messaging|User|Notification Services]
-    ↓
-[PostgreSQL + Redis]
+┌─────────────────────────────────────┐
+│         Gateway Server              │
+│  ┌─────────────────────────────────┐ │
+│  │   Load Balancer (Caddy)        │ │
+│  │   • SSL/TLS Termination        │ │
+│  │   • Rate Limiting              │ │
+│  │   • Request Routing            │ │
+│  └─────────────────────────────────┘ │
+└─────────────────────────────────────┘
+                    │
+          Private Network (10.x.x.x)
+                    │
+    ┌───────────────┼───────────────┐──────┐
+    │               │               │      │
+┌───▼───┐       ┌───▼───┐       ┌───▼───┐  │
+│  App  │       │  DB   │       │Message│  │
+│Server │       │Server │       │Server │  │
+│       │       │       │       │       │  │
+│ Auth  │◄─────►│  DB   │◄──────┤ Queue │  │
+│ User  │       │ Cache │       │       │  │
+│ Notify│       │       │       │Messaging │
+└───────┘       └───────┘       │Delivery│  │
+                                │Worker  │  │
+                                └────────┘  │
+                                             │
+                                         ┌───▼───┐
+                                         │ Media │
+                                         │Server │
+                                         │(Opt.) │
+                                         └───────┘
 ```
+
+### Service Communication
+- **Internal DNS**: Services communicate via private DNS names (app.internal, db.internal, message.internal)
+- **Database**: PostgreSQL on dedicated DB server, accessed by application services
+- **Cache**: Redis primary on DB server, replica on Message server
+- **Message Queue**: Redpanda on Message server for reliable message delivery
+- **Load Balancing**: All external traffic goes through Gateway server
+- **Security**: Strict firewall rules between server roles
+
+### Benefits of 5-Server Architecture
+- **Performance**: Database isolation prevents resource contention
+- **Scalability**: Each server role can be scaled independently
+- **Security**: Database server accessible only to application servers
+- **Reliability**: Failure in one server doesn't affect database operations
+- **Maintenance**: Can update/backup database without affecting applications
 
 All services communicate internally via Docker network. External access only through API Gateway.
 

@@ -30,6 +30,7 @@ use construct_server::config::Config;
 use construct_server::db::DbPool;
 use construct_server::queue::MessageQueue;
 use serde_json::json;
+use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -37,6 +38,61 @@ use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// GET /.well-known/jwks.json
+/// Returns JSON Web Key Set (JWKS) for RS256 public key
+/// This endpoint is public and doesn't require authentication
+async fn get_jwks() -> impl IntoResponse {
+    // Try to get JWT public key from environment
+    match env::var("JWT_PUBLIC_KEY") {
+        Ok(public_key) => {
+            // Remove PEM headers/footers and newlines for JWKS format
+            let key_content = public_key
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replace("\n", "")
+                .replace("\r", "");
+
+            let jwks = json!({
+                "keys": [{
+                    "kty": "RSA",
+                    "use": "sig",
+                    "alg": "RS256",
+                    "n": key_content,
+                    "kid": "construct-auth-service-key"
+                }]
+            });
+
+            (StatusCode::OK, Json(jwks))
+        }
+        Err(_) => {
+            // If no public key, return error
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "JWT public key not configured"
+                }))
+            )
+        }
+    }
+}
+
+/// GET /public-key
+/// Returns the JWT public key in PEM format
+/// This endpoint is public and doesn't require authentication
+async fn get_public_key() -> impl IntoResponse {
+    match env::var("JWT_PUBLIC_KEY") {
+        Ok(public_key) => {
+            (StatusCode::OK, public_key)
+        }
+        Err(_) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "JWT public key not configured".to_string()
+            )
+        }
+    }
+}
 
 /// Health check endpoint
 async fn health_check() -> impl IntoResponse {
@@ -69,9 +125,7 @@ async fn main() -> Result<()> {
 
     // Apply database migrations
     info!("Applying database migrations...");
-    sqlx::migrate!()
-        .run(&*db_pool)
-        .await
+    sqlx::migrate!().run(&*db_pool).await
         .context("Failed to apply database migrations")?;
     info!("Database migrations applied successfully");
 
@@ -145,6 +199,9 @@ async fn main() -> Result<()> {
         .route("/health", get(health_check))
         .route("/health/ready", get(health_check))
         .route("/health/live", get(health_check))
+        // Public key endpoint (no auth required)
+        .route("/.well-known/jwks.json", get(get_jwks))
+        .route("/public-key", get(get_public_key))
         // Auth endpoints
         .route("/api/v1/auth/register", post(handlers::register))
         .route("/api/v1/auth/login", post(handlers::login))

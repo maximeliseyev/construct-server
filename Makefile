@@ -44,6 +44,7 @@ help:
 	@echo "  make deploy-worker      Deploy delivery worker to Fly.io"
 	@echo ""
 	@echo "🚀 Microservices Deployment:"
+	@echo "  make deploy-worker              Deploy Delivery Worker to Fly.io"
 	@echo "  make deploy-api-gateway         Deploy API Gateway to Fly.io"
 	@echo "  make deploy-auth-service        Deploy Auth Service to Fly.io"
 	@echo "  make deploy-user-service        Deploy User Service to Fly.io"
@@ -70,11 +71,13 @@ help:
 	@echo "  make status-media-service Show construct-media-service status"
 	@echo ""
 	@echo "📊 Microservices Monitoring:"
+	@echo "  make logs-worker              View Delivery Worker logs"
 	@echo "  make logs-api-gateway         View API Gateway logs"
 	@echo "  make logs-auth-service        View Auth Service logs"
 	@echo "  make logs-user-service        View User Service logs"
 	@echo "  make logs-messaging-service   View Messaging Service logs"
 	@echo "  make logs-notification-service View Notification Service logs"
+	@echo "  make status-worker            Show Delivery Worker status"
 	@echo "  make status-api-gateway       Show API Gateway status"
 	@echo "  make status-auth-service      Show Auth Service status"
 	@echo "  make status-user-service      Show User Service status"
@@ -226,22 +229,25 @@ deploy-microservices:
 	@echo ""
 	@echo "🚀 Deploying all microservices to Fly.io..."
 	@echo ""
-	@echo "1/6 Deploying API Gateway..."
+	@echo "1/7 Deploying Delivery Worker..."
+	@SKIP_CHECK=1 make deploy-worker
+	@echo ""
+	@echo "2/7 Deploying API Gateway..."
 	@SKIP_CHECK=1 make deploy-api-gateway
 	@echo ""
-	@echo "2/6 Deploying Auth Service..."
+	@echo "3/7 Deploying Auth Service..."
 	@SKIP_CHECK=1 make deploy-auth-service
 	@echo ""
-	@echo "3/6 Deploying User Service..."
+	@echo "4/7 Deploying User Service..."
 	@SKIP_CHECK=1 make deploy-user-service
 	@echo ""
-	@echo "4/6 Deploying Messaging Service..."
+	@echo "5/7 Deploying Messaging Service..."
 	@SKIP_CHECK=1 make deploy-messaging-service
 	@echo ""
-	@echo "5/6 Deploying Notification Service..."
+	@echo "6/7 Deploying Notification Service..."
 	@SKIP_CHECK=1 make deploy-notification-service
 	@echo ""
-	@echo "6/6 Deploying Media Service..."
+	@echo "7/7 Deploying Media Service..."
 	@SKIP_CHECK=1 make deploy-media-service
 	@echo ""
 	@echo "✅ All microservices deployed!"
@@ -361,10 +367,37 @@ status-media-service:
 	@echo "📊 Media Service status:"
 	@fly status --app construct-media-service || echo "❌ App not found or not deployed"
 
+status-microservices:
+	@echo "📊 Checking status of all microservices..."
+	@echo ""
+	@echo "=== Delivery Worker ==="
+	@fly status --app construct-delivery-worker || echo "❌ App not found or not deployed"
+	@echo ""
+	@echo "=== API Gateway ==="
+	@fly status --app construct-api-gateway || echo "❌ App not found or not deployed"
+	@echo ""
+	@echo "=== Auth Service ==="
+	@fly status --app construct-auth-service || echo "❌ App not found or not deployed"
+	@echo ""
+	@echo "=== User Service ==="
+	@fly status --app construct-user-service || echo "❌ App not found or not deployed"
+	@echo ""
+	@echo "=== Messaging Service ==="
+	@fly status --app construct-messaging-service || echo "❌ App not found or not deployed"
+	@echo ""
+	@echo "=== Notification Service ==="
+	@fly status --app construct-notification-service || echo "❌ App not found or not deployed"
+	@echo ""
+	@echo "=== Media Service ==="
+	@fly status --app construct-media-service || echo "❌ App not found or not deployed"
+
 # Combined monitoring commands
 logs-microservices:
 	@echo "📋 Viewing all microservices logs..."
 	@echo "Note: Use individual 'make logs-<service>' commands for better control"
+	@echo ""
+	@echo "=== Delivery Worker ==="
+	@fly logs --app construct-delivery-worker || true
 	@echo ""
 	@echo "=== API Gateway ==="
 	@fly logs --app construct-api-gateway || true

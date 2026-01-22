@@ -22,7 +22,7 @@ pub mod gateway;
 // Only federation handlers and session type remain
 pub mod handlers {
     pub mod federation; // Used in routes/federation.rs
-    pub mod session; // Only for Clients type (used in AppContext)
+    pub mod session;    // Only for Clients type (used in AppContext)
 }
 pub mod health;
 pub mod kafka;
@@ -52,6 +52,7 @@ use queue::MessageQueue;
 // Monolithic server - simplified to HTTP-only (WebSocket removed)
 // NOTE: This is kept for development/testing only. Production uses microservices.
 pub async fn run_http_server(app_context: AppContext, listener: TcpListener) {
+    use axum::Router;
     use tower::ServiceBuilder;
     use tower_http::trace::TraceLayer;
 
@@ -268,7 +269,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let key_management = match key_management::KeyManagementConfig::from_env() {
         Ok(kms_config) => {
             tracing::info!("Initializing Key Management System...");
-            match key_management::KeyManagementSystem::new(db_pool.clone(), kms_config).await {
+            match key_management::KeyManagementSystem::new(
+                db_pool.clone(),
+                kms_config,
+            )
+            .await
+            {
                 Ok(kms) => {
                     // Start background tasks (key refresh, rotation)
                     if let Err(e) = kms.start().await {
@@ -305,8 +311,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     use std::collections::HashMap;
     use tokio::sync::RwLock;
     // Create a dummy Clients type for compatibility
-    type Clients =
-        Arc<RwLock<HashMap<String, tokio::sync::mpsc::UnboundedSender<message::ServerMessage>>>>;
+    type Clients = Arc<RwLock<HashMap<String, tokio::sync::mpsc::UnboundedSender<message::ServerMessage>>>>;
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
     let server_instance_id = uuid::Uuid::new_v4().to_string();
 

@@ -29,7 +29,7 @@ pub struct ComponentStatus {
 pub async fn health_check(
     pool: &DbPool,
     queue: Arc<Mutex<MessageQueue>>,
-    kafka_producer: Arc<MessageProducer>,
+    kafka_producer: Option<Arc<MessageProducer>>,
 ) -> Result<()> {
     // Check database
     sqlx::query("SELECT 1").execute(pool).await?;
@@ -37,11 +37,15 @@ pub async fn health_check(
     // Check Redis
     queue.lock().await.ping().await?;
 
-    // Check Kafka (if enabled)
-    if kafka_producer.is_enabled() {
-        // Kafka producer is initialized and connected
-        // The producer will fail on first send if broker is unreachable
-        tracing::debug!("Kafka producer is enabled and initialized");
+    // Check Kafka (if available and enabled)
+    if let Some(kafka_producer) = kafka_producer {
+        if kafka_producer.is_enabled() {
+            // Kafka producer is initialized and connected
+            // The producer will fail on first send if broker is unreachable
+            tracing::debug!("Kafka producer is enabled and initialized");
+        }
+    } else {
+        tracing::debug!("Kafka producer not available");
     }
 
     Ok(())
@@ -53,7 +57,7 @@ pub async fn health_check(
 pub async fn readiness_check(
     pool: &DbPool,
     queue: Arc<Mutex<MessageQueue>>,
-    kafka_producer: Arc<MessageProducer>,
+    kafka_producer: Option<Arc<MessageProducer>>,
 ) -> Result<HealthStatus> {
     let mut health = HealthStatus {
         status: "healthy".to_string(),
@@ -95,16 +99,22 @@ pub async fn readiness_check(
         }
     }
 
-    // Check Kafka (if enabled)
-    if kafka_producer.is_enabled() {
-        // Kafka producer is initialized and connected
-        // The producer will fail on first send if broker is unreachable
-        // For readiness, we just check if it's enabled and initialized
-        health.kafka.status = "ok".to_string();
-        tracing::debug!("Kafka producer is enabled and initialized");
+    // Check Kafka (if available and enabled)
+    if let Some(kafka_producer) = kafka_producer {
+        if kafka_producer.is_enabled() {
+            // Kafka producer is initialized and connected
+            // The producer will fail on first send if broker is unreachable
+            // For readiness, we just check if it's enabled and initialized
+            health.kafka.status = "ok".to_string();
+            tracing::debug!("Kafka producer is enabled and initialized");
+        } else {
+            // Kafka is not enabled, mark as ok (not required)
+            health.kafka.status = "ok".to_string();
+        }
     } else {
-        // Kafka is not enabled, mark as ok (not required)
+        // Kafka producer not available, mark as ok (not required)
         health.kafka.status = "ok".to_string();
+        tracing::debug!("Kafka producer not available");
     }
 
     if health.status == "unhealthy" {

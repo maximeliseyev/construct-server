@@ -138,20 +138,21 @@ impl FromRequestParts<Arc<AppContext>> for AuthenticatedUser {
 
         // Check if token is invalidated (soft logout)
         // Extract token to get JTI
-        if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-            if let Some(token) = auth_header.strip_prefix("Bearer ") {
-                // Try to decode token to get JTI (without full validation, we already validated above)
-                if let Ok(claims) = state.auth_manager.verify_token(token) {
-                    let mut queue = state.queue.lock().await;
-                    if let Ok(true) = queue.is_token_invalidated(&claims.jti).await {
-                        drop(queue);
-                        let body = json!({
-                            "error": "Token was revoked (logged out)",
-                            "code": "TOKEN_REVOKED",
-                        });
-                        return Err((axum::http::StatusCode::UNAUTHORIZED, axum::Json(body))
-                            .into_response());
-                    }
+        if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok())
+            && let Some(token) = auth_header.strip_prefix("Bearer ")
+        {
+            // Try to decode token to get JTI (without full validation, we already validated above)
+            if let Ok(claims) = state.auth_manager.verify_token(token) {
+                let mut queue = state.queue.lock().await;
+                if let Ok(true) = queue.is_token_invalidated(&claims.jti).await {
+                    drop(queue);
+                    let body = json!({
+                        "error": "Token was revoked (logged out)",
+                        "code": "TOKEN_REVOKED",
+                    });
+                    return Err(
+                        (axum::http::StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
+                    );
                 }
             }
         }

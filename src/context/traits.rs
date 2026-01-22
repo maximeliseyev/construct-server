@@ -45,7 +45,7 @@ pub trait DatabaseProvider: Send + Sync {
 #[allow(dead_code)]
 pub trait MessageProvider: Send + Sync {
     fn queue(&self) -> &Arc<Mutex<MessageQueue>>;
-    fn kafka_producer(&self) -> &Arc<MessageProducer>;
+    fn kafka_producer(&self) -> Option<&Arc<MessageProducer>>;
     // gateway_client removed
 }
 
@@ -113,8 +113,8 @@ impl MessageProvider for crate::context::AppContext {
         &self.queue
     }
 
-    fn kafka_producer(&self) -> &Arc<MessageProducer> {
-        &self.kafka_producer
+    fn kafka_producer(&self) -> Option<&Arc<MessageProducer>> {
+        self.kafka_producer.as_ref()
     }
 
     // gateway_client removed

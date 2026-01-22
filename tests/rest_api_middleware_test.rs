@@ -120,7 +120,11 @@ async fn register_user(
 }
 
 // Helper function to get CSRF token
-async fn get_csrf_token(client: &reqwest::Client, app_address: &str, access_token: &str) -> String {
+async fn get_csrf_token(
+    client: &reqwest::Client,
+    app_address: &str,
+    access_token: &str,
+) -> String {
     let response = client
         .get(&format!("http://{}/api/csrf-token", app_address))
         .header("Authorization", format!("Bearer {}", access_token))
@@ -527,12 +531,7 @@ async fn test_middleware_public_endpoints() {
     let client = reqwest::Client::builder().build().unwrap();
 
     // Public endpoints should not require authentication or CSRF
-    let endpoints = vec![
-        "/health/ready",
-        "/health/live",
-        "/api/v1/auth/register",
-        "/api/v1/auth/login",
-    ];
+    let endpoints = vec!["/health/ready", "/health/live", "/api/v1/auth/register", "/api/v1/auth/login"];
 
     for endpoint in endpoints {
         let response = client

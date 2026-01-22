@@ -172,9 +172,7 @@ impl CsrfConfig {
                     })
                     .or_else(|_| {
                         // Fly.io always sets FLY_APP_NAME and FLY_REGION
-                        if std::env::var("FLY_APP_NAME").is_ok()
-                            || std::env::var("FLY_REGION").is_ok()
-                        {
+                        if std::env::var("FLY_APP_NAME").is_ok() || std::env::var("FLY_REGION").is_ok() {
                             Ok(true)
                         } else {
                             std::env::var("RAILWAY_ENVIRONMENT")

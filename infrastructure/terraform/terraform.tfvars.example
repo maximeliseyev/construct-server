@@ -11,18 +11,28 @@ ssh_allowed_ips = ["your-home-ip/32", "your-office-ip/32"]
 
 # Server Configuration
 region = "nyc1"  # New York 1
-droplet_size = "s-2vcpu-4gb"  # 2 CPU, 4GB RAM - good starting point
 droplet_name = "construct-server-prod"
 admin_username = "construct"
+
+# Server Sizes (optimized for each role)
+gateway_droplet_size = "s-1vcpu-1gb"    # Gateway server
+app_droplet_size = "s-2vcpu-4gb"       # Application services
+db_droplet_size = "s-2vcpu-4gb"        # Database server
+message_droplet_size = "s-2vcpu-4gb"   # Message services
+media_droplet_size = "s-2vcpu-4gb"     # Media + monitoring
+
+# Enable optional media server
+enable_media_server = true
 
 # Domain Configuration (optional)
 domain_name = "your-domain.com"
 
-# Database Configuration
+# Security Secrets
 db_password = "your-secure-database-password-here"
-
-# JWT Configuration (generate a secure 256-bit hex string)
+redis_password = "your-secure-redis-password-here"
 jwt_secret = "your-256-bit-jwt-secret-hex-string-here"
+apns_device_token_encryption_key = "your-64-char-apns-encryption-key-hex"
+log_hash_salt = "your-64-char-log-hash-salt-hex"
 
 # Kafka Configuration (optional - for production messaging)
 kafka_brokers = "pkc-xxxxx.region.provider.cloud:9092"

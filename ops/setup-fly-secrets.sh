@@ -59,21 +59,15 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "worker" ]; then
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
+    JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
     JWT_ISSUER="$JWT_ISSUER" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
+    CSRF_ENABLED="false" \
     --app construct-delivery-worker
-
-  # Optional: JWT public key for RS256 (only public key needed for verification)
-  if [ -n "$JWT_PUBLIC_KEY" ]; then
-    flyctl secrets set \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-delivery-worker
   fi
-fi
 
 # ============================================================================
 # Kafka secrets (if enabled)
@@ -94,6 +88,15 @@ if [ "$KAFKA_ENABLED" = "true" ]; then
       KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
       KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
       KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
+      KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
+      KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
+      ${KAFKA_PRODUCER_LINGER_MS:+KAFKA_PRODUCER_LINGER_MS="$KAFKA_PRODUCER_LINGER_MS"} \
+      ${KAFKA_PRODUCER_BATCH_SIZE:+KAFKA_PRODUCER_BATCH_SIZE="$KAFKA_PRODUCER_BATCH_SIZE"} \
+      ${KAFKA_PRODUCER_MAX_IN_FLIGHT:+KAFKA_PRODUCER_MAX_IN_FLIGHT="$KAFKA_PRODUCER_MAX_IN_FLIGHT"} \
+      ${KAFKA_PRODUCER_RETRIES:+KAFKA_PRODUCER_RETRIES="$KAFKA_PRODUCER_RETRIES"} \
+      ${KAFKA_PRODUCER_REQUEST_TIMEOUT_MS:+KAFKA_PRODUCER_REQUEST_TIMEOUT_MS="$KAFKA_PRODUCER_REQUEST_TIMEOUT_MS"} \
+      ${KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:+KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS="$KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS"} \
+      ${KAFKA_PRODUCER_ENABLE_IDEMPOTENCE:+KAFKA_PRODUCER_ENABLE_IDEMPOTENCE="$KAFKA_PRODUCER_ENABLE_IDEMPOTENCE"} \
       --app construct-delivery-worker
   fi
 fi
@@ -305,7 +308,8 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
+    JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
+    JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
     JWT_ISSUER="$JWT_ISSUER" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
@@ -313,18 +317,6 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     CSRF_SECRET="$CSRF_SECRET" \
     --app construct-api-gateway
-
-  # Optional: JWT RSA keys for RS256 (if provided)
-  # Required for Key Management System support
-  if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
-    echo "Setting JWT RSA keys for RS256 algorithm..."
-    flyctl secrets set \
-      JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-api-gateway
-    echo "✅ RS256 keys configured"
-  fi
-fi
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
   echo ""
@@ -339,7 +331,8 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
+    JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
+    JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
     JWT_ISSUER="$JWT_ISSUER" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
@@ -347,20 +340,6 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     CSRF_ENABLED="false" \
     --app construct-auth-service
-
-  # Optional: JWT RSA keys for RS256 (if provided)
-  # Required for Key Management System support
-  if [ -n "$JWT_PRIVATE_KEY" ] && [ -n "$JWT_PUBLIC_KEY" ]; then
-    echo "Setting JWT RSA keys for RS256 algorithm..."
-    flyctl secrets set \
-      JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-auth-service
-    echo "✅ RS256 keys configured - Key Management System ready"
-  elif [ -n "$VAULT_ADDR" ]; then
-    echo "⚠️  Warning: Key Management System enabled but JWT_PRIVATE_KEY/JWT_PUBLIC_KEY not set"
-    echo "   RS256 keys are required for automatic key rotation"
-  fi
 fi
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "user-service" ]; then
@@ -376,7 +355,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "user-service" ]; then
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
+    JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
     JWT_ISSUER="$JWT_ISSUER" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
@@ -384,13 +363,6 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "user-service" ]; then
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     CSRF_ENABLED="false" \
     --app construct-user-service
-
-  # Optional: JWT public key for RS256 (only public key needed for verification)
-  if [ -n "$JWT_PUBLIC_KEY" ]; then
-    flyctl secrets set \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-user-service
-  fi
 fi
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
@@ -406,7 +378,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
+    JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
     JWT_ISSUER="$JWT_ISSUER" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
@@ -414,28 +386,42 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     CSRF_ENABLED="false" \
     --app construct-messaging-service
+fi
 
-  # Optional: JWT public key for RS256 (only public key needed for verification)
-  if [ -n "$JWT_PUBLIC_KEY" ]; then
-    flyctl secrets set \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-messaging-service
-  fi
+   # Kafka secrets for Messaging Service
+   if [ "$KAFKA_ENABLED" = "true" ]; then
+     flyctl secrets set \
+       KAFKA_ENABLED="$KAFKA_ENABLED" \
+       KAFKA_BROKERS="$KAFKA_BROKERS" \
+       KAFKA_TOPIC="$KAFKA_TOPIC" \
+       KAFKA_CONSUMER_GROUP="$KAFKA_CONSUMER_GROUP" \
+       KAFKA_SSL_ENABLED="$KAFKA_SSL_ENABLED" \
+       KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
+       KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
+       KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
+       KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
+       KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
+       ${KAFKA_PRODUCER_LINGER_MS:+KAFKA_PRODUCER_LINGER_MS="$KAFKA_PRODUCER_LINGER_MS"} \
+       ${KAFKA_PRODUCER_BATCH_SIZE:+KAFKA_PRODUCER_BATCH_SIZE="$KAFKA_PRODUCER_BATCH_SIZE"} \
+       ${KAFKA_PRODUCER_MAX_IN_FLIGHT:+KAFKA_PRODUCER_MAX_IN_FLIGHT="$KAFKA_PRODUCER_MAX_IN_FLIGHT"} \
+       ${KAFKA_PRODUCER_RETRIES:+KAFKA_PRODUCER_RETRIES="$KAFKA_PRODUCER_RETRIES"} \
+       ${KAFKA_PRODUCER_REQUEST_TIMEOUT_MS:+KAFKA_PRODUCER_REQUEST_TIMEOUT_MS="$KAFKA_PRODUCER_REQUEST_TIMEOUT_MS"} \
+       ${KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:+KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS="$KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS"} \
+       ${KAFKA_PRODUCER_ENABLE_IDEMPOTENCE:+KAFKA_PRODUCER_ENABLE_IDEMPOTENCE="$KAFKA_PRODUCER_ENABLE_IDEMPOTENCE"} \
+       --app construct-messaging-service
+   fi
 
-  # Kafka secrets for Messaging Service
-  if [ "$KAFKA_ENABLED" = "true" ]; then
-    flyctl secrets set \
-      KAFKA_ENABLED="$KAFKA_ENABLED" \
-      KAFKA_BROKERS="$KAFKA_BROKERS" \
-      KAFKA_TOPIC="$KAFKA_TOPIC" \
-      KAFKA_SSL_ENABLED="$KAFKA_SSL_ENABLED" \
-      KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
-      KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
-      KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
-      KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
-      KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
-      --app construct-messaging-service
-  fi
+   # APNs device token encryption key (required for federation features)
+   if [ -n "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" != "CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" != "0000000000000000000000000000000000000000000000000000000000000000" ]; then
+     flyctl secrets set \
+       APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
+       --app construct-messaging-service
+   else
+     echo "⚠️  Warning: APNS_DEVICE_TOKEN_ENCRYPTION_KEY not set or is default value"
+     echo "   Messaging Service requires this key for federation features."
+     echo "   Generate with: openssl rand -hex 32"
+     echo "   Then set in .env and run: make secrets-messaging-service"
+   fi
 fi
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
@@ -451,21 +437,14 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
   flyctl secrets set \
     DATABASE_URL="$DATABASE_URL" \
     REDIS_URL="$REDIS_URL" \
-    JWT_SECRET="$JWT_SECRET" \
     JWT_ISSUER="$JWT_ISSUER" \
+    JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
     LOG_HASH_SALT="$LOG_HASH_SALT" \
     ONLINE_CHANNEL="$ONLINE_CHANNEL" \
     DELIVERY_QUEUE_PREFIX="$DELIVERY_QUEUE_PREFIX" \
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     CSRF_ENABLED="false" \
     --app construct-notification-service
-
-  # Optional: JWT public key for RS256 (only public key needed for verification)
-  if [ -n "$JWT_PUBLIC_KEY" ]; then
-    flyctl secrets set \
-      JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
-      --app construct-notification-service
-  fi
 
   # APNs device token encryption key (REQUIRED for Notification Service, even if APNs is disabled)
   # This key is used to encrypt device tokens in the database
@@ -499,8 +478,9 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
         flyctl secrets set \
           APNS_KEY_PATH="$APNS_KEY_PATH" \
           --app construct-notification-service
-      fi
-    fi
+     fi
+   fi
+
   fi
 fi
 
@@ -529,6 +509,13 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "media-service" ]; then
     ${MEDIA_TTL_DAYS:+MEDIA_TTL_DAYS="$MEDIA_TTL_DAYS"} \
     ${MEDIA_PORT:+MEDIA_PORT="$MEDIA_PORT"} \
     --app construct-media-service
+
+   # Optional: JWT public key for RS256 (only public key needed for verification)
+   if [ -n "$JWT_PUBLIC_KEY" ]; then
+     flyctl secrets set \
+       JWT_PUBLIC_KEY="$JWT_PUBLIC_KEY" \
+       --app construct-media-service
+   fi
   echo "✅ Media Service secrets configured"
 fi
 

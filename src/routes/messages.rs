@@ -260,16 +260,26 @@ pub async fn send_message(
     };
 
     // Write to Kafka (Phase 5: source of truth)
-    if let Err(e) = app_context.kafka_producer.send_message(&envelope).await {
-        // SECURITY: Use hashed IDs in error logs
+    if let Some(kafka_producer) = &app_context.kafka_producer {
+        if let Err(e) = kafka_producer.send_message(&envelope).await {
+            // SECURITY: Use hashed IDs in error logs
+            tracing::error!(
+                error = %e,
+                sender_hash = %log_safe_id(&sender_id.to_string(), salt),
+                recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+                message_id = %message_id,
+                "Failed to send message to Kafka"
+            );
+            return Err(AppError::Kafka(e.to_string()));
+        }
+    } else {
         tracing::error!(
-            error = %e,
             sender_hash = %log_safe_id(&sender_id.to_string(), salt),
             recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
             message_id = %message_id,
-            "Failed to send message to Kafka"
+            "Kafka producer not available - cannot send message"
         );
-        return Err(AppError::Kafka(e.to_string()));
+        return Err(AppError::Kafka("Kafka producer not available".to_string()));
     }
 
     // SECURITY: Use hashed IDs in success logs

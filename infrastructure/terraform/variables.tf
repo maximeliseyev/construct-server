@@ -30,14 +30,44 @@ variable "droplet_image" {
   default     = "ubuntu-22-04-x64"
 }
 
-variable "droplet_size" {
-  description = "Droplet size (RAM/CPU)"
+variable "gateway_droplet_size" {
+  description = "Gateway server droplet size (RAM/CPU)"
   type        = string
-  default     = "s-2vcpu-4gb" # 2 CPU, 4GB RAM - good for microservices
+  default     = "s-1vcpu-1gb" # Smaller for gateway/load balancer
+}
+
+variable "app_droplet_size" {
+  description = "Application services server droplet size (RAM/CPU)"
+  type        = string
+  default     = "s-2vcpu-4gb" # Auth, User, Notification services
+}
+
+variable "db_droplet_size" {
+  description = "Database server droplet size (RAM/CPU)"
+  type        = string
+  default     = "s-2vcpu-4gb" # PostgreSQL + Redis Primary
+}
+
+variable "message_droplet_size" {
+  description = "Message services server droplet size (RAM/CPU)"
+  type        = string
+  default     = "s-2vcpu-4gb" # Message services + Queue
+}
+
+variable "media_droplet_size" {
+  description = "Media server droplet size (RAM/CPU)"
+  type        = string
+  default     = "s-2vcpu-4gb" # Media + monitoring
+}
+
+variable "enable_media_server" {
+  description = "Enable dedicated media server"
+  type        = bool
+  default     = false
 }
 
 variable "droplet_name" {
-  description = "Name of the droplet"
+  description = "Base name for droplets"
   type        = string
   default     = "construct-server"
 }

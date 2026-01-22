@@ -35,13 +35,14 @@ impl UserServiceContext {
         // Create minimal/mock dependencies for unused fields
         let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
 
-        // Create minimal Kafka producer (not used by user handlers)
-        let kafka_producer = crate::kafka::MessageProducer::new(&self.config.kafka)
-            .map(Arc::new)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Kafka producer creation failed in user service - user handlers don't use Kafka, continuing");
-                panic!("Kafka producer is required but not available - this should not happen in user service")
-            });
+        // User handlers don't use Kafka, so we can skip creating the producer
+        let kafka_producer = match crate::kafka::MessageProducer::new(&self.config.kafka) {
+            Ok(producer) => Some(Arc::new(producer)),
+            Err(e) => {
+                tracing::warn!(error = %e, "Kafka producer creation failed in user service - user handlers don't use Kafka, continuing without it");
+                None
+            }
+        };
 
         // Create minimal APNs client (not used by user handlers)
         let apns_client = ApnsClient::new(self.config.apns.clone())
@@ -61,13 +62,19 @@ impl UserServiceContext {
         );
 
         // Create AppContext using builder pattern (Phase 2.8)
-        crate::context::AppContext::builder()
+        let mut builder = crate::context::AppContext::builder()
             .with_db_pool(self.db_pool.clone())
             .with_queue(self.queue.clone())
             .with_auth_manager(self.auth_manager.clone())
             .with_clients(clients)
-            .with_config(self.config.clone())
-            .with_kafka_producer(kafka_producer)
+            .with_config(self.config.clone());
+
+        // Only set kafka_producer if available (user service doesn't require it)
+        if let Some(kafka_producer) = kafka_producer {
+            builder = builder.with_kafka_producer(kafka_producer);
+        }
+
+        builder
             .with_apns_client(apns_client)
             .with_token_encryption(token_encryption)
             .with_server_instance_id(uuid::Uuid::new_v4().to_string())

@@ -69,9 +69,7 @@ async fn main() -> Result<()> {
 
     // Apply database migrations
     info!("Applying database migrations...");
-    sqlx::migrate!()
-        .run(&*db_pool)
-        .await
+    sqlx::migrate!().run(&*db_pool).await
         .context("Failed to apply database migrations")?;
     info!("Database migrations applied successfully");
 

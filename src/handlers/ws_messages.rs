@@ -442,17 +442,31 @@ async fn deliver_message_hybrid(
 ) {
     // STEP 1: Write to Kafka first (Source of Truth)
     let envelope = KafkaMessageEnvelope::from(msg);
-    if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
+    if let Some(kafka_producer) = &ctx.kafka_producer {
+        if let Err(e) = kafka_producer.send_message(&envelope).await {
+            tracing::error!(
+                error = %e,
+                message_id = %msg.id,
+                kafka_enabled = kafka_producer.is_enabled(),
+                "❌ Kafka write FAILED - message NOT persisted (source of truth unavailable)"
+            );
+            handler
+                .send_error(
+                    "DELIVERY_FAILED",
+                    "Message could not be persisted. Please retry.",
+                )
+                .await;
+            return;
+        }
+    } else {
         tracing::error!(
-            error = %e,
             message_id = %msg.id,
-            kafka_enabled = ctx.kafka_producer.is_enabled(),
-            "❌ Kafka write FAILED - message NOT persisted (source of truth unavailable)"
+            "❌ Kafka producer not available - message NOT persisted (source of truth unavailable)"
         );
         handler
             .send_error(
                 "DELIVERY_FAILED",
-                "Message could not be persisted. Please retry.",
+                "Message persistence unavailable. Please retry.",
             )
             .await;
         return;

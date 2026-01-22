@@ -358,16 +358,27 @@ async fn receive_federated_message_http_impl(
 
     // 7. Phase 5: Write to Kafka first (source of truth)
     let envelope = KafkaMessageEnvelope::from(&chat_message);
-    if let Err(e) = ctx.kafka_producer.send_message(&envelope).await {
+    if let Some(kafka_producer) = &ctx.kafka_producer {
+        if let Err(e) = kafka_producer.send_message(&envelope).await {
+            tracing::error!(
+                error = %e,
+                message_id = %req.message_id,
+                kafka_enabled = kafka_producer.is_enabled(),
+                "Kafka write FAILED - federated message NOT persisted"
+            );
+            return Ok(json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error": "Failed to persist message"}),
+            ));
+        }
+    } else {
         tracing::error!(
-            error = %e,
             message_id = %req.message_id,
-            kafka_enabled = ctx.kafka_producer.is_enabled(),
-            "Kafka write FAILED - federated message NOT persisted"
+            "Kafka producer not available - federated message NOT persisted"
         );
         return Ok(json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            json!({"error": "Failed to persist message"}),
+            json!({"error": "Message persistence unavailable"}),
         ));
     }
 

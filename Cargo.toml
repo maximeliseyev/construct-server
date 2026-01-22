@@ -7,9 +7,9 @@ edition = "2024"
 name = "construct_server"
 path = "src/lib.rs"
 
-# [[bin]]
-# name = "construct-server"
-# path = "src/main.rs"
+[[bin]]
+name = "construct-server"
+path = "src/main.rs"
 
 [[bin]]
 name = "delivery-worker"

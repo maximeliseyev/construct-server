@@ -46,7 +46,8 @@ pub struct AppContext {
     pub clients: Clients,
     pub config: Arc<Config>,
     /// Kafka producer for reliable message delivery (Phase 1+)
-    pub kafka_producer: Arc<MessageProducer>,
+    /// Optional: some services (like auth) don't need Kafka
+    pub kafka_producer: Option<Arc<MessageProducer>>,
     /// APNs client for push notifications
     pub apns_client: Arc<ApnsClient>,
     /// Device token encryption for privacy
@@ -83,7 +84,7 @@ impl AppContext {
         auth_manager: Arc<AuthManager>,
         clients: Clients,
         config: Arc<Config>,
-        kafka_producer: Arc<MessageProducer>,
+        kafka_producer: Option<Arc<MessageProducer>>,
         apns_client: Arc<ApnsClient>,
         token_encryption: Arc<DeviceTokenEncryption>,
         server_instance_id: String,
@@ -167,7 +168,7 @@ impl AppContext {
     pub fn messages(&self) -> MessageContextRef<'_> {
         MessageContextRef {
             queue: &self.queue,
-            kafka_producer: &self.kafka_producer,
+            kafka_producer: self.kafka_producer.as_ref(),
             // gateway_client removed
         }
     }
@@ -224,7 +225,7 @@ pub struct DatabaseContextRef<'a> {
 /// Message context reference (Phase 2.7)
 pub struct MessageContextRef<'a> {
     pub queue: &'a Arc<Mutex<MessageQueue>>,
-    pub kafka_producer: &'a Arc<MessageProducer>,
+    pub kafka_producer: Option<&'a Arc<MessageProducer>>,
     // gateway_client removed
 }
 
@@ -378,9 +379,7 @@ impl AppContextBuilder {
                 .clients
                 .ok_or_else(|| "clients is required".to_string())?,
             config,
-            kafka_producer: self
-                .kafka_producer
-                .ok_or_else(|| "kafka_producer is required".to_string())?,
+            kafka_producer: self.kafka_producer,
             apns_client: self
                 .apns_client
                 .ok_or_else(|| "apns_client is required".to_string())?,
