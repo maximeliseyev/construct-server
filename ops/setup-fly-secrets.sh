@@ -15,19 +15,17 @@
 #   notification-service - construct-notification-service
 #   (no argument) - all microservices + worker
 #
-# JWT Configuration:
-#   - HS256 (legacy): Set JWT_SECRET (symmetric key)
-#   - RS256 (recommended): Set JWT_PRIVATE_KEY and JWT_PUBLIC_KEY (RSA keypair)
-#   - Key Management System: Requires RS256 + VAULT_ADDR
+# JWT Configuration (RS256 only):
+#   - auth-service: Requires JWT_PRIVATE_KEY + JWT_PUBLIC_KEY (can sign and verify)
+#   - Other services: Require JWT_PUBLIC_KEY only (verify-only mode)
 #
-# Migration to RS256:
-#   1. Generate RSA keypair:
-#      openssl genrsa -out private.pem 4096
-#      openssl rsa -in private.pem -pubout -out public.pem
-#   2. Set in .env:
-#      JWT_PRIVATE_KEY="$(cat private.pem)"
-#      JWT_PUBLIC_KEY="$(cat public.pem)"
-#   3. Keep JWT_SECRET for backward compatibility during migration
+# Generate RSA keypair:
+#   openssl genrsa -out private.pem 4096
+#   openssl rsa -in private.pem -pubout -out public.pem
+#
+# Set in .env:
+#   JWT_PRIVATE_KEY="$(cat private.pem)"
+#   JWT_PUBLIC_KEY="$(cat public.pem)"
 
 set -e
 
@@ -46,6 +44,32 @@ SERVICE="${1:-all}"
 echo "=== Setting up Fly.io secrets from .env ==="
 echo "Service: $SERVICE"
 echo ""
+
+# ============================================================================
+# Validate required JWT keys (RS256 only)
+# ============================================================================
+
+if [ -z "$JWT_PUBLIC_KEY" ]; then
+  echo "Error: JWT_PUBLIC_KEY is required but not set in .env"
+  echo ""
+  echo "Generate RSA keypair with:"
+  echo "  openssl genrsa -out private.pem 4096"
+  echo "  openssl rsa -in private.pem -pubout -out public.pem"
+  echo ""
+  echo "Then set in .env:"
+  echo '  JWT_PRIVATE_KEY="$(cat private.pem)"'
+  echo '  JWT_PUBLIC_KEY="$(cat public.pem)"'
+  exit 1
+fi
+
+# Warn if auth-service is being set up without private key
+if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
+  if [ -z "$JWT_PRIVATE_KEY" ]; then
+    echo "Warning: JWT_PRIVATE_KEY not set - auth-service won't be able to create tokens!"
+    echo "Set JWT_PRIVATE_KEY in .env for auth-service to work properly."
+    echo ""
+  fi
+fi
 
 # ============================================================================
 # Service-specific secret setup
