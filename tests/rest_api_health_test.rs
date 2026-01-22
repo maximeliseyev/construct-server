@@ -57,10 +57,7 @@ async fn test_readiness_check_success() {
         // Kafka might be disabled, so we check if it exists
         if body.get("kafka").is_some() {
             // Kafka status can be "healthy" or "disabled"
-            assert!(
-                body["kafka"]["status"] == "healthy"
-                    || body["kafka"]["status"] == "disabled"
-            );
+            assert!(body["kafka"]["status"] == "healthy" || body["kafka"]["status"] == "disabled");
         }
     }
 }

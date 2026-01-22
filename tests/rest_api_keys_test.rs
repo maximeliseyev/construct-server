@@ -212,10 +212,12 @@ async fn test_upload_keys_user_id_mismatch() {
 
     let body: serde_json::Value = response.json().await.unwrap();
     assert!(body.get("error").is_some());
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("user_id in bundle does not match"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("user_id in bundle does not match")
+    );
 }
 
 #[tokio::test]
