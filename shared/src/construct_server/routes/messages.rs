@@ -339,6 +339,38 @@ pub async fn get_messages(
     let user_id_str = user_id.to_string();
     let user_id_hash = log_safe_id(&user_id_str, &app_context.config.logging.hash_salt);
 
+    // Track user as online for delivery_worker
+    {
+        let mut queue = app_context.queue.lock().await;
+        if let Err(e) = queue.track_user_online(&user_id_str, &app_context.server_instance_id).await {
+            tracing::error!(
+                error = %e,
+                user_hash = %user_id_hash,
+                "Failed to track user online status"
+            );
+        }
+
+        // Publish notification that user came online
+        if let Err(e) = queue.publish_user_online(
+            &user_id_str,
+            &app_context.server_instance_id,
+            &app_context.config.online_channel,
+        ).await {
+            tracing::error!(
+                error = %e,
+                user_hash = %user_id_hash,
+                "Failed to publish user online notification"
+            );
+        } else {
+            tracing::debug!(
+                user_hash = %user_id_hash,
+                server_instance_id = %app_context.server_instance_id,
+                channel = %app_context.config.online_channel,
+                "Published user online notification"
+            );
+        }
+    }
+
     // Rate limiting: 1 request per second per user
     {
         let mut queue = app_context.queue.lock().await;
