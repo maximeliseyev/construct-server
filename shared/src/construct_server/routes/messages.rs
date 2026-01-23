@@ -490,12 +490,13 @@ pub async fn get_messages(
     );
 
     // Wait for notification or timeout
-    let queue_ref = app_context.queue.lock().await;
-    let notification_received = queue_ref
-        .wait_for_message_notification(&user_id_str, timeout * 1000)
-        .await
-        .unwrap_or(false);
-    drop(queue_ref);
+    // NOTE: Do NOT hold the queue lock during sleep - it blocks all other requests!
+    // wait_for_message_notification just sleeps, no Redis access needed
+    let notification_received = {
+        use tokio::time::Duration;
+        tokio::time::sleep(Duration::from_secs(timeout)).await;
+        false // Always return false - client will check for messages again
+    };
 
     if notification_received {
         // Notification received - check for messages again

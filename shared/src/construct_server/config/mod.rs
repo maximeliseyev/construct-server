@@ -205,23 +205,13 @@ impl Config {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(DEFAULT_PORT),
-            bind_address: if std::env::var("FLY_APP_NAME").is_ok() {
-                format!(
-                    "fly-local-6pn:{}",
-                    std::env::var("PORT")
-                        .ok()
-                        .and_then(|p| p.parse().ok())
-                        .unwrap_or(DEFAULT_PORT)
-                )
-            } else {
-                format!(
-                    "[::]:{}",
-                    std::env::var("PORT")
-                        .ok()
-                        .and_then(|p| p.parse().ok())
-                        .unwrap_or(DEFAULT_PORT)
-                )
-            },
+            bind_address: format!(
+                "[::]:{}",
+                std::env::var("PORT")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(DEFAULT_PORT)
+            ),
             health_port: std::env::var("HEALTH_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
