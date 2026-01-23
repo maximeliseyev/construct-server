@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
-use crate::handlers::session::Clients;
+
 use crate::kafka::MessageProducer;
 use crate::key_management::KeyManagementSystem;
 // MessageGatewayClient removed - was only used for WebSocket message processing
@@ -43,7 +43,6 @@ pub struct AppContext {
     pub db_pool: Arc<DbPool>,
     pub queue: Arc<Mutex<MessageQueue>>,
     pub auth_manager: Arc<AuthManager>,
-    pub clients: Clients,
     pub config: Arc<Config>,
     /// Kafka producer for reliable message delivery (Phase 1+)
     /// Optional: some services (like auth) don't need Kafka
@@ -82,7 +81,6 @@ impl AppContext {
         db_pool: Arc<DbPool>,
         queue: Arc<Mutex<MessageQueue>>,
         auth_manager: Arc<AuthManager>,
-        clients: Clients,
         config: Arc<Config>,
         kafka_producer: Option<Arc<MessageProducer>>,
         apns_client: Arc<ApnsClient>,
@@ -96,7 +94,6 @@ impl AppContext {
             db_pool,
             queue,
             auth_manager,
-            clients,
             config,
             kafka_producer,
             apns_client,
@@ -177,7 +174,6 @@ impl AppContext {
     pub fn auth(&self) -> AuthContextRef<'_> {
         AuthContextRef {
             manager: &self.auth_manager,
-            clients: &self.clients,
         }
     }
 
@@ -232,7 +228,6 @@ pub struct MessageContextRef<'a> {
 /// Auth context reference (Phase 2.7)
 pub struct AuthContextRef<'a> {
     pub manager: &'a Arc<AuthManager>,
-    pub clients: &'a Clients,
 }
 
 /// Notification context reference (Phase 2.7)
@@ -267,7 +262,6 @@ pub struct AppContextBuilder {
     db_pool: Option<Arc<DbPool>>,
     queue: Option<Arc<Mutex<MessageQueue>>>,
     auth_manager: Option<Arc<AuthManager>>,
-    clients: Option<Clients>,
     config: Option<Arc<Config>>,
     kafka_producer: Option<Arc<MessageProducer>>,
     apns_client: Option<Arc<ApnsClient>>,
@@ -284,7 +278,6 @@ impl AppContextBuilder {
             db_pool: None,
             queue: None,
             auth_manager: None,
-            clients: None,
             config: None,
             kafka_producer: None,
             apns_client: None,
@@ -308,11 +301,6 @@ impl AppContextBuilder {
 
     pub fn with_auth_manager(mut self, auth_manager: Arc<AuthManager>) -> Self {
         self.auth_manager = Some(auth_manager);
-        self
-    }
-
-    pub fn with_clients(mut self, clients: Clients) -> Self {
-        self.clients = Some(clients);
         self
     }
 
@@ -375,9 +363,6 @@ impl AppContextBuilder {
             auth_manager: self
                 .auth_manager
                 .ok_or_else(|| "auth_manager is required".to_string())?,
-            clients: self
-                .clients
-                .ok_or_else(|| "clients is required".to_string())?,
             config,
             kafka_producer: self.kafka_producer,
             apns_client: self

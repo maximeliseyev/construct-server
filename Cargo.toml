@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "shared",
+    "messaging",
     "auth-service",
     "messaging-service",
     "user-service",

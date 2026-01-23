@@ -387,44 +387,7 @@ async fn receive_federated_message_http_impl(
         "Federated message persisted to Kafka"
     );
 
-    // 8. Route to local delivery - try to deliver directly to online recipient
-    let recipient_uuid = recipient.uuid();
-    let recipient_tx = {
-        let clients_read = ctx.clients.read().await;
-        clients_read.get(&recipient_uuid.to_string()).cloned()
-    };
-
-    if let Some(tx) = recipient_tx {
-        // Recipient is online - deliver directly
-        match tx.send(crate::message::ServerMessage::Message(chat_message.clone())) {
-            Ok(_) => {
-                // SECURITY: Hash user IDs for privacy
-                tracing::info!(
-                    message_id = %req.message_id,
-                    from_hash = %log_safe_id(&req.from, salt),
-                    to_hash = %log_safe_id(&req.to, salt),
-                    "Federated message delivered to online recipient"
-                );
-
-                return Ok(json_response(
-                    StatusCode::OK,
-                    json!(FederatedMessageResponse {
-                        status: "delivered".to_string(),
-                        message_id: req.message_id,
-                    }),
-                ));
-            }
-            Err(e) => {
-                tracing::debug!(
-                    error = %e,
-                    message_id = %req.message_id,
-                    "Direct delivery failed, message persisted to Kafka for later delivery"
-                );
-            }
-        }
-    }
-
-    // 9. Recipient offline - message already persisted to Kafka
+    // Recipient offline - message already persisted to Kafka
     // delivery_worker will read from Kafka when recipient comes online
     // SECURITY: Hash user IDs for privacy
     tracing::info!(

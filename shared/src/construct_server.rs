@@ -18,10 +18,9 @@ pub mod error;
 pub mod federation;
 pub mod gateway;
 // WebSocket handlers removed - all clients use REST API now
-// Only federation handlers and session type remain
+// Only federation handlers remain
 pub mod handlers {
     pub mod federation; // Used in routes/federation.rs
-    pub mod session; // Only for Clients type (used in AppContext)
 }
 pub mod health;
 pub mod kafka;
@@ -299,14 +298,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(&bind_address).await?;
     tracing::info!("Construct server listening on {} (HTTP only)", bind_address);
 
-    // Create empty clients map (not used for REST API, but required by AppContext for now)
-    // TODO: Make clients optional in AppContext
-    use std::collections::HashMap;
-    use tokio::sync::RwLock;
+    // WebSocket clients removed - no longer needed
     // Create a dummy Clients type for compatibility
-    type Clients =
-        Arc<RwLock<HashMap<String, tokio::sync::mpsc::UnboundedSender<message::ServerMessage>>>>;
-    let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
     let server_instance_id = uuid::Uuid::new_v4().to_string();
 
     // Create application context using builder pattern
@@ -314,7 +307,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_db_pool(db_pool.clone())
         .with_queue(queue.clone())
         .with_auth_manager(auth_manager.clone())
-        .with_clients(clients)
         .with_config(app_config.clone())
         .with_kafka_producer(kafka_producer.clone())
         .with_apns_client(apns_client.clone())

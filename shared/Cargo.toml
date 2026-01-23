@@ -46,9 +46,8 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 hyper = { version = "1.5", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
-tonic = "0.12"
-prost = "0.13"
-tokio-tungstenite = "0.24"
+ tonic = "0.12"
+ prost = "0.13"
 
 # Message formats
 serde_bytes = "0.11"

@@ -30,7 +30,7 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
-use crate::handlers::session::Clients;
+
 use crate::kafka::MessageProducer;
 // MessageGatewayClient removed - was only used for WebSocket
 use crate::queue::MessageQueue;
@@ -53,7 +53,6 @@ pub trait MessageProvider: Send + Sync {
 #[allow(dead_code)]
 pub trait AuthProvider: Send + Sync {
     fn manager(&self) -> &Arc<AuthManager>;
-    fn clients(&self) -> &Clients;
 }
 
 /// Trait for notification operations (for testing and dependency injection)
@@ -91,7 +90,6 @@ pub trait ConfigProvider: Send + Sync {
 pub trait AppContextProvider:
     DatabaseProvider
     + MessageProvider
-    + AuthProvider
     + NotificationProvider
     + FederationProvider
     + DeliveryProvider
@@ -118,16 +116,6 @@ impl MessageProvider for crate::context::AppContext {
     }
 
     // gateway_client removed
-}
-
-impl AuthProvider for crate::context::AppContext {
-    fn manager(&self) -> &Arc<AuthManager> {
-        &self.auth_manager
-    }
-
-    fn clients(&self) -> &Clients {
-        &self.clients
-    }
 }
 
 impl NotificationProvider for crate::context::AppContext {

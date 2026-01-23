@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
-use crate::handlers::session::Clients;
+
 use crate::kafka::MessageProducer;
 // MessageGatewayClient removed - was only used for WebSocket
 use crate::queue::MessageQueue;

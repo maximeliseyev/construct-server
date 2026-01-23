@@ -11,7 +11,7 @@ pub mod handlers;
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::handlers::session::Clients;
+
 use crate::key_management::KeyManagementSystem;
 use crate::queue::MessageQueue;
 use std::collections::HashMap;
@@ -35,8 +35,7 @@ impl AuthServiceContext {
         use crate::apns::{ApnsClient, DeviceTokenEncryption};
         use crate::kafka::MessageProducer;
 
-        // Create minimal/mock dependencies for unused fields
-        let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
+        // WebSocket clients removed - no longer needed
 
         // Auth handlers don't use Kafka, so we can skip creating the producer
         let kafka_producer = match MessageProducer::new(&self.config.kafka) {
@@ -69,7 +68,6 @@ impl AuthServiceContext {
             .with_db_pool(self.db_pool.clone())
             .with_queue(self.queue.clone())
             .with_auth_manager(self.auth_manager.clone())
-            .with_clients(clients)
             .with_config(self.config.clone());
 
         // Only set kafka_producer if available (auth service doesn't require it)

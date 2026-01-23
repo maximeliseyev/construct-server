@@ -50,10 +50,6 @@ pub enum AppError {
     #[error("Message queue error: {0}")]
     MessageQueue(String),
 
-    // ===== WebSocket Errors =====
-    #[error("WebSocket error: {0}")]
-    WebSocket(String),
-
     // ===== Authentication & Authorization Errors =====
     #[error("Authentication error: {0}")]
     Auth(String),
@@ -104,7 +100,6 @@ impl AppError {
             | AppError::Redis(_)
             | AppError::Kafka(_)
             | AppError::MessageQueue(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::WebSocket(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -122,7 +117,6 @@ impl AppError {
             AppError::MessageQueue(_) => "Message queue error".to_string(),
             AppError::Reqwest(_) => "External service error".to_string(),
             AppError::Federation(_) => "Federation error".to_string(),
-            AppError::WebSocket(_) => "WebSocket connection error".to_string(),
             AppError::Config(msg) => format!("Configuration error: {}", msg),
             AppError::Internal(msg) => format!("Internal error: {}", msg),
             _ => "Internal server error".to_string(),
@@ -142,7 +136,6 @@ impl AppError {
             AppError::MessageQueue(_) => "MESSAGE_QUEUE_ERROR",
             AppError::Reqwest(_) => "EXTERNAL_SERVICE_ERROR",
             AppError::Federation(_) => "FEDERATION_ERROR",
-            AppError::WebSocket(_) => "WEBSOCKET_ERROR",
             AppError::Config(_) => "CONFIG_ERROR",
             AppError::Internal(_) => "INTERNAL_ERROR",
             _ => "UNKNOWN_ERROR",
@@ -219,13 +212,6 @@ impl From<rdkafka::error::KafkaError> for AppError {
     }
 }
 
-impl From<tokio_tungstenite::tungstenite::Error> for AppError {
-    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
-        tracing::warn!(error = %err, "WebSocket error occurred");
-        AppError::WebSocket(err.to_string())
-    }
-}
-
 // ============================================================================
 // Helper functions for creating common errors
 // ============================================================================
@@ -272,10 +258,6 @@ impl AppError {
     }
 
     /// Create a WebSocket error
-    pub fn websocket(msg: impl Into<String>) -> Self {
-        AppError::WebSocket(msg.into())
-    }
-
     /// Create a message queue error
     pub fn message_queue(msg: impl Into<String>) -> Self {
         AppError::MessageQueue(msg.into())

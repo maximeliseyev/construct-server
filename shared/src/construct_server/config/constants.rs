@@ -17,7 +17,7 @@ pub(crate) const DEFAULT_MESSAGE_TTL_DAYS: i64 = 7;
 // Access token TTL: 1 hour (for better security - tokens expire quickly)
 pub(crate) const DEFAULT_ACCESS_TOKEN_TTL_HOURS: i64 = 1;
 // Session TTL: kept for backward compatibility, but access tokens now use shorter TTL
-pub(crate) const DEFAULT_SESSION_TTL_DAYS: i64 = 30; // Legacy, used for WebSocket sessions
+pub(crate) const DEFAULT_SESSION_TTL_DAYS: i64 = 30;
 // Refresh token TTL: 30 days (long-lived for user convenience)
 pub(crate) const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 30;
 
@@ -44,7 +44,6 @@ pub const SECONDS_PER_DAY: i64 = 86400;
 // - 2 MB для API endpoints (key bundles, etc.)
 // - Медиафайлы загружаются отдельно на CDN (до 100 MB)
 // ============================================================================
-pub const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024; // 64 KB - WebSocket text messages
-pub const MAX_MESSAGE_SIZE: usize = MAX_WEBSOCKET_MESSAGE_SIZE; // Alias for backward compat
+pub const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64 KB - Message size limit
 pub const MAX_REQUEST_BODY_SIZE: usize = 2 * 1024 * 1024; // 2 MB - HTTP API requests
 pub const MAX_MEDIA_FILE_SIZE: usize = 100 * 1024 * 1024; // 100 MB - Media files on CDN

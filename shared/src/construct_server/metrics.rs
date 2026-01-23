@@ -1,26 +1,10 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use prometheus::{
-    Encoder, GaugeVec, Histogram, HistogramVec, IntCounter, IntCounterVec, TextEncoder, opts,
-    register_gauge_vec, register_histogram, register_histogram_vec, register_int_counter,
-    register_int_counter_vec,
+    opts, register_gauge_vec, register_histogram, register_histogram_vec, register_int_counter,
+    register_int_counter_vec, Encoder, GaugeVec, Histogram, HistogramVec, IntCounter,
+    IntCounterVec, TextEncoder,
 };
-
-pub static CONNECTIONS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(opts!(
-        "construct_connections_total",
-        "Total number of client connections"
-    ))
-    .expect("Failed to register CONNECTIONS_TOTAL metric - this should only happen if the metric is registered twice")
-});
-
-pub static CONNECTIONS_ACTIVE: Lazy<prometheus::IntGauge> = Lazy::new(|| {
-    prometheus::register_int_gauge!(opts!(
-        "construct_connections_active",
-        "Current number of active WebSocket connections"
-    ))
-    .expect("Failed to register CONNECTIONS_ACTIVE metric - this should only happen if the metric is registered twice")
-});
 
 pub static MESSAGES_SENT_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(opts!(

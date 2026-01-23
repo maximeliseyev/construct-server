@@ -31,8 +31,8 @@ mod worker;
 
 // Re-export all public types for backward compatibility
 pub use constants::{
-    MAX_MEDIA_FILE_SIZE, MAX_MESSAGE_SIZE, MAX_REQUEST_BODY_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE,
-    SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
+    MAX_MEDIA_FILE_SIZE, MAX_MESSAGE_SIZE, MAX_REQUEST_BODY_SIZE, SECONDS_PER_DAY,
+    SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
 };
 pub use database::DbConfig;
 pub use deeplinks::DeepLinksConfig;

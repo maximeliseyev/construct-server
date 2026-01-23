@@ -11,7 +11,7 @@ pub mod handlers;
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::handlers::session::Clients;
+
 use crate::queue::MessageQueue;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,8 +32,7 @@ impl UserServiceContext {
     pub fn to_app_context(&self) -> crate::context::AppContext {
         use crate::apns::{ApnsClient, DeviceTokenEncryption};
 
-        // Create minimal/mock dependencies for unused fields
-        let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
+        // WebSocket clients removed - no longer needed
 
         // User handlers don't use Kafka, so we can skip creating the producer
         let kafka_producer = match crate::kafka::MessageProducer::new(&self.config.kafka) {
@@ -66,7 +65,6 @@ impl UserServiceContext {
             .with_db_pool(self.db_pool.clone())
             .with_queue(self.queue.clone())
             .with_auth_manager(self.auth_manager.clone())
-            .with_clients(clients)
             .with_config(self.config.clone());
 
         // Only set kafka_producer if available (user service doesn't require it)
