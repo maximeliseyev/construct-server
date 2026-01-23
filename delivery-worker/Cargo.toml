@@ -1,7 +1,7 @@
 [package]
 name = "delivery-worker"
-version = "0.5.3"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 construct-server-shared = { path = "../shared" }

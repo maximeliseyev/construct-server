@@ -4,13 +4,21 @@ resolver = "2"
 members = [
     "shared",
     "auth-service",
-    "messaging-service", 
+    "messaging-service",
     "user-service",
     "notification-service",
     "gateway",
     "media-service",
     "delivery-worker",
 ]
+
+# Единая версия для всех пакетов
+[workspace.package]
+version = "0.5.4"
+edition = "2024"
+authors = ["Construct Team"]
+repository = "https://github.com/maximeliseyev/construct-server"
+license = "MIT"
 
 [workspace.dependencies]
 # Common dependencies for all services
