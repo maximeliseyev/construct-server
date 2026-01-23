@@ -372,37 +372,71 @@ impl ServerCryptoValidator {
         Ok(())
     }
 
-    /// Validates EncryptedMessageV3 for API v3
-    pub fn validate_encrypted_message_v3(msg: &EncryptedMessageV3) -> Result<()> {
+    /// Validates EncryptedMessage for API v3 (Double Ratchet Protocol)
+    ///
+    /// Validates:
+    /// 1. recipient_id is not empty
+    /// 2. suite_id is supported
+    /// 3. ephemeral_public_key has correct length for suite
+    /// 4. ciphertext has minimum length (nonce + tag)
+    pub fn validate_encrypted_message_v3(msg: &EncryptedMessage) -> Result<()> {
         // 1. Check recipient_id is not empty
         if msg.recipient_id.is_empty() {
             return Err(anyhow::anyhow!("Recipient ID cannot be empty"));
         }
 
-        // 2. Check that suite_id is supported
+        // 2. Check ephemeral_public_key is not empty
+        if msg.ephemeral_public_key.is_empty() {
+            return Err(anyhow::anyhow!("ephemeral_public_key is required for Double Ratchet"));
+        }
+
+        // 3. Decode and validate ephemeral_public_key
+        let ephemeral_bytes = general_purpose::STANDARD
+            .decode(&msg.ephemeral_public_key)
+            .context("Invalid base64 in ephemeral_public_key")?;
+
+        // 4. Suite-specific validation
         match msg.suite_id {
             suite_ids::CLASSIC_X25519 => {
-                // For X25519 suite, we expect at least:
-                // ephemeral_public (32 bytes) + minimal ciphertext (16 bytes AEAD tag minimum)
+                // X25519 ephemeral key: 32 bytes
+                if ephemeral_bytes.len() != 32 {
+                    return Err(anyhow::anyhow!(
+                        "ephemeral_public_key must be 32 bytes for suite {} (got {} bytes)",
+                        msg.suite_id,
+                        ephemeral_bytes.len()
+                    ));
+                }
+
+                // Ciphertext: nonce (12 bytes) + encrypted + tag (16 bytes)
+                // Minimum: 12 + 0 + 16 = 28 bytes
                 let ciphertext_bytes = general_purpose::STANDARD
                     .decode(&msg.ciphertext)
                     .context("Invalid base64 in ciphertext")?;
 
-                if ciphertext_bytes.len() < 32 + 16 {
+                if ciphertext_bytes.len() < 28 {
                     return Err(anyhow::anyhow!(
-                        "Ciphertext too short for suite {} (expected at least 48 bytes)",
-                        msg.suite_id
+                        "Ciphertext too short for suite {} (expected at least 28 bytes, got {})",
+                        msg.suite_id,
+                        ciphertext_bytes.len()
                     ));
                 }
 
                 Ok(())
             }
             suite_ids::PQ_HYBRID_KYBER => {
-                // For hybrid suite, we expect:
-                // ephemeral_hybrid_kem_public (1216 bytes) + ml_kem_ciphertext (1088 bytes) + minimal sealed_box (16 bytes)
+                // Hybrid ephemeral key: 32 (X25519) + 1184 (ML-KEM-768) = 1216 bytes
                 #[cfg(feature = "post-quantum")]
                 {
                     use crate::pqc::validation;
+
+                    if ephemeral_bytes.len() != 1216 {
+                        return Err(anyhow::anyhow!(
+                            "ephemeral_public_key must be 1216 bytes for hybrid suite {} (got {} bytes)",
+                            msg.suite_id,
+                            ephemeral_bytes.len()
+                        ));
+                    }
+
                     let ciphertext_bytes = general_purpose::STANDARD
                         .decode(&msg.ciphertext)
                         .context("Invalid base64 in ciphertext")?;
@@ -549,26 +583,45 @@ pub struct UploadableKeyBundle {
     pub timestamp: Option<i64>,
 }
 
-/// Encrypted message for API v3
+/// Encrypted message for API v3 (Double Ratchet Protocol)
+///
+/// This structure follows the Construct Protocol specification.
+/// See docs/PROTOCOL_SPECIFICATION.md for details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EncryptedMessageV3 {
-    /// Recipient user ID
+pub struct EncryptedMessage {
+    /// Recipient user ID (UUID)
     pub recipient_id: String,
 
-    /// Suite ID used for encryption
+    /// Cipher suite identifier (1 = CLASSIC_X25519, 2 = PQ_HYBRID_KYBER)
     pub suite_id: SuiteId,
 
-    /// Base64-encoded ciphertext (format depends on suite_id)
+    // ===== Double Ratchet Fields =====
+    /// Base64-encoded sender's current DH ratchet public key
+    /// For suite 1: 32 bytes (X25519)
+    /// For suite 2: 1216 bytes (X25519 + ML-KEM-768)
+    pub ephemeral_public_key: String,
+
+    /// Message number in current sending chain (starts at 0)
+    pub message_number: u32,
+
+    /// Number of messages in previous sending chain
+    /// Used for out-of-order message handling
+    #[serde(default)]
+    pub previous_chain_length: u32,
+
+    // ===== Encrypted Content =====
+    /// Base64-encoded AEAD ciphertext
+    /// Format: nonce (12 bytes) || encrypted_plaintext || tag (16 bytes)
     pub ciphertext: String,
 
-    /// Optional: Nonce for replay protection (base64-encoded random bytes, 16-32 bytes)
-    /// Recommended for better replay protection
+    // ===== Replay Protection =====
+    /// Optional: Client-generated nonce for additional replay protection
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
 
-    /// Optional: Timestamp for replay protection (Unix epoch seconds)
-    /// Server validates that timestamp is within 5 minutes of current time
+    /// Optional: Client timestamp (Unix epoch seconds)
+    /// Server rejects messages older than 5 minutes
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
 }

@@ -284,7 +284,7 @@ pub enum ServerMessage {
     SessionExpired,
     PublicKeyBundle(PublicKeyBundleData),
     Message(ChatMessage),
-    EncryptedV3(crate::e2e::EncryptedMessageV3), // New variant for API v3 encrypted messages
+    EncryptedV3(crate::e2e::EncryptedMessage), // New variant for API v3 encrypted messages
     Ack(AckData),
     KeyRotationSuccess,
     ChangePasswordSuccess,

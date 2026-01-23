@@ -167,11 +167,12 @@ impl KafkaMessageEnvelope {
         // Type-specific validation
         match self.message_type {
             MessageType::DirectMessage => {
+                // Double Ratchet protocol requires these fields
                 if self.ephemeral_public_key.is_none() {
-                    anyhow::bail!("ephemeral_public_key required for DirectMessage");
+                    anyhow::bail!("ephemeral_public_key required for DirectMessage (Double Ratchet)");
                 }
                 if self.message_number.is_none() {
-                    anyhow::bail!("message_number required for DirectMessage");
+                    anyhow::bail!("message_number required for DirectMessage (Double Ratchet)");
                 }
             }
             MessageType::MLSMessage
@@ -237,6 +238,54 @@ impl From<&crate::message::ChatMessage> for KafkaMessageEnvelope {
 impl From<crate::message::ChatMessage> for KafkaMessageEnvelope {
     fn from(msg: crate::message::ChatMessage) -> Self {
         Self::from(&msg)
+    }
+}
+
+// ============================================================================
+// Conversion from EncryptedMessage (REST API v1)
+// ============================================================================
+
+/// Context for creating KafkaMessageEnvelope from EncryptedMessage
+/// Provides sender_id and message_id which are not in the message itself
+pub struct EncryptedMessageContext {
+    pub sender_id: String,
+    pub message_id: String,
+}
+
+impl KafkaMessageEnvelope {
+    /// Create a KafkaMessageEnvelope from an EncryptedMessage with additional context
+    ///
+    /// The EncryptedMessage doesn't contain sender_id (it comes from JWT auth)
+    /// and message_id (generated server-side), so they must be provided separately.
+    pub fn from_encrypted_message(
+        msg: &crate::e2e::EncryptedMessage,
+        ctx: &EncryptedMessageContext,
+    ) -> Self {
+        // Calculate content hash for deduplication
+        let mut hasher = Sha256::new();
+        hasher.update(ctx.message_id.as_bytes());
+        hasher.update(msg.ephemeral_public_key.as_bytes());
+        hasher.update(msg.ciphertext.as_bytes());
+        hasher.update(&msg.message_number.to_be_bytes());
+        let content_hash = format!("{:x}", hasher.finalize());
+
+        Self {
+            message_id: ctx.message_id.clone(),
+            sender_id: ctx.sender_id.clone(),
+            recipient_id: msg.recipient_id.clone(),
+            timestamp: chrono::Utc::now().timestamp(),
+            message_type: MessageType::DirectMessage,
+            ephemeral_public_key: Some(msg.ephemeral_public_key.clone()),
+            message_number: Some(msg.message_number),
+            mls_payload: None,
+            group_id: None,
+            encrypted_payload: msg.ciphertext.clone(),
+            content_hash,
+            suite_id: msg.suite_id as u8,
+            origin_server: None,
+            federated: false,
+            server_signature: None,
+        }
     }
 }
 

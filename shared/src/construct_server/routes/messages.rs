@@ -1,12 +1,12 @@
 // ============================================================================
-// Messages Routes
+// Messages Routes (Double Ratchet Protocol)
 // ============================================================================
 //
 // Endpoints:
-// - POST /messages/send - Send an E2E-encrypted message (legacy)
-// - POST /api/v1/messages - Send an E2E-encrypted message [Phase 2.5.4]
-// - GET /api/v1/messages - Get messages (long polling) [Phase 2.5.1]
+// - POST /api/v1/messages - Send an E2E-encrypted message
+// - GET /api/v1/messages - Get messages (long polling)
 //
+// See docs/PROTOCOL_SPECIFICATION.md for protocol details.
 // ============================================================================
 
 use axum::http::HeaderMap;
@@ -18,24 +18,23 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::context::AppContext;
-use crate::e2e::{EncryptedMessageV3, ServerCryptoValidator};
+use crate::e2e::{EncryptedMessage, ServerCryptoValidator};
 use crate::error::AppError;
-use crate::kafka::types::{KafkaMessageEnvelope, MessageType};
+use crate::kafka::types::KafkaMessageEnvelope;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id};
 
-/// POST /messages/send (legacy) or POST /api/v1/messages
-/// Sends an E2E-encrypted message
+/// POST /api/v1/messages
+/// Sends an E2E-encrypted message using Double Ratchet protocol
 pub async fn send_message(
     State(app_context): State<Arc<AppContext>>,
     user: AuthenticatedUser,
     headers: HeaderMap,
-    Json(message): Json<EncryptedMessageV3>,
+    Json(message): Json<EncryptedMessage>,
 ) -> Result<impl IntoResponse, AppError> {
     let sender_id = user.0;
     let sender_id_str = sender_id.to_string();
@@ -231,33 +230,13 @@ pub async fn send_message(
         drop(queue);
     }
 
-    // Calculate content hash for deduplication (used by delivery worker)
-    let mut hasher = Sha256::new();
-    hasher.update(message_id.as_bytes());
-    hasher.update(message.ciphertext.as_bytes());
-    if let Some(ref nonce_str) = message.nonce {
-        hasher.update(nonce_str.as_bytes());
-    }
-    let content_hash = format!("{:x}", hasher.finalize());
-
-    let envelope = KafkaMessageEnvelope {
-        message_id: message_id.clone(),
+    // Create Kafka envelope from EncryptedMessage using the standard conversion
+    use crate::kafka::types::EncryptedMessageContext;
+    let ctx = EncryptedMessageContext {
         sender_id: sender_id.to_string(),
-        recipient_id: recipient_id.to_string(),
-        timestamp: chrono::Utc::now().timestamp(),
-        message_type: MessageType::DirectMessage,
-        // REST API v3 doesn't provide ephemeral key - use placeholder
-        ephemeral_public_key: None,
-        message_number: None,
-        mls_payload: None,
-        group_id: None,
-        encrypted_payload: message.ciphertext.clone(),
-        content_hash,
-        suite_id: message.suite_id as u8, // Convert u16 to u8 (valid range 0-255)
-        origin_server: None,
-        federated: false,
-        server_signature: None,
+        message_id: message_id.clone(),
     };
+    let envelope = KafkaMessageEnvelope::from_encrypted_message(&message, &ctx);
 
     // Write to Kafka (Phase 5: source of truth)
     if let Some(kafka_producer) = &app_context.kafka_producer {

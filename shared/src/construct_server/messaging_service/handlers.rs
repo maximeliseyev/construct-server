@@ -17,7 +17,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::e2e::EncryptedMessageV3;
+use crate::e2e::EncryptedMessage;
 use crate::error::AppError;
 use crate::messaging_service::MessagingServiceContext;
 use crate::routes::extractors::AuthenticatedUser;
@@ -28,7 +28,7 @@ pub async fn send_message(
     State(context): State<Arc<MessagingServiceContext>>,
     user: AuthenticatedUser,
     headers: HeaderMap,
-    Json(message): Json<EncryptedMessageV3>,
+    Json(message): Json<EncryptedMessage>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
     messages::send_message(State(app_context), user, headers, Json(message)).await
