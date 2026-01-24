@@ -42,7 +42,8 @@ primary_region = 'ams'
 
   # Rate limiting
   MAX_MESSAGES_PER_HOUR = "1000"
-  MAX_MESSAGES_PER_MINUTE = "60"
+  MAX_LONG_POLL_REQUESTS_PER_WINDOW = "100"
+  LONG_POLL_RATE_LIMIT_WINDOW_SECS = "60"
 
   # Deduplication window (hours)
   DEDUPLICATION_WINDOW_HOURS = "24"

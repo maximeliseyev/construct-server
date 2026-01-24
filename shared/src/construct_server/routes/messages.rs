@@ -348,7 +348,7 @@ pub struct GetMessagesResponse {
 /// Security:
 /// - Requires JWT authentication
 /// - Returns only messages for the authenticated user
-/// - Rate limiting: 1 request per second per user
+/// - Rate limiting: configurable via MAX_LONG_POLL_REQUESTS_PER_WINDOW (default: 100/60s)
 pub async fn get_messages(
     State(app_context): State<Arc<AppContext>>,
     user: AuthenticatedUser,
@@ -396,23 +396,28 @@ pub async fn get_messages(
         }
     }
 
-    // ✅ IMPROVED: More realistic rate limiting for long-polling
+    // Rate limiting for long-polling (configurable via env vars)
     // Long-polling naturally limits itself (30-60s timeout), so we only need to prevent abuse
-    // Allow 100 requests per minute (or 6000 per hour) - prevents spam but allows normal usage
+    // Default: 100 requests per 60 seconds - prevents spam but allows normal usage
     {
+        let max_requests = app_context.config.security.max_long_poll_requests_per_window;
+        let window_secs = app_context.config.security.long_poll_rate_limit_window_secs;
+
         let mut queue = app_context.queue.lock().await;
         let rate_limit_key = format!("rate:get_messages:{}", user_id_str);
-        match queue.increment_rate_limit(&rate_limit_key, 60).await {  // 60 second window
+        match queue.increment_rate_limit(&rate_limit_key, window_secs).await {
             Ok(count) => {
-                if count > 100 {  // 100 requests per minute
+                if count > max_requests as i64 {
                     drop(queue);
                     tracing::warn!(
                         user_hash = %user_id_hash,
                         count = count,
+                        limit = max_requests,
+                        window_secs = window_secs,
                         "Rate limit exceeded for get_messages"
                     );
                     return Err(AppError::Validation(
-                        "Rate limit exceeded: maximum 100 requests per minute".to_string(),
+                        format!("Rate limit exceeded: maximum {} requests per {} seconds", max_requests, window_secs),
                     ));
                 }
             }

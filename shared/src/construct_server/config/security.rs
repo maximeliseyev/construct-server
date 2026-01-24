@@ -30,6 +30,11 @@ pub struct SecurityConfig {
     /// Maximum requests per user+IP combination per hour (for authenticated operations)
     /// This is typically lower than IP-only limit for stricter control
     pub max_requests_per_user_ip_per_hour: u32,
+    /// Maximum long-polling (GET /messages) requests per user per window
+    /// Default: 100 requests per minute (allows normal long-polling with reconnects)
+    pub max_long_poll_requests_per_window: u32,
+    /// Long-polling rate limit window in seconds (default: 60)
+    pub long_poll_rate_limit_window_secs: i64,
     /// Whether request signing is required for critical operations (key upload, account deletion)
     pub request_signing_required: bool,
     /// Metrics endpoint protection
@@ -107,6 +112,15 @@ impl SecurityConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500), // 500 requests/hour per user+IP (stricter than IP-only)
+            // Long-polling rate limiting (GET /messages)
+            max_long_poll_requests_per_window: std::env::var("MAX_LONG_POLL_REQUESTS_PER_WINDOW")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(100), // 100 requests per window (default: per minute)
+            long_poll_rate_limit_window_secs: std::env::var("LONG_POLL_RATE_LIMIT_WINDOW_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60), // 60 seconds window by default
             // Request signing for critical operations (like Signal)
             request_signing_required: std::env::var("REQUEST_SIGNING_REQUIRED")
                 .ok()

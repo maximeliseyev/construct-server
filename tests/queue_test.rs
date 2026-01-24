@@ -50,6 +50,8 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             max_requests_per_ip_per_hour: 1000,
             combined_rate_limiting_enabled: true,
             max_requests_per_user_ip_per_hour: 500,
+            max_long_poll_requests_per_window: 100,
+            long_poll_rate_limit_window_secs: 60,
             request_signing_required: false,
             metrics_auth_enabled: false,
             metrics_ip_whitelist: vec![],
