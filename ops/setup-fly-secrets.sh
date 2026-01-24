@@ -341,6 +341,7 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "api-gateway" ]; then
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     CSRF_SECRET="$CSRF_SECRET" \
     --app construct-api-gateway
+fi
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
   echo ""
@@ -410,42 +411,64 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "messaging-service" ]; then
     OFFLINE_QUEUE_PREFIX="$OFFLINE_QUEUE_PREFIX" \
     CSRF_ENABLED="false" \
     --app construct-messaging-service
-fi
 
-   # Kafka secrets for Messaging Service
-   if [ "$KAFKA_ENABLED" = "true" ]; then
-     flyctl secrets set \
-       KAFKA_ENABLED="$KAFKA_ENABLED" \
-       KAFKA_BROKERS="$KAFKA_BROKERS" \
-       KAFKA_TOPIC="$KAFKA_TOPIC" \
-       KAFKA_CONSUMER_GROUP="$KAFKA_CONSUMER_GROUP" \
-       KAFKA_SSL_ENABLED="$KAFKA_SSL_ENABLED" \
-       KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
-       KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
-       KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
-       KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
-       KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
-       ${KAFKA_PRODUCER_LINGER_MS:+KAFKA_PRODUCER_LINGER_MS="$KAFKA_PRODUCER_LINGER_MS"} \
-       ${KAFKA_PRODUCER_BATCH_SIZE:+KAFKA_PRODUCER_BATCH_SIZE="$KAFKA_PRODUCER_BATCH_SIZE"} \
-       ${KAFKA_PRODUCER_MAX_IN_FLIGHT:+KAFKA_PRODUCER_MAX_IN_FLIGHT="$KAFKA_PRODUCER_MAX_IN_FLIGHT"} \
-       ${KAFKA_PRODUCER_RETRIES:+KAFKA_PRODUCER_RETRIES="$KAFKA_PRODUCER_RETRIES"} \
-       ${KAFKA_PRODUCER_REQUEST_TIMEOUT_MS:+KAFKA_PRODUCER_REQUEST_TIMEOUT_MS="$KAFKA_PRODUCER_REQUEST_TIMEOUT_MS"} \
-       ${KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:+KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS="$KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS"} \
-       ${KAFKA_PRODUCER_ENABLE_IDEMPOTENCE:+KAFKA_PRODUCER_ENABLE_IDEMPOTENCE="$KAFKA_PRODUCER_ENABLE_IDEMPOTENCE"} \
-       --app construct-messaging-service
-   fi
+  # Kafka secrets for Messaging Service
+  if [ "$KAFKA_ENABLED" = "true" ]; then
+    flyctl secrets set \
+      KAFKA_ENABLED="$KAFKA_ENABLED" \
+      KAFKA_BROKERS="$KAFKA_BROKERS" \
+      KAFKA_TOPIC="$KAFKA_TOPIC" \
+      KAFKA_CONSUMER_GROUP="$KAFKA_CONSUMER_GROUP" \
+      KAFKA_SSL_ENABLED="$KAFKA_SSL_ENABLED" \
+      KAFKA_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
+      KAFKA_SASL_USERNAME="$KAFKA_SASL_USERNAME" \
+      KAFKA_SASL_PASSWORD="$KAFKA_SASL_PASSWORD" \
+      KAFKA_PRODUCER_COMPRESSION="$KAFKA_PRODUCER_COMPRESSION" \
+      KAFKA_PRODUCER_ACKS="$KAFKA_PRODUCER_ACKS" \
+      ${KAFKA_PRODUCER_LINGER_MS:+KAFKA_PRODUCER_LINGER_MS="$KAFKA_PRODUCER_LINGER_MS"} \
+      ${KAFKA_PRODUCER_BATCH_SIZE:+KAFKA_PRODUCER_BATCH_SIZE="$KAFKA_PRODUCER_BATCH_SIZE"} \
+      ${KAFKA_PRODUCER_MAX_IN_FLIGHT:+KAFKA_PRODUCER_MAX_IN_FLIGHT="$KAFKA_PRODUCER_MAX_IN_FLIGHT"} \
+      ${KAFKA_PRODUCER_RETRIES:+KAFKA_PRODUCER_RETRIES="$KAFKA_PRODUCER_RETRIES"} \
+      ${KAFKA_PRODUCER_REQUEST_TIMEOUT_MS:+KAFKA_PRODUCER_REQUEST_TIMEOUT_MS="$KAFKA_PRODUCER_REQUEST_TIMEOUT_MS"} \
+      ${KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:+KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS="$KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS"} \
+      ${KAFKA_PRODUCER_ENABLE_IDEMPOTENCE:+KAFKA_PRODUCER_ENABLE_IDEMPOTENCE="$KAFKA_PRODUCER_ENABLE_IDEMPOTENCE"} \
+      --app construct-messaging-service
+  fi
 
-   # APNs device token encryption key (required for federation features)
-   if [ -n "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" != "CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" != "0000000000000000000000000000000000000000000000000000000000000000" ]; then
-     flyctl secrets set \
-       APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
-       --app construct-messaging-service
-   else
-     echo "⚠️  Warning: APNS_DEVICE_TOKEN_ENCRYPTION_KEY not set or is default value"
-     echo "   Messaging Service requires this key for federation features."
-     echo "   Generate with: openssl rand -hex 32"
-     echo "   Then set in .env and run: make secrets-messaging-service"
-   fi
+  # APNs device token encryption key (required for federation features)
+  if [ -n "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" != "CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32" ] && [ "$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" != "0000000000000000000000000000000000000000000000000000000000000000" ]; then
+    flyctl secrets set \
+      APNS_DEVICE_TOKEN_ENCRYPTION_KEY="$APNS_DEVICE_TOKEN_ENCRYPTION_KEY" \
+      --app construct-messaging-service
+  else
+    echo "⚠️  Warning: APNS_DEVICE_TOKEN_ENCRYPTION_KEY not set or is default value"
+    echo "   Messaging Service requires this key for federation features."
+    echo "   Generate with: openssl rand -hex 32"
+    echo "   Then set in .env and run: make secrets-messaging-service"
+  fi
+
+  # Optional: Full APNs configuration (only if APNs is enabled)
+  if [ -n "$APNS_ENABLED" ] && [ "$APNS_ENABLED" = "true" ]; then
+    flyctl secrets set \
+      APNS_ENABLED="$APNS_ENABLED" \
+      APNS_ENVIRONMENT="${APNS_ENVIRONMENT:-production}" \
+      --app construct-messaging-service
+
+    if [ -n "$APNS_KEY_ID" ]; then
+      flyctl secrets set \
+        APNS_KEY_ID="$APNS_KEY_ID" \
+        APNS_TEAM_ID="$APNS_TEAM_ID" \
+        APNS_BUNDLE_ID="$APNS_BUNDLE_ID" \
+        APNS_TOPIC="$APNS_TOPIC" \
+        --app construct-messaging-service
+
+      if [ -n "$APNS_KEY_PATH" ]; then
+        flyctl secrets set \
+          APNS_KEY_PATH="$APNS_KEY_PATH" \
+          --app construct-messaging-service
+      fi
+    fi
+  fi
 fi
 
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "notification-service" ]; then
@@ -517,21 +540,23 @@ if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "media-service" ]; then
     flyctl apps create construct-media-service
   fi
   
-  # Required: MEDIA_UPLOAD_TOKEN_SECRET (must match the secret used by other services to generate tokens)
-  if [ -z "$MEDIA_UPLOAD_TOKEN_SECRET" ]; then
-    echo "⚠️  MEDIA_UPLOAD_TOKEN_SECRET not set - generating random secret..."
-    MEDIA_UPLOAD_TOKEN_SECRET=$(openssl rand -hex 32)
-    echo "   Generated secret: $MEDIA_UPLOAD_TOKEN_SECRET"
+  # Required: MEDIA_HMAC_SECRET (must match the secret used by other services to generate tokens)
+  # Note: .env may use MEDIA_UPLOAD_TOKEN_SECRET for backwards compatibility
+  MEDIA_HMAC_SECRET="${MEDIA_HMAC_SECRET:-$MEDIA_UPLOAD_TOKEN_SECRET}"
+  if [ -z "$MEDIA_HMAC_SECRET" ]; then
+    echo "⚠️  MEDIA_HMAC_SECRET not set - generating random secret..."
+    MEDIA_HMAC_SECRET=$(openssl rand -hex 32)
+    echo "   Generated secret: $MEDIA_HMAC_SECRET"
     echo "   ⚠️  IMPORTANT: Save this secret and use it in other services to generate upload tokens!"
   fi
-  
+
   flyctl secrets set \
-    MEDIA_UPLOAD_TOKEN_SECRET="$MEDIA_UPLOAD_TOKEN_SECRET" \
+    MEDIA_HMAC_SECRET="$MEDIA_HMAC_SECRET" \
     ${MEDIA_ADMIN_TOKEN:+MEDIA_ADMIN_TOKEN="$MEDIA_ADMIN_TOKEN"} \
-    ${MEDIA_DATA_DIR:+MEDIA_DATA_DIR="$MEDIA_DATA_DIR"} \
+    ${MEDIA_STORAGE_DIR:+MEDIA_STORAGE_DIR="$MEDIA_STORAGE_DIR"} \
     ${MEDIA_MAX_FILE_SIZE:+MEDIA_MAX_FILE_SIZE="$MEDIA_MAX_FILE_SIZE"} \
-    ${MEDIA_TTL_DAYS:+MEDIA_TTL_DAYS="$MEDIA_TTL_DAYS"} \
-    ${MEDIA_PORT:+MEDIA_PORT="$MEDIA_PORT"} \
+    ${MEDIA_FILE_TTL_SECONDS:+MEDIA_FILE_TTL_SECONDS="$MEDIA_FILE_TTL_SECONDS"} \
+    ${MEDIA_BIND_ADDRESS:+MEDIA_BIND_ADDRESS="$MEDIA_BIND_ADDRESS"} \
     --app construct-media-service
 
    # Optional: JWT public key for RS256 (only public key needed for verification)

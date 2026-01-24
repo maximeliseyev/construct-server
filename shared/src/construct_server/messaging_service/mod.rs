@@ -1,13 +1,18 @@
 // ============================================================================
-// Messaging Service - Phase 2.6.4
+// Messaging Service - Phase 2.6.4 + APNs Integration
 // ============================================================================
 //
 // Minimal context and utilities for Messaging Service microservice.
+//
+// Phase 2.9: Added APNs support for push notifications
+// - APNs client for sending silent push notifications
+// - Integrated directly into messaging service for low latency
 //
 // ============================================================================
 
 pub mod handlers;
 
+use crate::apns::ApnsClient;
 use crate::auth::AuthManager;
 use crate::config::Config;
 use crate::db::DbPool;
@@ -18,13 +23,15 @@ use crate::queue::MessageQueue;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// Messaging Service context (minimal dependencies)
+/// Messaging Service context
 #[derive(Clone)]
 pub struct MessagingServiceContext {
     pub db_pool: Arc<DbPool>,
     pub queue: Arc<Mutex<MessageQueue>>,
     pub auth_manager: Arc<AuthManager>,
     pub kafka_producer: Arc<MessageProducer>,
+    /// APNs client for sending push notifications when messages arrive
+    pub apns_client: Arc<ApnsClient>,
     pub config: Arc<Config>,
     pub key_management: Option<Arc<KeyManagementSystem>>,
 }
@@ -33,25 +40,14 @@ impl MessagingServiceContext {
     /// Convert to AppContext for use with existing handlers
     /// This is a temporary adapter until handlers are refactored to use traits
     pub fn to_app_context(&self) -> crate::context::AppContext {
-        use crate::apns::{ApnsClient, DeviceTokenEncryption};
+        use crate::apns::DeviceTokenEncryption;
 
         // WebSocket clients removed - no longer needed
 
-        // Create minimal APNs client (not used by messaging handlers)
-        let apns_client = ApnsClient::new(self.config.apns.clone())
-            .map(Arc::new)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "APNs client creation failed in messaging service - messaging handlers don't use APNs, continuing");
-                panic!("APNs client is required but not available - this should not happen in messaging service")
-            });
-
-        // Create minimal token encryption (not used by messaging handlers)
+        // Token encryption for device token management
         let token_encryption = Arc::new(
             DeviceTokenEncryption::from_hex(&self.config.apns.device_token_encryption_key)
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "Token encryption creation failed in messaging service");
-                    panic!("Token encryption is required but not available - this should not happen in messaging service")
-                })
+                .expect("Failed to create token encryption - APNS_DEVICE_TOKEN_ENCRYPTION_KEY is invalid")
         );
 
         // Create AppContext using builder pattern (Phase 2.8)
@@ -61,7 +57,7 @@ impl MessagingServiceContext {
             .with_auth_manager(self.auth_manager.clone())
             .with_config(self.config.clone())
             .with_kafka_producer(self.kafka_producer.clone())
-            .with_apns_client(apns_client)
+            .with_apns_client(self.apns_client.clone())  // ✅ Use real APNs client
             .with_token_encryption(token_encryption)
             .with_server_instance_id(uuid::Uuid::new_v4().to_string())
             .build()

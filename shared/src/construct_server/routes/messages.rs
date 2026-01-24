@@ -297,6 +297,7 @@ pub struct GetMessagesParams {
 /// Message response structure for GET /api/v1/messages
 /// ✅ FIXED: Aligned with API specification (specification.md)
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")] // ✅ Use camelCase for all fields
 pub struct MessageResponse {
     pub id: String, // KafkaMessageEnvelope.message_id (UUID)
     #[serde(skip_serializing)]
@@ -315,8 +316,7 @@ pub struct MessageResponse {
     // ✅ SPEC: "content" field contains encrypted data (Base64<nonce || ciphertext_with_tag>)
     pub content: String,
 
-    #[serde(rename = "suiteId")] // ✅ SPEC: camelCase
-    pub suite_id: u16, // ✅ Changed from u8 to u16 per spec
+    pub suite_id: u16, // ✅ Changed from u8 to u16 per spec, serialized as "suiteId"
 
     pub timestamp: u64, // ✅ Changed from i64 to u64 per spec
 

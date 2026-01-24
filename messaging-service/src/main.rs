@@ -95,6 +95,18 @@ async fn main() -> Result<()> {
     let auth_manager =
         Arc::new(AuthManager::new(&config).context("Failed to initialize auth manager")?);
 
+    // ✅ NEW: Initialize APNs Client for push notifications
+    info!("Initializing APNs client...");
+    let apns_client = Arc::new(
+        construct_server_shared::apns::ApnsClient::new(config.apns.clone())
+            .context("Failed to initialize APNs client")?
+    );
+    if config.apns.enabled {
+        info!("APNs client initialized and ENABLED");
+    } else {
+        info!("APNs client initialized but DISABLED (APNS_ENABLED=false)");
+    }
+
     // Initialize Key Management System (optional, requires VAULT_ADDR)
     let key_management =
         match construct_server_shared::key_management::KeyManagementConfig::from_env() {
@@ -139,6 +151,7 @@ async fn main() -> Result<()> {
         queue,
         auth_manager,
         kafka_producer,
+        apns_client,  // ✅ NEW: Add APNs client to context
         config: config.clone(),
         key_management,
     });

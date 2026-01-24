@@ -24,10 +24,10 @@ primary_region = "ams"
 
 [env]
   RUST_LOG = "info"
-  MEDIA_PORT = "8080"
-  MEDIA_DATA_DIR = "/data/media"
+  MEDIA_BIND_ADDRESS = "0.0.0.0:8080"
+  MEDIA_STORAGE_DIR = "/data/media"
   MEDIA_MAX_FILE_SIZE = "104857600"  # 100MB
-  MEDIA_TTL_DAYS = "7"
+  MEDIA_FILE_TTL_SECONDS = "604800"  # 7 days
 
 # Persistent storage for media files
 [mounts]
@@ -66,14 +66,14 @@ primary_region = "ams"
 # ============================================================================
 #
 # Required:
-#   MEDIA_UPLOAD_TOKEN_SECRET - Shared secret with construct-server for token validation
-#                               Must be at least 32 characters
-#                               Generate: openssl rand -hex 32
+#   MEDIA_HMAC_SECRET - Shared secret with construct-server for token validation
+#                       Must be at least 32 characters
+#                       Generate: openssl rand -hex 32
 #
 # Optional:
 #   MEDIA_ADMIN_TOKEN - Token for admin operations (delete)
 #
 # Example:
-#   flyctl secrets set MEDIA_UPLOAD_TOKEN_SECRET=$(openssl rand -hex 32) --app construct-media
+#   flyctl secrets set MEDIA_HMAC_SECRET=$(openssl rand -hex 32) --app construct-media-service
 #
 # ============================================================================
