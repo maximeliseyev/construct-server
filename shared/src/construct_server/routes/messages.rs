@@ -396,13 +396,15 @@ pub async fn get_messages(
         }
     }
 
-    // Rate limiting: 1 request per second per user
+    // ✅ IMPROVED: More realistic rate limiting for long-polling
+    // Long-polling naturally limits itself (30-60s timeout), so we only need to prevent abuse
+    // Allow 100 requests per minute (or 6000 per hour) - prevents spam but allows normal usage
     {
         let mut queue = app_context.queue.lock().await;
         let rate_limit_key = format!("rate:get_messages:{}", user_id_str);
-        match queue.increment_rate_limit(&rate_limit_key, 1).await {
+        match queue.increment_rate_limit(&rate_limit_key, 60).await {  // 60 second window
             Ok(count) => {
-                if count > 1 {
+                if count > 100 {  // 100 requests per minute
                     drop(queue);
                     tracing::warn!(
                         user_hash = %user_id_hash,
@@ -410,7 +412,7 @@ pub async fn get_messages(
                         "Rate limit exceeded for get_messages"
                     );
                     return Err(AppError::Validation(
-                        "Rate limit exceeded: maximum 1 request per second".to_string(),
+                        "Rate limit exceeded: maximum 100 requests per minute".to_string(),
                     ));
                 }
             }
@@ -505,7 +507,9 @@ pub async fn get_messages(
     // If we have messages, return them immediately
     if !filtered_messages.is_empty() {
         drop(queue);
-        let next_since = filtered_messages.last().map(|m| m.id.clone());
+        // ✅ FIX: Use stream_id (not message UUID) for next_since
+        // Redis Stream requires format: "{timestamp}-{sequence}"
+        let next_since = filtered_messages.last().map(|m| m.stream_id.clone());
 
         tracing::debug!(
             user_hash = %user_id_hash,
@@ -598,7 +602,8 @@ pub async fn get_messages(
         messages = final_messages;
     }
 
-    let next_since = messages.last().map(|m| m.id.clone());
+    // ✅ FIX: Use stream_id (not message UUID) for next_since
+    let next_since = messages.last().map(|m| m.stream_id.clone());
 
     tracing::debug!(
         user_hash = %user_id_hash,
