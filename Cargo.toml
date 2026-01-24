@@ -3,7 +3,6 @@ resolver = "2"
 
 members = [
     "shared",
-    "messaging",
     "auth-service",
     "messaging-service",
     "user-service",
@@ -15,7 +14,7 @@ members = [
 
 # Единая версия для всех пакетов
 [workspace.package]
-version = "0.5.5"
+version = "0.5.6"
 edition = "2024"
 authors = ["Construct Team"]
 repository = "https://github.com/maximeliseyev/construct-server"
