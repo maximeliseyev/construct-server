@@ -424,7 +424,8 @@ pub async fn get_messages(
     let mut messages = match stream_messages {
         Ok(msgs) => {
             // Convert KafkaMessageEnvelope to MessageResponse
-            msgs.into_iter()
+            let collected_messages = msgs
+                .into_iter()
                 .map(|(_stream_id, envelope)| {
                     MessageResponse {
                         id: envelope.message_id,
@@ -437,7 +438,18 @@ pub async fn get_messages(
                         delivery_status: Some("delivered".to_string()), // Messages from stream are delivered
                     }
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+
+            if !collected_messages.is_empty() {
+                tracing::info!(
+                    user_hash = %user_id_hash,
+                    count = collected_messages.len(),
+                    "Successfully read {} messages from Redis stream for user",
+                    collected_messages.len()
+                );
+            }
+
+            collected_messages
         }
         Err(e) => {
             tracing::error!(

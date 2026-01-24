@@ -244,18 +244,27 @@ impl<'a> DeliveryManager<'a> {
         // This ensures atomicity and maintains FIFO order
         let script = redis::Script::new(
             r"
-            local offline_key = KEYS[1]
-            local delivery_key = KEYS[2]
-            local messages = redis.call('LRANGE', offline_key, 0, -1)
-            if #messages > 0 then
-                -- Move messages to delivery queue (FIFO order - oldest first)
-                for i, msg in ipairs(messages) do
-                    redis.call('RPUSH', delivery_key, msg)
+            local offline_stream_key = KEYS[1]
+            local delivery_list_key = KEYS[2]
+            -- Read all messages from the stream
+            local stream_messages = redis.call('XREAD', 'STREAMS', offline_stream_key, '0-0')
+            local count = 0
+            if stream_messages and #stream_messages > 0 then
+                local messages = stream_messages[1][2]
+                for i, stream_msg in ipairs(messages) do
+                    -- stream_msg is [id, [field, value, field, value]]
+                    local fields = stream_msg[2]
+                    for j=1, #fields, 2 do
+                        if fields[j] == 'payload' then
+                            redis.call('RPUSH', delivery_list_key, fields[j+1])
+                            count = count + 1
+                        end
+                    end
                 end
-                -- Delete offline queue after moving
-                redis.call('DEL', offline_key)
+                -- Delete the stream after processing
+                redis.call('DEL', offline_stream_key)
             end
-            return #messages
+            return count
             ",
         );
 
