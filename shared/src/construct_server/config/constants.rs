@@ -14,12 +14,12 @@ pub(crate) const DEFAULT_SERVER_REGISTRY_TTL_SECS: i64 = 270;
 
 // Default TTL values
 pub(crate) const DEFAULT_MESSAGE_TTL_DAYS: i64 = 7;
-// Access token TTL: 1 hour (for better security - tokens expire quickly)
-pub(crate) const DEFAULT_ACCESS_TOKEN_TTL_HOURS: i64 = 1;
+// Access token TTL: 168 hours (1 week) for better UX in messenger apps
+pub(crate) const DEFAULT_ACCESS_TOKEN_TTL_HOURS: i64 = 168;
 // Session TTL: kept for backward compatibility, but access tokens now use shorter TTL
 pub(crate) const DEFAULT_SESSION_TTL_DAYS: i64 = 30;
-// Refresh token TTL: 30 days (long-lived for user convenience)
-pub(crate) const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 30;
+// Refresh token TTL: 90 days (long-lived for user convenience)
+pub(crate) const DEFAULT_REFRESH_TOKEN_TTL_DAYS: i64 = 90;
 
 // Default polling interval (in milliseconds)
 // OPTIMIZED: Increased default polling interval from 10s to 30s to reduce Redis commands

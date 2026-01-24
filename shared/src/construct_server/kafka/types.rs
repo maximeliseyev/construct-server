@@ -94,7 +94,7 @@ pub struct KafkaMessageEnvelope {
     /// 0 = ChaCha20-Poly1305 (Double Ratchet)
     /// 1+ = MLS cipher suites (TBD)
     #[serde(default)]
-    pub suite_id: u8,
+    pub suite_id: u16,
 
     // ===== Federation Fields =====
     /// Origin server name (e.g., "server.example.com")
@@ -283,7 +283,7 @@ impl KafkaMessageEnvelope {
             group_id: None,
             encrypted_payload: msg.ciphertext.clone(),
             content_hash,
-            suite_id: msg.suite_id as u8,
+            suite_id: msg.suite_id as u16,
             origin_server: None,
             federated: false,
             server_signature: None,

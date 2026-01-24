@@ -96,6 +96,23 @@ impl<'a> DeliveryManager<'a> {
                     })
                     .collect();
 
+                // After reading, delete messages from the stream if since_id was provided
+                // This means the client is acknowledging receipt up to this point
+                if since_id.is_some() && !messages.is_empty() {
+                    let message_ids_to_delete: Vec<String> =
+                        messages.iter().map(|(id, _)| id.clone()).collect();
+                    let _: () = redis::cmd("XDEL")
+                        .arg(stream_key)
+                        .arg(message_ids_to_delete) // XDEL takes a list of IDs
+                        .query_async(self.client)
+                        .await
+                        .context("Failed to delete messages from stream after reading")?;
+                    tracing::debug!(
+                        stream_key = %stream_key,
+                        deleted_count = messages.len(), // Use messages.len() as we're deleting all that were read
+                        "Deleted messages from Redis stream after client acknowledged"
+                    );
+                }
                 Ok(messages)
             }
             Err(e) => {

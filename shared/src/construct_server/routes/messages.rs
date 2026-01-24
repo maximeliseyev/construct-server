@@ -295,14 +295,33 @@ pub struct GetMessagesParams {
 }
 
 /// Message response structure for GET /api/v1/messages
+/// ✅ FIXED: Aligned with API specification (specification.md)
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageResponse {
-    pub id: String,
-    pub sender_id: String,
-    pub recipient_id: String,
-    pub ciphertext: String,
-    pub timestamp: i64,
-    pub suite_id: u8,
+    pub id: String, // KafkaMessageEnvelope.message_id (UUID)
+    #[serde(skip_serializing)]
+    pub stream_id: String, // Redis Stream ID (internal use only, not in spec)
+
+    // ✅ SPEC: Use "from" and "to" as per specification.md (not sender_id/recipient_id)
+    pub from: String,
+    pub to: String,
+
+    // ✅ SPEC: Required fields for Double Ratchet protocol
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ephemeral_public_key: Option<String>, // Base64<Bytes>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_number: Option<u32>,
+
+    // ✅ SPEC: "content" field contains encrypted data (Base64<nonce || ciphertext_with_tag>)
+    pub content: String,
+
+    #[serde(rename = "suiteId")] // ✅ SPEC: camelCase
+    pub suite_id: u16, // ✅ Changed from u8 to u16 per spec
+
+    pub timestamp: u64, // ✅ Changed from i64 to u64 per spec
+
+    // Legacy/internal fields (not in spec, skip if None)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_status: Option<String>,
@@ -415,8 +434,8 @@ pub async fn get_messages(
     let stream_messages = queue
         .read_user_messages_from_stream(
             &user_id_str,
-            None, // server_instance_id not needed - using user-based streams
-            None, // Stream message ID (different from message_id) - TODO: implement proper pagination
+            None,                    // server_instance_id not needed - using user-based streams
+            params.since.as_deref(), // Pass the client's 'since' parameter
             limit,
         )
         .await;
@@ -426,14 +445,20 @@ pub async fn get_messages(
             // Convert KafkaMessageEnvelope to MessageResponse
             let collected_messages = msgs
                 .into_iter()
-                .map(|(_stream_id, envelope)| {
+                .map(|(stream_id, envelope)| {
                     MessageResponse {
                         id: envelope.message_id,
-                        sender_id: envelope.sender_id,
-                        recipient_id: envelope.recipient_id,
-                        ciphertext: envelope.encrypted_payload,
-                        timestamp: envelope.timestamp,
-                        suite_id: envelope.suite_id,
+                        stream_id: stream_id, // Internal use, skip in serialization
+                        // ✅ SPEC: Use "from"/"to" as per specification
+                        from: envelope.sender_id,
+                        to: envelope.recipient_id,
+                        // ✅ SPEC: Include Double Ratchet fields
+                        ephemeral_public_key: envelope.ephemeral_public_key,
+                        message_number: envelope.message_number,
+                        // ✅ SPEC: Use "content" field name
+                        content: envelope.encrypted_payload,
+                        timestamp: envelope.timestamp as u64,
+                        suite_id: envelope.suite_id as u16,
                         nonce: None, // Nonce is not stored in envelope
                         delivery_status: Some("delivered".to_string()), // Messages from stream are delivered
                     }
@@ -533,13 +558,19 @@ pub async fn get_messages(
         let new_messages = match stream_messages {
             Ok(msgs) => msgs
                 .into_iter()
-                .map(|(_, envelope)| MessageResponse {
+                .map(|(stream_id, envelope)| MessageResponse {
                     id: envelope.message_id,
-                    sender_id: envelope.sender_id,
-                    recipient_id: envelope.recipient_id,
-                    ciphertext: envelope.encrypted_payload,
-                    timestamp: envelope.timestamp,
-                    suite_id: envelope.suite_id,
+                    stream_id: stream_id, // Internal use, skip in serialization
+                    // ✅ SPEC: Use "from"/"to" as per specification
+                    from: envelope.sender_id,
+                    to: envelope.recipient_id,
+                    // ✅ SPEC: Include Double Ratchet fields
+                    ephemeral_public_key: envelope.ephemeral_public_key,
+                    message_number: envelope.message_number,
+                    // ✅ SPEC: Use "content" field name
+                    content: envelope.encrypted_payload,
+                    timestamp: envelope.timestamp as u64,
+                    suite_id: envelope.suite_id as u16,
                     nonce: None,
                     delivery_status: Some("delivered".to_string()),
                 })
