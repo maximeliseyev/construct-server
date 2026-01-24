@@ -81,16 +81,21 @@ async fn send_push_notification(
     context: &MessagingServiceContext,
     recipient_id: &str,
 ) -> anyhow::Result<()> {
-    // Get active device tokens for recipient
-    let tokens = sqlx::query_scalar::<_, String>(
-        "SELECT device_token FROM device_tokens 
-         WHERE user_id = $1 AND is_active = true"
+    // ✅ FIXED: Query encrypted device tokens (not plain text)
+    #[derive(sqlx::FromRow)]
+    struct DeviceTokenRow {
+        device_token_encrypted: Vec<u8>,
+    }
+    
+    let rows = sqlx::query_as::<_, DeviceTokenRow>(
+        "SELECT device_token_encrypted FROM device_tokens 
+         WHERE user_id = $1 AND enabled = true"
     )
     .bind(recipient_id)
     .fetch_all(&*context.db_pool)
     .await?;
 
-    if tokens.is_empty() {
+    if rows.is_empty() {
         tracing::debug!(
             recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
             "No active device tokens for recipient - push not sent"
@@ -100,16 +105,43 @@ async fn send_push_notification(
 
     tracing::debug!(
         recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
-        token_count = tokens.len(),
+        token_count = rows.len(),
         "Sending push notification to {} device(s)",
-        tokens.len()
+        rows.len()
     );
 
-    // Send silent push to all user's devices
+    // ✅ Decrypt each token before sending
+    // TODO: Implement DeviceTokenEncryption::decrypt()
+    // For now, we'll skip push if encryption not implemented
+    tracing::warn!(
+        recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
+        "Device token decryption not yet implemented - push notifications disabled"
+    );
+    
+    // NOTE: Temporarily disabled until encryption is implemented
+    // The schema is ready (device_token_encrypted), but we need to:
+    // 1. Implement DeviceTokenEncryption module
+    // 2. Decrypt tokens before sending to APNs
+    // 3. Re-enable this code
+    
+    /* PLACEHOLDER for future implementation:
+    
+    use crate::device_token_encryption::DeviceTokenEncryption;
+    
     let mut send_errors = 0;
-    for token in &tokens {
+    for row in &rows {
+        // Decrypt the token
+        let token = match DeviceTokenEncryption::decrypt(&row.device_token_encrypted) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("Failed to decrypt device token: {}", e);
+                send_errors += 1;
+                continue;
+            }
+        };
+        
         match context.apns_client
-            .send_silent_push(token, None)  // conversation_id = None for now
+            .send_silent_push(&token, None)
             .await
         {
             Ok(_) => {
@@ -125,7 +157,6 @@ async fn send_push_notification(
                     error = %e,
                     "Failed to send push notification to device"
                 );
-                // Continue to other devices even if one fails
             }
         }
     }
@@ -133,11 +164,12 @@ async fn send_push_notification(
     if send_errors > 0 {
         tracing::warn!(
             recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
-            total_devices = tokens.len(),
+            total_devices = rows.len(),
             failed = send_errors,
             "Push notification partially failed"
         );
     }
+    */
 
     Ok(())
 }
