@@ -171,7 +171,7 @@ pub fn verify_request_signature(
 /// Looks for signature in X-Request-Signature header (JSON format)
 ///
 /// # Header Format
-/// ```
+/// ```text
 /// X-Request-Signature: {"signature":"...","publicKey":"...","timestamp":1234567890}
 /// ```
 pub fn extract_request_signature(headers: &axum::http::HeaderMap) -> Option<RequestSignature> {

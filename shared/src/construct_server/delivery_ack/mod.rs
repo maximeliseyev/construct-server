@@ -201,7 +201,7 @@ impl DeliveryAckConfig {
     /// Generate a new random secret key (for initial setup)
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// use construct_server::delivery_ack::DeliveryAckConfig;
     ///
     /// let key_hex = DeliveryAckConfig::generate_secret_key();

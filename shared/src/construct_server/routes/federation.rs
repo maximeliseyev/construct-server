@@ -162,14 +162,15 @@ pub async fn get_federation_keys(
         if let Ok(Some(cached_json)) = queue
             .get_cached_federation_key_bundle(&user_id.to_string())
             .await
-            && let Ok(bundle_json) = serde_json::from_str::<serde_json::Value>(&cached_json) {
-                drop(queue);
-                tracing::debug!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                    "Returning cached key bundle for federation"
-                );
-                return Ok((StatusCode::OK, Json(bundle_json)));
-            }
+            && let Ok(bundle_json) = serde_json::from_str::<serde_json::Value>(&cached_json)
+        {
+            drop(queue);
+            tracing::debug!(
+                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+                "Returning cached key bundle for federation"
+            );
+            return Ok((StatusCode::OK, Json(bundle_json)));
+        }
         drop(queue);
     }
 

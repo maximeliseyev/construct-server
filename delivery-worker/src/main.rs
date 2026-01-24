@@ -317,7 +317,6 @@ async fn run_user_online_notification_listener(
             let salt = &state.config.logging.hash_salt;
             info!(
                 user_hash = %log_safe_id(&notification.user_id, salt),
-                server_instance_id = %notification.server_instance_id,
                 "User came online - Kafka will redeliver any pending messages (offsets were not committed)"
             );
 

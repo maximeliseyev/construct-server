@@ -212,14 +212,14 @@ pub async fn csrf_protection(
 
                 if let Some(user_id) = user_id
                     && let Err(e) = validate_csrf_token(&state.config.csrf, t, &user_id.to_string())
-                    {
-                        tracing::warn!(
-                            path = %path,
-                            error = %e,
-                            "CSRF token validation failed"
-                        );
-                        return Err(StatusCode::FORBIDDEN);
-                    }
+                {
+                    tracing::warn!(
+                        path = %path,
+                        error = %e,
+                        "CSRF token validation failed"
+                    );
+                    return Err(StatusCode::FORBIDDEN);
+                }
             }
             None => {
                 tracing::warn!(path = %path, "Missing CSRF token for browser request");

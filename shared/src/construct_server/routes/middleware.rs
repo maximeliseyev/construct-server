@@ -73,9 +73,10 @@ pub async fn add_security_headers(req: Request, next: Next) -> Response {
     let mut hyper_headers = hyper::HeaderMap::new();
     for (key, value) in response.headers() {
         if let Ok(header_name) = hyper::header::HeaderName::from_bytes(key.as_str().as_bytes())
-            && let Ok(header_value) = hyper::header::HeaderValue::from_bytes(value.as_bytes()) {
-                hyper_headers.insert(header_name, header_value);
-            }
+            && let Ok(header_value) = hyper::header::HeaderValue::from_bytes(value.as_bytes())
+        {
+            hyper_headers.insert(header_name, header_value);
+        }
     }
 
     // Add security headers
@@ -179,19 +180,21 @@ pub async fn csrf_protection(
                 // Extract user ID from Authorization header if present
                 if let Some(auth_header) =
                     headers.get("authorization").and_then(|v| v.to_str().ok())
-                    && let Some(token_str) = auth_header.strip_prefix("Bearer ") {
-                        // Try to decode JWT to get user ID (without full validation)
-                        // This is a lightweight check - full auth happens in extractor
-                        if let Ok(user_id) = extract_user_id_from_jwt_lightweight(token_str)
-                            && let Err(e) = validate_csrf_token(&ctx.config.csrf, t, &user_id) {
-                                tracing::warn!(
-                                    path = %path,
-                                    error = %e,
-                                    "CSRF: Token validation failed"
-                                );
-                                return Err(AppError::csrf("Invalid CSRF token"));
-                            }
+                    && let Some(token_str) = auth_header.strip_prefix("Bearer ")
+                {
+                    // Try to decode JWT to get user ID (without full validation)
+                    // This is a lightweight check - full auth happens in extractor
+                    if let Ok(user_id) = extract_user_id_from_jwt_lightweight(token_str)
+                        && let Err(e) = validate_csrf_token(&ctx.config.csrf, t, &user_id)
+                    {
+                        tracing::warn!(
+                            path = %path,
+                            error = %e,
+                            "CSRF: Token validation failed"
+                        );
+                        return Err(AppError::csrf("Invalid CSRF token"));
                     }
+                }
             }
             None => {
                 tracing::warn!(
@@ -396,7 +399,6 @@ pub async fn combined_rate_limiting(
 /// Note: This is a placeholder - actual error handling is done via IntoResponse for AppError
 #[allow(dead_code)]
 pub async fn error_handler(req: Request, next: Next) -> Response {
-    
     // Error handling is done via AppError::into_response() implementation
     next.run(req).await
 }
@@ -458,13 +460,14 @@ pub async fn metrics_auth(
     // Check 2: Bearer token authentication
     if let Some(expected_token) = &ctx.config.security.metrics_bearer_token
         && let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok())
-            && let Some(token) = auth_header.strip_prefix("Bearer ") {
-                // Constant-time comparison to prevent timing attacks
-                if bool::from(token.as_bytes().ct_eq(expected_token.as_bytes())) {
-                    tracing::debug!("Metrics access granted via Bearer token");
-                    return Ok(next.run(req).await);
-                }
-            }
+        && let Some(token) = auth_header.strip_prefix("Bearer ")
+    {
+        // Constant-time comparison to prevent timing attacks
+        if bool::from(token.as_bytes().ct_eq(expected_token.as_bytes())) {
+            tracing::debug!("Metrics access granted via Bearer token");
+            return Ok(next.run(req).await);
+        }
+    }
 
     // Access denied
     tracing::warn!(

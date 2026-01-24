@@ -141,11 +141,12 @@ pub async fn update_account(
         // Check if username is already taken
         if let Ok(Some(existing_user)) =
             db::get_user_by_username(&app_context.db_pool, new_username).await
-            && existing_user.id != user_id {
-                return Err(AppError::Validation(
-                    "Username is already taken".to_string(),
-                ));
-            }
+            && existing_user.id != user_id
+        {
+            return Err(AppError::Validation(
+                "Username is already taken".to_string(),
+            ));
+        }
 
         // Update username (TODO: Add update_username function to db.rs)
         // For now, we'll skip username updates until the function is added
@@ -382,13 +383,14 @@ pub async fn delete_account(
 
     // 5. Delete delivery ACK data (GDPR compliance)
     if let Some(ack_manager) = &app_context.delivery_ack_manager
-        && let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
-            tracing::warn!(
-                error = %e,
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "Failed to delete delivery ACK data"
-            );
-        }
+        && let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await
+    {
+        tracing::warn!(
+            error = %e,
+            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+            "Failed to delete delivery ACK data"
+        );
+    }
 
     // 6. Untrack user online status
     {

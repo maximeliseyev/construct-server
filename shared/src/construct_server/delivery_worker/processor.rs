@@ -154,11 +154,14 @@ pub async fn process_kafka_message(
         message_id = %message_id,
         recipient_hash = %log_safe_id(recipient_id, salt),
         stream_key = %stream_key,
-        "Message pushed to user delivery stream - offset will be committed"
+        "Message pushed to user delivery stream - offset will NOT be committed immediately"
     );
 
-    // Always commit offset - message is safely stored in user-based stream
-    Ok(ProcessResult::Success)
+    // Do not commit offset immediately.
+    // Let Kafka redeliver. On redelivery, deduplication will find the 'processed' flag,
+    // return 'Skipped', and then the offset will be committed.
+    // This ensures at-least-once processing in case of worker failure.
+    Ok(ProcessResult::UserOffline)
 }
 
 /// Publish notification to Redis Pub/Sub for long polling endpoints

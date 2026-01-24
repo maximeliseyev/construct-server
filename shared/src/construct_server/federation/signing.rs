@@ -254,9 +254,10 @@ impl PublicKeyCache {
             match self.cache.read() {
                 Ok(cache) => {
                     if let Some(cached) = cache.get(domain)
-                        && cached.fetched_at.elapsed() < std::time::Duration::from_secs(3600) {
-                            return Ok(cached.public_key.clone());
-                        }
+                        && cached.fetched_at.elapsed() < std::time::Duration::from_secs(3600)
+                    {
+                        return Ok(cached.public_key.clone());
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to acquire read lock on public key cache, will fetch from remote");

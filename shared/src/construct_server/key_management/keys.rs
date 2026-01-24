@@ -271,9 +271,10 @@ impl KeyManager {
 
         if key.status == KeyStatus::Deprecated
             && let Some(deprecated_at) = key.deprecated_at
-                && Utc::now() - deprecated_at >= self.grace_period {
-                    return Err(anyhow::anyhow!("Key has expired grace period"));
-                }
+            && Utc::now() - deprecated_at >= self.grace_period
+        {
+            return Err(anyhow::anyhow!("Key has expired grace period"));
+        }
 
         // Get public key for verification
         let public_key = key

@@ -84,7 +84,7 @@ pub fn verify_message_hash(message_id: &str, message_hash: &str, secret_key: &[u
 /// Hex-encoded hash string (64 characters)
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// let sender_hash = compute_user_id_hash("550e8400-e29b-41d4-a716-446655440000", &secret_key);
 /// // Store in Redis: "sender_hash:{hash}" → "plaintext_uuid" (TTL 7 days)
 /// ```

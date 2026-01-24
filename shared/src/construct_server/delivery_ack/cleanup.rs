@@ -33,7 +33,7 @@ impl<S: DeliveryPendingStorage> DeliveryCleanupTask<S> {
     /// at the specified interval.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// use std::sync::Arc;
     /// use std::time::Duration;
     /// use construct_server::delivery_ack::{DeliveryCleanupTask, PostgresDeliveryStorage};

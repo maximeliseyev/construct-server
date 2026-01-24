@@ -427,17 +427,18 @@ impl RotationScheduler {
         let manager = self.key_manager.read().await;
         if let Some(key) = manager.get_active_key(key_type)
             && let Some(policy) = self.policies.get(&key_type)
-                && let Some(activated_at) = key.activated_at {
-                    let age = Utc::now() - activated_at;
-                    let next_rotation = activated_at + policy.rotation_interval;
+            && let Some(activated_at) = key.activated_at
+        {
+            let age = Utc::now() - activated_at;
+            let next_rotation = activated_at + policy.rotation_interval;
 
-                    return RotationStatus::Scheduled {
-                        current_key_id: key.key_id.clone(),
-                        activated_at,
-                        age_days: age.num_days(),
-                        next_rotation,
-                    };
-                }
+            return RotationStatus::Scheduled {
+                current_key_id: key.key_id.clone(),
+                activated_at,
+                age_days: age.num_days(),
+                next_rotation,
+            };
+        }
 
         RotationStatus::NoActiveKey
     }

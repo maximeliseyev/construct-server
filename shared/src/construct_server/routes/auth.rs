@@ -487,7 +487,9 @@ pub async fn login(
                 limit = max_attempts,
                 "Login rate limit exceeded"
             );
-            return Err(AppError::Validation("Too many failed login attempts. Try again in 15 minutes.".to_string()));
+            return Err(AppError::Validation(
+                "Too many failed login attempts. Try again in 15 minutes.".to_string(),
+            ));
         }
         drop(queue);
     }
@@ -606,9 +608,9 @@ pub async fn login(
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to verify password");
-            Err(AppError::Unknown(
-                anyhow::anyhow!("Password verification failed"),
-            ))
+            Err(AppError::Unknown(anyhow::anyhow!(
+                "Password verification failed"
+            )))
         }
     }
 }

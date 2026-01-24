@@ -193,9 +193,10 @@ pub fn validate_secret_strength(secret: &str, min_length: usize) -> Result<(), S
     // 2. Check that not all characters are the same
     let first_char = secret.chars().next();
     if let Some(first) = first_char
-        && secret.chars().all(|c| c == first) {
-            return Err("Secret must not consist of a single repeated character".to_string());
-        }
+        && secret.chars().all(|c| c == first)
+    {
+        return Err("Secret must not consist of a single repeated character".to_string());
+    }
 
     // 3. Check for simple repeating patterns (e.g., "ababab" or "123123")
     if secret.len() >= 4 {
@@ -310,24 +311,26 @@ pub fn add_security_headers(headers: &mut hyper::HeaderMap, is_https: bool) {
 pub fn extract_client_ip(headers: &axum::http::HeaderMap, direct_ip: Option<IpAddr>) -> String {
     // 1. Check X-Forwarded-For (first IP in chain)
     if let Some(forwarded_for) = headers.get("x-forwarded-for")
-        && let Ok(forwarded_str) = forwarded_for.to_str() {
-            // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-            // We want the first (original client) IP
-            let first_ip = forwarded_str.split(',').next().unwrap_or("").trim();
-            if !first_ip.is_empty() {
-                // Try to parse as IP address
-                if let Ok(ip) = first_ip.parse::<IpAddr>() {
-                    return normalize_ip(ip);
-                }
+        && let Ok(forwarded_str) = forwarded_for.to_str()
+    {
+        // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+        // We want the first (original client) IP
+        let first_ip = forwarded_str.split(',').next().unwrap_or("").trim();
+        if !first_ip.is_empty() {
+            // Try to parse as IP address
+            if let Ok(ip) = first_ip.parse::<IpAddr>() {
+                return normalize_ip(ip);
             }
         }
+    }
 
     // 2. Check X-Real-IP (single IP, often set by nginx)
     if let Some(real_ip) = headers.get("x-real-ip")
         && let Ok(real_ip_str) = real_ip.to_str()
-            && let Ok(ip) = real_ip_str.trim().parse::<IpAddr>() {
-                return normalize_ip(ip);
-            }
+        && let Ok(ip) = real_ip_str.trim().parse::<IpAddr>()
+    {
+        return normalize_ip(ip);
+    }
 
     // 3. Fallback to direct connection IP
     if let Some(ip) = direct_ip {
