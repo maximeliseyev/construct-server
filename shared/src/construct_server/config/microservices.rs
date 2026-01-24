@@ -75,7 +75,7 @@ impl MicroservicesConfig {
             service_timeout_secs: std::env::var("SERVICE_TIMEOUT_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(30),
+                .unwrap_or(70), // Must be > long polling max (60s)
             circuit_breaker: CircuitBreakerConfig::from_env(),
         }
     }

@@ -40,7 +40,7 @@ primary_region = 'ams'
   # Microservices configuration
   MICROSERVICES_ENABLED = "true"
   SERVICE_DISCOVERY_MODE = "static"
-  SERVICE_TIMEOUT_SECS = "30"
+  SERVICE_TIMEOUT_SECS = "70"
   
   # Service URLs (will be set via secrets or internal DNS)
   # Note: Variable names must match what's used in microservices.rs

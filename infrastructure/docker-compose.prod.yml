@@ -62,7 +62,7 @@ services:
       MESSAGING_SERVICE_URL: "http://messaging-service:8002"
       USER_SERVICE_URL: "http://user-service:8003"
       NOTIFICATION_SERVICE_URL: "http://notification-service:8004"
-      SERVICE_TIMEOUT_SECS: "30"
+      SERVICE_TIMEOUT_SECS: "70"
       CIRCUIT_BREAKER_FAILURE_THRESHOLD: "5"
       CIRCUIT_BREAKER_SUCCESS_THRESHOLD: "2"
       CIRCUIT_BREAKER_TIMEOUT_SECS: "60"
