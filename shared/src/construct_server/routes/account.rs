@@ -62,7 +62,7 @@ pub async fn get_account(
                 user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
                 "Failed to fetch user from database"
             );
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?;
 
     let user_record = user_record.ok_or_else(|| {
@@ -125,7 +125,7 @@ pub async fn update_account(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to fetch user");
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?
         .ok_or_else(
             || // SECURITY: Don't reveal whether user exists - use generic error
@@ -141,13 +141,11 @@ pub async fn update_account(
         // Check if username is already taken
         if let Ok(Some(existing_user)) =
             db::get_user_by_username(&app_context.db_pool, new_username).await
-        {
-            if existing_user.id != user_id {
+            && existing_user.id != user_id {
                 return Err(AppError::Validation(
                     "Username is already taken".to_string(),
                 ));
             }
-        }
 
         // Update username (TODO: Add update_username function to db.rs)
         // For now, we'll skip username updates until the function is added
@@ -177,7 +175,7 @@ pub async fn update_account(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to verify password");
-                AppError::Unknown(e.into())
+                AppError::Unknown(e)
             })?;
 
         if !password_valid {
@@ -193,7 +191,7 @@ pub async fn update_account(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to update password");
-                AppError::Unknown(e.into())
+                AppError::Unknown(e)
             })?;
 
         tracing::info!(
@@ -260,7 +258,7 @@ pub async fn delete_account(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to fetch user");
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?
         .ok_or_else(
             || // SECURITY: Don't reveal whether user exists - use generic error
@@ -271,7 +269,7 @@ pub async fn delete_account(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to verify password");
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?;
 
     if !password_valid {
@@ -308,7 +306,7 @@ pub async fn delete_account(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to fetch key bundle");
-                AppError::Unknown(e.into())
+                AppError::Unknown(e)
             })?
             .ok_or_else(|| {
                 AppError::Validation(
@@ -383,15 +381,14 @@ pub async fn delete_account(
     }
 
     // 5. Delete delivery ACK data (GDPR compliance)
-    if let Some(ack_manager) = &app_context.delivery_ack_manager {
-        if let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
+    if let Some(ack_manager) = &app_context.delivery_ack_manager
+        && let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
             tracing::warn!(
                 error = %e,
                 user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
                 "Failed to delete delivery ACK data"
             );
         }
-    }
 
     // 6. Untrack user online status
     {
@@ -415,7 +412,7 @@ pub async fn delete_account(
                 user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
                 "Failed to delete user account"
             );
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?;
 
     tracing::info!(

@@ -63,5 +63,8 @@ a2 = "0.10"
 native-tls = "0.2.14"
 tokio-native-tls = "0.3.1"
 
+[dev-dependencies]
+serial_test = "3.2"
+
 [build-dependencies]
 tonic-build = "0.12"

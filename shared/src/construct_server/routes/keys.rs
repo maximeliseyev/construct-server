@@ -354,7 +354,7 @@ pub async fn upload_keys(
     }
 
     // Return error if storage failed
-    store_result.map_err(|e| AppError::Unknown(e.into()))?;
+    store_result.map_err(|e| AppError::Unknown(e))?;
 
     // Invalidate cache
     let mut queue = app_context.queue.lock().await;
@@ -449,7 +449,7 @@ async fn get_keys_impl(
                 target_user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
                 "Database error"
             );
-            Err(AppError::Unknown(e.into()))
+            Err(AppError::Unknown(e))
         }
     }
 }

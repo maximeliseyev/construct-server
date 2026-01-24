@@ -387,7 +387,9 @@ impl ServerCryptoValidator {
 
         // 2. Check ephemeral_public_key is not empty
         if msg.ephemeral_public_key.is_empty() {
-            return Err(anyhow::anyhow!("ephemeral_public_key is required for Double Ratchet"));
+            return Err(anyhow::anyhow!(
+                "ephemeral_public_key is required for Double Ratchet"
+            ));
         }
 
         // 3. Decode and validate ephemeral_public_key

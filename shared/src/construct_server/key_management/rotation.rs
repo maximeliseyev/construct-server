@@ -425,9 +425,9 @@ impl RotationScheduler {
         }
 
         let manager = self.key_manager.read().await;
-        if let Some(key) = manager.get_active_key(key_type) {
-            if let Some(policy) = self.policies.get(&key_type) {
-                if let Some(activated_at) = key.activated_at {
+        if let Some(key) = manager.get_active_key(key_type)
+            && let Some(policy) = self.policies.get(&key_type)
+                && let Some(activated_at) = key.activated_at {
                     let age = Utc::now() - activated_at;
                     let next_rotation = activated_at + policy.rotation_interval;
 
@@ -438,8 +438,6 @@ impl RotationScheduler {
                         next_rotation,
                     };
                 }
-            }
-        }
 
         RotationStatus::NoActiveKey
     }

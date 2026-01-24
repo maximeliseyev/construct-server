@@ -15,6 +15,7 @@
 mod security_tests {
     use crate::delivery_ack::*;
     use crate::kafka::types::DeliveryAckEvent;
+    use serial_test::serial;
 
     /// Test 1: Verify HMAC hashes are deterministic and collision-resistant
     #[test]
@@ -171,6 +172,7 @@ mod security_tests {
 
     /// Test 7: Verify DeliveryAckConfig enforces secret key length
     #[test]
+    #[serial]
     fn test_config_enforces_key_length() {
         use std::env;
 
@@ -218,6 +220,7 @@ mod security_tests {
 
     /// Test 8: Verify disabled mode doesn't require secret key
     #[test]
+    #[serial]
     fn test_disabled_mode_no_secret_required() {
         use std::env;
 
@@ -268,6 +271,7 @@ mod security_tests {
 
     /// Test 10: Verify batching configuration
     #[test]
+    #[serial]
     fn test_batching_configuration() {
         use std::env;
 

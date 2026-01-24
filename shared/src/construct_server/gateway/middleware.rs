@@ -210,8 +210,8 @@ pub async fn csrf_protection(
                     .and_then(|token| state.auth_manager.verify_token(token).ok())
                     .and_then(|claims| Uuid::parse_str(&claims.sub).ok());
 
-                if let Some(user_id) = user_id {
-                    if let Err(e) = validate_csrf_token(&state.config.csrf, t, &user_id.to_string())
+                if let Some(user_id) = user_id
+                    && let Err(e) = validate_csrf_token(&state.config.csrf, t, &user_id.to_string())
                     {
                         tracing::warn!(
                             path = %path,
@@ -220,7 +220,6 @@ pub async fn csrf_protection(
                         );
                         return Err(StatusCode::FORBIDDEN);
                     }
-                }
             }
             None => {
                 tracing::warn!(path = %path, "Missing CSRF token for browser request");

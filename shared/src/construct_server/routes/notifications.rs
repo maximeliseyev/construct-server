@@ -120,7 +120,7 @@ pub async fn register_device(
                 user_hash = %user_id_hash,
                 "Failed to encrypt device token"
             );
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?;
 
     let name_encrypted = if let Some(ref name) = request.device_name {
@@ -130,7 +130,7 @@ pub async fn register_device(
                 user_hash = %user_id_hash,
                 "Failed to encrypt device name"
             );
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?)
     } else {
         None

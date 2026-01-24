@@ -342,7 +342,10 @@ pub async fn get_messages(
     // Track user as online for delivery_worker
     {
         let mut queue = app_context.queue.lock().await;
-        if let Err(e) = queue.track_user_online(&user_id_str, &app_context.server_instance_id).await {
+        if let Err(e) = queue
+            .track_user_online(&user_id_str, &app_context.server_instance_id)
+            .await
+        {
             tracing::error!(
                 error = %e,
                 user_hash = %user_id_hash,
@@ -351,11 +354,14 @@ pub async fn get_messages(
         }
 
         // Publish notification that user came online
-        if let Err(e) = queue.publish_user_online(
-            &user_id_str,
-            &app_context.server_instance_id,
-            &app_context.config.online_channel,
-        ).await {
+        if let Err(e) = queue
+            .publish_user_online(
+                &user_id_str,
+                &app_context.server_instance_id,
+                &app_context.config.online_channel,
+            )
+            .await
+        {
             tracing::error!(
                 error = %e,
                 user_hash = %user_id_hash,

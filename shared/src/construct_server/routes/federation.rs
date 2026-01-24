@@ -120,9 +120,9 @@ pub async fn receive_federated_message(
         }
     }
 
-    Ok(axum_response
+    axum_response
         .body(axum::body::Body::from(body_bytes.to_vec()))
-        .map_err(|e| AppError::Hyper(format!("Failed to build response: {}", e)))?)
+        .map_err(|e| AppError::Hyper(format!("Failed to build response: {}", e)))
 }
 
 /// GET /federation/v1/keys/:user_id
@@ -162,8 +162,7 @@ pub async fn get_federation_keys(
         if let Ok(Some(cached_json)) = queue
             .get_cached_federation_key_bundle(&user_id.to_string())
             .await
-        {
-            if let Ok(bundle_json) = serde_json::from_str::<serde_json::Value>(&cached_json) {
+            && let Ok(bundle_json) = serde_json::from_str::<serde_json::Value>(&cached_json) {
                 drop(queue);
                 tracing::debug!(
                     user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
@@ -171,7 +170,6 @@ pub async fn get_federation_keys(
                 );
                 return Ok((StatusCode::OK, Json(bundle_json)));
             }
-        }
         drop(queue);
     }
 

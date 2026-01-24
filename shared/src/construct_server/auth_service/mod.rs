@@ -14,9 +14,8 @@ use crate::db::DbPool;
 
 use crate::key_management::KeyManagementSystem;
 use crate::queue::MessageQueue;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 /// Auth Service context (minimal dependencies)
 #[derive(Clone)]

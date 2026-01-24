@@ -199,7 +199,7 @@ fn extract_user_id_from_jwt(ctx: &AppContext, headers: &HeaderMap) -> Result<Uui
     // or in the AuthenticatedUser extractor's async from_request_parts method.
 
     // Extract user_id from claims (sub is a String, not Option)
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|e| AppError::Uuid(e))?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(AppError::Uuid)?;
 
     Ok(user_id)
 }

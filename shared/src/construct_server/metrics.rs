@@ -1,9 +1,9 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use prometheus::{
-    opts, register_gauge_vec, register_histogram, register_histogram_vec, register_int_counter,
-    register_int_counter_vec, Encoder, GaugeVec, Histogram, HistogramVec, IntCounter,
-    IntCounterVec, TextEncoder,
+    Encoder, GaugeVec, Histogram, HistogramVec, IntCounter, IntCounterVec, TextEncoder, opts,
+    register_gauge_vec, register_histogram, register_histogram_vec, register_int_counter,
+    register_int_counter_vec,
 };
 
 pub static MESSAGES_SENT_TOTAL: Lazy<IntCounter> = Lazy::new(|| {

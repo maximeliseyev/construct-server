@@ -27,9 +27,12 @@
 // ============================================================================
 
 use anyhow::{Context, Result};
-use axum::{Router, routing::{get, post, delete}, ServiceExt};
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
 use construct_server_shared::bin::media_service::{
-    cleanup, config::MediaConfig, handlers::AppState
+    cleanup, config::MediaConfig, handlers::AppState,
 };
 use std::sync::Arc;
 use tokio::spawn;
@@ -73,10 +76,22 @@ async fn main() -> Result<()> {
 
     // Create router
     let app = Router::new()
-        .route("/upload", post(construct_server_shared::bin::media_service::handlers::upload_media))
-        .route("/health", get(construct_server_shared::bin::media_service::handlers::health_check))
-        .route("/:media_id", get(construct_server_shared::bin::media_service::handlers::download_media))
-        .route("/:media_id", delete(construct_server_shared::bin::media_service::handlers::delete_media))
+        .route(
+            "/upload",
+            post(construct_server_shared::bin::media_service::handlers::upload_media),
+        )
+        .route(
+            "/health",
+            get(construct_server_shared::bin::media_service::handlers::health_check),
+        )
+        .route(
+            "/:media_id",
+            get(construct_server_shared::bin::media_service::handlers::download_media),
+        )
+        .route(
+            "/:media_id",
+            delete(construct_server_shared::bin::media_service::handlers::delete_media),
+        )
         .with_state(state);
 
     // Start server
@@ -86,9 +101,7 @@ async fn main() -> Result<()> {
 
     info!("Media Service listening on {}", config.bind_address);
 
-    axum::serve(listener, app)
-        .await
-        .context("Server failed")?;
+    axum::serve(listener, app).await.context("Server failed")?;
 
     Ok(())
 }

@@ -13,9 +13,8 @@ use crate::config::Config;
 use crate::db::DbPool;
 
 use crate::queue::MessageQueue;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 /// User Service context (minimal dependencies)
 #[derive(Clone)]

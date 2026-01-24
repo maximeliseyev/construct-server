@@ -111,7 +111,7 @@ pub async fn refresh_token(
         .create_token(&user_id)
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to create access token");
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?;
 
     // 6. Create new refresh token (30 days)
@@ -120,7 +120,7 @@ pub async fn refresh_token(
         .create_refresh_token(&user_id)
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to create refresh token");
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?;
 
     // 7. Store new refresh token in Redis
@@ -332,7 +332,7 @@ pub async fn register(
                 username_hash = %log_safe_id(&request.username, &app_context.config.logging.hash_salt),
                 "Registration failed"
             );
-            return Err(AppError::Unknown(e.into()));
+            return Err(AppError::Unknown(e));
         }
     };
 
@@ -359,14 +359,14 @@ pub async fn register(
     // Re-serialize and encode
     let updated_json = serde_json::to_string(&bundle_data).map_err(|e| {
         tracing::error!(error = %e, "Failed to serialize bundle_data");
-        AppError::Unknown(anyhow::anyhow!("Failed to process key bundle").into())
+        AppError::Unknown(anyhow::anyhow!("Failed to process key bundle"))
     })?;
     updated_bundle.bundle_data = BASE64.encode(updated_json.as_bytes());
 
     // Store the updated key bundle
     if let Err(e) = db::store_key_bundle(&app_context.db_pool, &user.id, &updated_bundle).await {
         tracing::error!(error = %e, "Failed to store key bundle during registration");
-        return Err(AppError::Unknown(e.into()));
+        return Err(AppError::Unknown(e));
     }
 
     // Create access token and refresh token
@@ -375,7 +375,7 @@ pub async fn register(
         .create_token(&user.id)
         .map_err(|e| {
         tracing::error!(error = %e, "Failed to create access token");
-        AppError::Unknown(e.into())
+        AppError::Unknown(e)
     })?;
 
     let (refresh_token, refresh_jti, _refresh_expires) = app_context
@@ -383,7 +383,7 @@ pub async fn register(
         .create_refresh_token(&user.id)
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to create refresh token");
-            AppError::Unknown(e.into())
+            AppError::Unknown(e)
         })?;
 
     // Store refresh token in Redis
@@ -487,9 +487,7 @@ pub async fn login(
                 limit = max_attempts,
                 "Login rate limit exceeded"
             );
-            return Err(AppError::Validation(format!(
-                "Too many failed login attempts. Try again in 15 minutes."
-            )));
+            return Err(AppError::Validation("Too many failed login attempts. Try again in 15 minutes.".to_string()));
         }
         drop(queue);
     }
@@ -513,7 +511,7 @@ pub async fn login(
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to get user by username");
-            return Err(AppError::Unknown(e.into()));
+            return Err(AppError::Unknown(e));
         }
     };
 
@@ -535,7 +533,7 @@ pub async fn login(
                 .create_token(&user.id)
                 .map_err(|e| {
                     tracing::error!(error = %e, "Failed to create access token");
-                    AppError::Unknown(e.into())
+                    AppError::Unknown(e)
                 })?;
 
             let (refresh_token, refresh_jti, _refresh_expires) = app_context
@@ -543,7 +541,7 @@ pub async fn login(
                 .create_refresh_token(&user.id)
                 .map_err(|e| {
                     tracing::error!(error = %e, "Failed to create refresh token");
-                    AppError::Unknown(e.into())
+                    AppError::Unknown(e)
                 })?;
 
             // Store refresh token in Redis
@@ -609,7 +607,7 @@ pub async fn login(
         Err(e) => {
             tracing::error!(error = %e, "Failed to verify password");
             Err(AppError::Unknown(
-                anyhow::anyhow!("Password verification failed").into(),
+                anyhow::anyhow!("Password verification failed"),
             ))
         }
     }

@@ -16,7 +16,7 @@ use axum::{
 use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tracing::{error, warn};
+use tracing::warn;
 use uuid::Uuid;
 
 /// Shared application state
@@ -45,7 +45,11 @@ pub async fn upload_media(
     let mut file_data = None;
     let mut filename = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
         match field.name() {
             Some("token") => {
                 upload_token = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
@@ -95,7 +99,8 @@ pub async fn upload_media(
     let expires_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .as_secs() + config.file_ttl_seconds;
+        .as_secs()
+        + config.file_ttl_seconds;
 
     tracing::info!(
         media_id = %media_id,
@@ -105,7 +110,10 @@ pub async fn upload_media(
         "Media file uploaded successfully"
     );
 
-    Ok(Json(UploadResponse { media_id, expires_at }))
+    Ok(Json(UploadResponse {
+        media_id,
+        expires_at,
+    }))
 }
 
 /// Download media endpoint

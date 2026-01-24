@@ -169,7 +169,9 @@ impl KafkaMessageEnvelope {
             MessageType::DirectMessage => {
                 // Double Ratchet protocol requires these fields
                 if self.ephemeral_public_key.is_none() {
-                    anyhow::bail!("ephemeral_public_key required for DirectMessage (Double Ratchet)");
+                    anyhow::bail!(
+                        "ephemeral_public_key required for DirectMessage (Double Ratchet)"
+                    );
                 }
                 if self.message_number.is_none() {
                     anyhow::bail!("message_number required for DirectMessage (Double Ratchet)");
@@ -266,7 +268,7 @@ impl KafkaMessageEnvelope {
         hasher.update(ctx.message_id.as_bytes());
         hasher.update(msg.ephemeral_public_key.as_bytes());
         hasher.update(msg.ciphertext.as_bytes());
-        hasher.update(&msg.message_number.to_be_bytes());
+        hasher.update(msg.message_number.to_be_bytes());
         let content_hash = format!("{:x}", hasher.finalize());
 
         Self {

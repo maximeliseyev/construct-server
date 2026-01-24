@@ -22,7 +22,9 @@ pub async fn cleanup_expired_files(config: Arc<MediaConfig>) {
 }
 
 /// Single cleanup run
-async fn cleanup_once(config: &MediaConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn cleanup_once(
+    config: &MediaConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut deleted_count = 0;
     let mut error_count = 0;
 
@@ -53,7 +55,7 @@ async fn cleanup_once(config: &MediaConfig) -> Result<(), Box<dyn std::error::Er
 
         // Check modification time
         let modified = match metadata.modified()?.duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => d.as_secs() as u64,
+            Ok(d) => d.as_secs(),
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "Failed to get file modification time");
                 error_count += 1;
