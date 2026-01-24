@@ -29,56 +29,34 @@ impl<'a> DeliveryManager<'a> {
 
     /// Read messages from Redis Stream for a user
     ///
-    /// Reads from either:
-    /// - delivery_stream:offline:{user_id} (if user was offline)
-    /// - delivery_stream:{server_instance_id} (if user is online, filters by recipient_id)
+    /// Reads from user-based stream: delivery_queue:offline:{user_id}
+    ///
+    /// ARCHITECTURE NOTE: We always use user-based streams to ensure reliable
+    /// delivery in multi-instance deployments. The server_instance_id parameter
+    /// is kept for API compatibility but ignored.
     pub(crate) async fn read_user_messages_from_stream(
         &mut self,
         user_id: &str,
-        server_instance_id: Option<&str>,
+        _server_instance_id: Option<&str>, // Ignored - kept for API compatibility
         since_id: Option<&str>,
         count: usize,
     ) -> Result<Vec<(String, crate::kafka::types::KafkaMessageEnvelope)>> {
-        // Try offline stream first (if user was offline)
-        let offline_stream_key = format!("{}offline:{}", self.delivery_queue_prefix, user_id);
+        // Always read from user-based stream
+        let stream_key = format!("{}offline:{}", self.delivery_queue_prefix, user_id);
 
-        // Check if offline stream exists and has messages
-        let offline_messages = self
-            .read_stream_messages(&offline_stream_key, since_id, count)
+        let messages = self
+            .read_stream_messages(&stream_key, since_id, count)
             .await?;
 
-        if !offline_messages.is_empty() {
-            // Parse and filter messages for this user
-            let mut result = Vec::new();
-            for (stream_id, fields) in offline_messages {
-                if let Some(envelope) = self.parse_stream_message(fields, user_id)? {
-                    result.push((stream_id, envelope));
-                }
+        // Parse messages
+        let mut result = Vec::new();
+        for (stream_id, fields) in messages {
+            if let Some(envelope) = self.parse_stream_message(fields, user_id)? {
+                result.push((stream_id, envelope));
             }
-            return Ok(result);
         }
 
-        // If no offline messages, check delivery stream (if user is online)
-        if let Some(server_id) = server_instance_id {
-            let delivery_stream_key = format!("{}{}", self.delivery_queue_prefix, server_id);
-            let delivery_messages = self
-                .read_stream_messages(&delivery_stream_key, since_id, count * 2)
-                .await?;
-
-            // Filter messages for this user (delivery stream contains messages for all users on this server)
-            let mut result = Vec::new();
-            for (stream_id, fields) in delivery_messages {
-                if let Some(envelope) = self.parse_stream_message(fields, user_id)? {
-                    result.push((stream_id, envelope));
-                    if result.len() >= count {
-                        break;
-                    }
-                }
-            }
-            return Ok(result);
-        }
-
-        Ok(vec![])
+        Ok(result)
     }
 
     /// Read messages from a Redis Stream using XREAD

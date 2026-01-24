@@ -33,9 +33,7 @@
 
 use crate::config::SECONDS_PER_DAY;
 use crate::delivery_worker::deduplication::{mark_message_processed, should_skip_message};
-use crate::delivery_worker::redis_streams::{
-    check_user_online, push_to_delivery_stream, push_to_offline_stream,
-};
+use crate::delivery_worker::redis_streams::push_to_offline_stream;
 use crate::delivery_worker::state::WorkerState;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::utils::log_safe_id;
@@ -108,98 +106,59 @@ pub async fn process_kafka_message(
         return Ok(ProcessResult::Skipped);
     }
 
-    // 2. Check if recipient is online
-    let server_instance_id = check_user_online(state, recipient_id)
-        .await
-        .context("Failed to check user online status")?;
-
-    // 3. Serialize envelope to MessagePack for Redis storage
+    // 2. Serialize envelope to MessagePack for Redis storage
     let message_bytes = rmp_serde::encode::to_vec_named(envelope)
         .context("Failed to serialize Kafka envelope to MessagePack")?;
 
     let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
 
-    // 4. Route message based on online status
-    if let Some(server_instance_id) = server_instance_id {
-        // ====================================================================
-        // USER IS ONLINE - deliver and commit offset
-        // ====================================================================
-        let stream_key = format!(
-            "{}{}",
-            state.config.delivery_queue_prefix, server_instance_id
-        );
+    // 4. Route message to user-based stream
+    // ========================================================================
+    // ARCHITECTURE FIX: Always use user-based stream (delivery_queue:offline:{user_id})
+    //
+    // Previous approach used server_instance_id-based streams, which broke in
+    // multi-instance deployments where requests can hit different API instances.
+    // The message would be written to delivery_queue:{instance_A} but the user's
+    // next request might hit instance_B, reading from delivery_queue:{instance_B}.
+    //
+    // User-based streams are stable regardless of which API instance handles
+    // the request, solving the message delivery problem in multi-instance setups.
+    // ========================================================================
 
-        push_to_delivery_stream(
-            state,
-            &stream_key,
-            message_id,
-            &message_bytes,
-            None, // Use default max_len from config
-        )
+    // Always write to user-based stream for reliable delivery
+    push_to_offline_stream(state, recipient_id, message_id, &message_bytes, None)
         .await
-        .context("Failed to push message to delivery stream")?;
+        .context("Failed to push message to user delivery stream")?;
 
-        // Mark message as processed (deduplication for online delivery)
-        mark_message_processed(state, message_id, ttl_seconds)
-            .await
-            .context("Failed to mark message as processed")?;
+    // Mark message as processed (deduplication)
+    mark_message_processed(state, message_id, ttl_seconds)
+        .await
+        .context("Failed to mark message as processed")?;
 
-        // Phase 2.5: Publish notification for long polling endpoints
-        // This allows REST API clients to be notified when new messages arrive
-        if let Err(e) = publish_message_notification(state, recipient_id).await {
-            // Log but don't fail - notification is optional, message is already in stream
-            debug!(
-                message_id = %message_id,
-                recipient_hash = %log_safe_id(recipient_id, salt),
-                error = %e,
-                "Failed to publish message notification (not critical)"
-            );
-        }
-
-        info!(
+    // Publish notification for long polling endpoints
+    if let Err(e) = publish_message_notification(state, recipient_id).await {
+        debug!(
             message_id = %message_id,
             recipient_hash = %log_safe_id(recipient_id, salt),
-            stream_key = %stream_key,
-            "Message pushed to delivery_stream (recipient online) - offset will be committed"
+            error = %e,
+            "Failed to publish message notification (not critical)"
         );
-
-        Ok(ProcessResult::Success)
-    } else {
-        // ====================================================================
-        // USER IS OFFLINE - DO NOT commit offset!
-        // ====================================================================
-        // Kafka remains the source of truth. When user comes online,
-        // Kafka will redeliver this message (offset not committed).
-        //
-        // OPTIONAL: Cache in Redis for faster delivery when user reconnects.
-        // This is purely an optimization - if Redis fails, Kafka has the message.
-        // ====================================================================
-
-        // Optional: Save to Redis offline stream as cache (not source of truth)
-        // This allows faster delivery when user comes online, but is not required
-        if let Err(e) =
-            push_to_offline_stream(state, recipient_id, message_id, &message_bytes, None).await
-        {
-            // Log but don't fail - Redis cache is optional, Kafka has the message
-            debug!(
-                message_id = %message_id,
-                recipient_hash = %log_safe_id(recipient_id, salt),
-                error = %e,
-                "Failed to cache offline message in Redis (not critical - Kafka has the message)"
-            );
-        }
-
-        // DO NOT mark as processed - message should be redelivered from Kafka
-        // DO NOT commit offset - return UserOffline to signal this
-
-        info!(
-            message_id = %message_id,
-            recipient_hash = %log_safe_id(recipient_id, salt),
-            "Recipient is offline - offset NOT committed, Kafka will redeliver when user comes online"
-        );
-
-        Ok(ProcessResult::UserOffline)
     }
+
+    let stream_key = format!(
+        "{}offline:{}",
+        state.config.delivery_queue_prefix, recipient_id
+    );
+
+    info!(
+        message_id = %message_id,
+        recipient_hash = %log_safe_id(recipient_id, salt),
+        stream_key = %stream_key,
+        "Message pushed to user delivery stream - offset will be committed"
+    );
+
+    // Always commit offset - message is safely stored in user-based stream
+    Ok(ProcessResult::Success)
 }
 
 /// Publish notification to Redis Pub/Sub for long polling endpoints

@@ -3,6 +3,10 @@ Cargo.lock
 .cargo/
 target/
 
+rpk
+*.bin
+*.zip
+
 # Python
 test_*.py
 *.pyc

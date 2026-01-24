@@ -401,15 +401,6 @@ pub async fn get_messages(
     let timeout = params.timeout.unwrap_or(30).min(60);
     let limit = params.limit.unwrap_or(50).min(100) as usize;
 
-    // Get server instance ID (if user is online)
-    let server_instance_id = {
-        let mut queue = app_context.queue.lock().await;
-        queue
-            .get_user_server_instance(&user_id_str)
-            .await
-            .unwrap_or(None)
-    };
-
     // Step 1: Check for existing messages in Redis Streams
     // Note: `since` parameter is for message_id pagination, but Redis Streams use stream message IDs
     // For now, we'll read from the beginning and filter client-side if needed
@@ -418,7 +409,7 @@ pub async fn get_messages(
     let stream_messages = queue
         .read_user_messages_from_stream(
             &user_id_str,
-            server_instance_id.as_deref(),
+            None, // server_instance_id not needed - using user-based streams
             None, // Stream message ID (different from message_id) - TODO: implement proper pagination
             limit,
         )
@@ -515,7 +506,7 @@ pub async fn get_messages(
         let stream_messages = queue
             .read_user_messages_from_stream(
                 &user_id_str,
-                server_instance_id.as_deref(),
+                None, // server_instance_id not needed - using user-based streams
                 None,
                 limit,
             )
