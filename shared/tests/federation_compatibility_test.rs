@@ -9,8 +9,8 @@
 // 4. No breaking changes to message structure
 // ============================================================================
 
-use construct_server::message::ChatMessage;
-use construct_server::user_id::UserId;
+use construct_server_shared::message::ChatMessage;
+use construct_server_shared::user_id::UserId;
 use uuid::Uuid;
 
 #[test]

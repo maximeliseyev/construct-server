@@ -8,10 +8,9 @@
 //
 // ============================================================================
 
-use anyhow::Result;
 use axum::Router;
 use axum::routing::{delete, get, post, put};
-use construct_server::{
+use construct_server_shared::{
     apns::{ApnsClient, DeviceTokenEncryption},
     auth::AuthManager,
     auth_service::{AuthServiceContext, handlers as auth_handlers},
@@ -47,35 +46,49 @@ pub struct SingleServiceApp {
     pub config: Arc<Config>,
 }
 
-/// Generate test RSA keypair for JWT RS256
-fn generate_test_rsa_keys() -> (String, String) {
-    // Pre-generated test RSA keypair (2048-bit, for testing only)
-    let private_key = r#"You need to generate test RSA keypair"#;
-
-    let public_key = r#"You need to generate test RSA keypair"#;
-
-    (private_key.to_string(), public_key.to_string())
-}
-
-/// Create test config with RS256 JWT
+/// Create test config from .env.test
 async fn create_test_config(db_name: &str) -> Config {
-    let (private_key, public_key) = generate_test_rsa_keys();
+    // Load .env.test with override - this replaces any existing env vars
+    // Try multiple paths since tests may run from different directories
+    let _ = dotenvy::from_filename_override(".env.test")
+        .or_else(|_| dotenvy::from_filename_override("../.env.test"))
+        .or_else(|_| dotenvy::from_filename_override("../../.env.test"));
 
-    let mut config = Config::from_env().expect("Failed to read base config");
+    // Read JWT keys directly from files - try multiple paths for workspace compatibility
+    let private_key = try_read_key_file(&["prkeys/jwt_private_key.pem", "../prkeys/jwt_private_key.pem"])
+        .expect("Failed to read JWT private key file");
+    let public_key = try_read_key_file(&["prkeys/jwt_public_key.pem", "../prkeys/jwt_public_key.pem"])
+        .expect("Failed to read JWT public key file");
 
-    // Override for tests
+    // Set env vars before Config::from_env() reads them
+    // SAFETY: Tests run single-threaded (--test-threads=1) so this is safe
+    unsafe {
+        std::env::set_var("JWT_PRIVATE_KEY", &private_key);
+        std::env::set_var("JWT_PUBLIC_KEY", &public_key);
+    }
+
+    let mut config = Config::from_env().expect("Failed to read base config from .env.test");
+
+    // Override database for test isolation (unique DB per test)
     config.database_url = format!(
         "postgres://construct:construct_dev_password@localhost:5432/{}",
         db_name
     );
-    config.redis_url = "redis://127.0.0.1:6379".to_string();
-
-    // RS256 JWT keys
-    config.jwt_private_key = Some(private_key);
-    config.jwt_public_key = Some(public_key);
-    config.jwt_issuer = "construct-test".to_string();
 
     config
+}
+
+/// Try to read a key file from multiple possible paths
+fn try_read_key_file(paths: &[&str]) -> Result<String, std::io::Error> {
+    for path in paths {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return Ok(content);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("Key file not found in any of: {:?}", paths),
+    ))
 }
 
 /// Create test database
@@ -226,12 +239,15 @@ async fn spawn_messaging_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> S
     let auth_manager = Arc::new(AuthManager::new(&config).expect("Failed to create auth manager"));
     let kafka_producer =
         Arc::new(MessageProducer::new(&config.kafka).expect("Failed to create kafka producer"));
+    let apns_client =
+        Arc::new(ApnsClient::new(config.apns.clone()).expect("Failed to create APNs client"));
 
     let context = Arc::new(MessagingServiceContext {
         db_pool,
         queue,
         auth_manager,
         kafka_producer,
+        apns_client,
         config: config.clone(),
         key_management: None,
     });

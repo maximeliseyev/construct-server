@@ -11,7 +11,7 @@
 // ============================================================================
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use construct_server::e2e::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
+use construct_server_shared::e2e::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use serde_json::json;
