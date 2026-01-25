@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::context::AppContext;
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::routes::csrf::{
     extract_csrf_token, has_custom_header, is_browser_request, validate_csrf_token, validate_origin,
 };

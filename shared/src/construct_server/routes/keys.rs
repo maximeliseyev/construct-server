@@ -23,8 +23,8 @@ use uuid::Uuid;
 use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::db;
-use crate::e2e::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
-use crate::error::AppError;
+use construct_crypto::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
+use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::request_signing::{
     compute_body_hash, extract_request_signature, verify_request_signature,

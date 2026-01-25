@@ -30,6 +30,8 @@ impl UserId {
     ///
     /// # Examples
     /// ```
+    /// use construct_types::UserId;
+    /// 
     /// let local = UserId::parse("550e8400-e29b-41d4-a716-446655440000").unwrap();
     /// assert!(local.is_local());
     ///

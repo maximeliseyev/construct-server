@@ -1,7 +1,11 @@
-use crate::e2e::UploadableKeyBundle;
-use crate::user_id::UserId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+// Re-export types from construct-crypto
+pub use construct_crypto::{UploadableKeyBundle, EncryptedMessage};
+
+// Re-export UserId for convenience
+pub use crate::user_id::UserId;
 
 // ============================================================================
 // ChatMessage (formerly Message) - Updated for Double Ratchet Protocol
@@ -270,6 +274,8 @@ pub struct ErrorData {
     pub message: String,
 }
 
+// EncryptedMessage re-exported at the top from construct-crypto
+
 // ============================================================================
 // ServerMessage Enum - Internally Tagged Format
 // ============================================================================
@@ -284,7 +290,7 @@ pub enum ServerMessage {
     SessionExpired,
     PublicKeyBundle(PublicKeyBundleData),
     Message(ChatMessage),
-    EncryptedV3(crate::e2e::EncryptedMessage), // New variant for API v3 encrypted messages
+    EncryptedV3(EncryptedMessage), // New variant for API v3 encrypted messages
     Ack(AckData),
     KeyRotationSuccess,
     ChangePasswordSuccess,
@@ -294,9 +300,6 @@ pub enum ServerMessage {
     DeviceTokenRegistered,
     DeviceTokenUnregistered,
     DeviceTokenPreferencesUpdated,
-    // MediaToken and MediaTokenError removed - media upload tokens now handled via REST API
-    // MediaToken(MediaTokenResponse),
-    // MediaTokenError(MediaTokenError),
 }
 
 // ============================================================================

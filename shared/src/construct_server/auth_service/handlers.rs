@@ -13,7 +13,7 @@ use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use std::sync::Arc;
 
 use crate::auth_service::AuthServiceContext;
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::routes::auth;
 use crate::routes::extractors::AuthenticatedUser;
 

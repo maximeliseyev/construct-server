@@ -4,7 +4,7 @@
 // Phase 2.8: Extracted from queue.rs for better organization
 
 use crate::config::SECONDS_PER_HOUR;
-use crate::e2e::UploadableKeyBundle;
+use construct_crypto::UploadableKeyBundle;
 use anyhow::Result;
 use redis::AsyncCommands;
 

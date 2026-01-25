@@ -9,9 +9,9 @@
 
 use crate::context::AppContext;
 use crate::db;
-use crate::e2e::UploadableKeyBundle;
+use construct_crypto::UploadableKeyBundle;
 use crate::handlers::connection::ConnectionHandler;
-use crate::message::{PublicKeyBundleData, ServerMessage};
+use construct_types::{PublicKeyBundleData, ServerMessage};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use uuid::Uuid;
 
@@ -27,7 +27,7 @@ fn extract_first_suite_data(
         .map_err(|_| "Invalid base64 in bundle_data".to_string())?;
 
     // 2. Parse JSON to get BundleData
-    let bundle_data: crate::e2e::BundleData = serde_json::from_slice(&bundle_data_bytes)
+    let bundle_data: construct_crypto::BundleData = serde_json::from_slice(&bundle_data_bytes)
         .map_err(|e| format!("Invalid JSON in bundle_data: {}", e))?;
 
     // 3. Get the first suite (suite_id = 1, CLASSIC_X25519)

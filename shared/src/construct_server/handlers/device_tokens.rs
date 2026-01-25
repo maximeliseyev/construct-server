@@ -1,7 +1,7 @@
 use crate::apns::DeviceTokenEncryption;
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
-use crate::message::ServerMessage;
+use construct_types::ServerMessage;
 use sqlx::Row;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;

@@ -72,7 +72,7 @@ mod security_tests {
 
         // Hash should be hex-encoded
         assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            hash.chars().all(|c: char| c.is_ascii_hexdigit()),
             "Hash must be hex"
         );
     }
@@ -88,7 +88,7 @@ mod security_tests {
         // Same properties as message hash
         assert_eq!(hash.len(), 64, "User ID hash must be 64 hex characters");
         assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            hash.chars().all(|c: char| c.is_ascii_hexdigit()),
             "Hash must be hex"
         );
         assert!(

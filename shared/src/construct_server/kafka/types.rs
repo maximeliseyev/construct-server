@@ -204,8 +204,8 @@ impl KafkaMessageEnvelope {
 // Conversions from existing message types
 // ============================================================================
 
-impl From<&crate::message::ChatMessage> for KafkaMessageEnvelope {
-    fn from(msg: &crate::message::ChatMessage) -> Self {
+impl From<&construct_types::ChatMessage> for KafkaMessageEnvelope {
+    fn from(msg: &construct_types::ChatMessage) -> Self {
         // Calculate content hash for deduplication
         let mut hasher = Sha256::new();
         hasher.update(msg.id.as_bytes());
@@ -237,8 +237,8 @@ impl From<&crate::message::ChatMessage> for KafkaMessageEnvelope {
 }
 
 // For convenience, also implement From<ChatMessage> (owned)
-impl From<crate::message::ChatMessage> for KafkaMessageEnvelope {
-    fn from(msg: crate::message::ChatMessage) -> Self {
+impl From<construct_types::ChatMessage> for KafkaMessageEnvelope {
+    fn from(msg: construct_types::ChatMessage) -> Self {
         Self::from(&msg)
     }
 }
@@ -260,7 +260,7 @@ impl KafkaMessageEnvelope {
     /// The EncryptedMessage doesn't contain sender_id (it comes from JWT auth)
     /// and message_id (generated server-side), so they must be provided separately.
     pub fn from_encrypted_message(
-        msg: &crate::e2e::EncryptedMessage,
+        msg: &construct_crypto::EncryptedMessage,
         ctx: &EncryptedMessageContext,
     ) -> Self {
         // Calculate content hash for deduplication

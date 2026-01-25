@@ -20,13 +20,16 @@ pub enum AppError {
     #[error("Hyper HTTP error: {0}")]
     Hyper(String),
 
+    #[cfg(feature = "http")]
     #[error("HTTP client error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
     // ===== Serialization Errors =====
+    #[cfg(feature = "serialization")]
     #[error("Serialization error: {0}")]
     Serialization(#[from] rmp_serde::encode::Error),
 
+    #[cfg(feature = "serialization")]
     #[error("Deserialization error: {0}")]
     Deserialization(#[from] rmp_serde::decode::Error),
 
@@ -34,9 +37,11 @@ pub enum AppError {
     Json(#[from] serde_json::Error),
 
     // ===== Database & Storage Errors =====
+    #[cfg(feature = "database")]
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    #[cfg(feature = "redis")]
     #[error("Redis error: {0}")]
     Redis(#[from] redis::RedisError),
 
@@ -54,6 +59,7 @@ pub enum AppError {
     #[error("Authentication error: {0}")]
     Auth(String),
 
+    #[cfg(feature = "jwt")]
     #[error("JWT error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
 
@@ -64,6 +70,7 @@ pub enum AppError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    #[cfg(feature = "serialization")]
     #[error("UUID parse error: {0}")]
     Uuid(#[from] uuid::Error),
 
@@ -92,14 +99,21 @@ impl AppError {
     /// Get the HTTP status code for this error
     pub fn status_code(&self) -> StatusCode {
         match self {
-            AppError::Auth(_) | AppError::Jwt(_) => StatusCode::UNAUTHORIZED,
+            AppError::Auth(_) => StatusCode::UNAUTHORIZED,
+            #[cfg(feature = "jwt")]
+            AppError::Jwt(_) => StatusCode::UNAUTHORIZED,
             AppError::Csrf(_) => StatusCode::FORBIDDEN,
-            AppError::Validation(_) | AppError::Uuid(_) => StatusCode::BAD_REQUEST,
-            AppError::Reqwest(_) | AppError::Federation(_) => StatusCode::BAD_GATEWAY,
-            AppError::Database(_)
-            | AppError::Redis(_)
-            | AppError::Kafka(_)
-            | AppError::MessageQueue(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::Validation(_) => StatusCode::BAD_REQUEST,
+            #[cfg(feature = "serialization")]
+            AppError::Uuid(_) => StatusCode::BAD_REQUEST,
+            #[cfg(feature = "http")]
+            AppError::Reqwest(_) => StatusCode::BAD_GATEWAY,
+            AppError::Federation(_) => StatusCode::BAD_GATEWAY,
+            #[cfg(feature = "database")]
+            AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            #[cfg(feature = "redis")]
+            AppError::Redis(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::Kafka(_) | AppError::MessageQueue(_) => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -108,13 +122,17 @@ impl AppError {
     pub fn user_message(&self) -> String {
         match self {
             AppError::Auth(msg) => format!("Authentication failed: {}", msg),
+            #[cfg(feature = "jwt")]
             AppError::Jwt(_) => "Invalid or expired token".to_string(),
             AppError::Csrf(_) => "CSRF validation failed".to_string(),
             AppError::Validation(msg) => format!("Validation error: {}", msg),
+            #[cfg(feature = "database")]
             AppError::Database(_) => "Database error".to_string(),
+            #[cfg(feature = "redis")]
             AppError::Redis(_) => "Cache error".to_string(),
             AppError::Kafka(_) => "Message queue error".to_string(),
             AppError::MessageQueue(_) => "Message queue error".to_string(),
+            #[cfg(feature = "http")]
             AppError::Reqwest(_) => "External service error".to_string(),
             AppError::Federation(_) => "Federation error".to_string(),
             AppError::Config(msg) => format!("Configuration error: {}", msg),
@@ -127,13 +145,17 @@ impl AppError {
     pub fn error_code(&self) -> &'static str {
         match self {
             AppError::Auth(_) => "AUTH_ERROR",
+            #[cfg(feature = "jwt")]
             AppError::Jwt(_) => "JWT_ERROR",
             AppError::Csrf(_) => "CSRF_ERROR",
             AppError::Validation(_) => "VALIDATION_ERROR",
+            #[cfg(feature = "database")]
             AppError::Database(_) => "DATABASE_ERROR",
+            #[cfg(feature = "redis")]
             AppError::Redis(_) => "REDIS_ERROR",
             AppError::Kafka(_) => "KAFKA_ERROR",
             AppError::MessageQueue(_) => "MESSAGE_QUEUE_ERROR",
+            #[cfg(feature = "http")]
             AppError::Reqwest(_) => "EXTERNAL_SERVICE_ERROR",
             AppError::Federation(_) => "FEDERATION_ERROR",
             AppError::Config(_) => "CONFIG_ERROR",
@@ -205,6 +227,7 @@ impl IntoResponse for AppError {
 // Conversion from common error types
 // ============================================================================
 
+#[cfg(feature = "kafka")]
 impl From<rdkafka::error::KafkaError> for AppError {
     fn from(err: rdkafka::error::KafkaError) -> Self {
         tracing::error!(error = %err, "Kafka error occurred");

@@ -22,8 +22,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::context::AppContext;
-use crate::e2e::{EncryptedMessage, ServerCryptoValidator};
-use crate::error::AppError;
+use construct_crypto::{EncryptedMessage, ServerCryptoValidator};
+use construct_error::AppError;
 use crate::kafka::types::KafkaMessageEnvelope;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id};

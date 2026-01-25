@@ -11,13 +11,12 @@
 
 use crate::{
     context::AppContext,
-    error::AppError,
     federation::{FederatedEnvelope, ServerSigner},
     kafka::KafkaMessageEnvelope,
-    message::ChatMessage,
-    user_id::UserId,
     utils::{add_security_headers, log_safe_id},
 };
+use construct_error::AppError;
+use construct_types::{ChatMessage, UserId};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{StatusCode, body::Incoming as IncomingBody};

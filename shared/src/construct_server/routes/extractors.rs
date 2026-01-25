@@ -19,7 +19,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::context::AppContext;
-use crate::error::AppError;
+use construct_error::AppError;
 
 /// Extractor for authenticated user ID from JWT token
 ///

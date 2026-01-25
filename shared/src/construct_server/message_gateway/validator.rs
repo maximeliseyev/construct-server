@@ -11,7 +11,7 @@
 // All validation is stateless - can be run on any instance
 // ============================================================================
 
-use crate::message::ChatMessage;
+use construct_types::ChatMessage;
 use anyhow::{Result, anyhow};
 use base64::Engine;
 

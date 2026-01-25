@@ -15,7 +15,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::context::AppContext;
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::health;
 use crate::metrics;
 

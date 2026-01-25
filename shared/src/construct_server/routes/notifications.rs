@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::apns::DeviceTokenEncryption;
 use crate::context::AppContext;
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::log_safe_id;
 

@@ -1,8 +1,8 @@
 use crate::audit::AuditLogger;
 use crate::context::AppContext;
-use crate::e2e::{ServerCryptoValidator, UploadableKeyBundle};
+use construct_crypto::{ServerCryptoValidator, UploadableKeyBundle};
 use crate::handlers::connection::ConnectionHandler;
-use crate::message::ServerMessage;
+use construct_types::ServerMessage;
 use crate::utils::log_safe_id;
 use uuid::Uuid;
 
@@ -85,7 +85,7 @@ pub async fn handle_rotate_prekey(
     }
 
     // 5.5. SECURITY: Verify that user_id in bundle matches the authenticated user
-    use crate::e2e::BundleData;
+    use construct_crypto::BundleData;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     let bundle_data_bytes = match BASE64.decode(&bundle.bundle_data) {

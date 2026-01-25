@@ -8,6 +8,10 @@
 //
 // ============================================================================
 
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use crate::e2e::SuiteKeyMaterial;
+use super::types::key_sizes;
 /// Validates key material for Post-Quantum Hybrid suite (suite_id = 2)
 ///
 /// Validates:
@@ -154,6 +158,7 @@ mod tests {
             suite_id: 2, // PQ_HYBRID_KYBER
             identity_key: BASE64.encode(&vec![0u8; key_sizes::HYBRID_SIGNATURE_PUBLIC_KEY]),
             signed_prekey: BASE64.encode(&vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY]),
+            signed_prekey_signature: BASE64.encode(&vec![0u8; 64]), // Dummy Ed25519 signature
             one_time_prekeys: vec![BASE64.encode(&vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY])],
         };
 

@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# New modular crates (Phase 4)
+construct-types = { path = "../crates/construct-types" }
+construct-error = { path = "../crates/construct-error", features = ["full"] }
+construct-crypto = { path = "../crates/construct-crypto", features = ["full"] }
+
 tokio = {workspace = true}
 anyhow = {workspace = true}
 serde = {workspace = true}

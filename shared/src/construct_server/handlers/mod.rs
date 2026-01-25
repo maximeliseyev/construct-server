@@ -7,5 +7,5 @@ pub mod media;
 // pub mod messages;  // Removed: replaced by src/routes/messages.rs (Phase 2.8)
 
 use crate::context::AppContext;
-use crate::message::ClientMessage;
+use construct_types::ClientMessage;
 use crate::metrics;

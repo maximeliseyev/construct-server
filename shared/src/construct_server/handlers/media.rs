@@ -16,7 +16,7 @@
 
 use crate::context::AppContext;
 use crate::handlers::connection::ConnectionHandler;
-use crate::message::{RequestMediaTokenData, ServerMessage};
+use construct_types::{RequestMediaTokenData, ServerMessage};
 use crate::utils::log_safe_id;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};

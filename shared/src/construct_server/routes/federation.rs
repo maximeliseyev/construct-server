@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::context::AppContext;
 use crate::db;
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::utils::log_safe_id;
 
 /// GET /.well-known/konstruct

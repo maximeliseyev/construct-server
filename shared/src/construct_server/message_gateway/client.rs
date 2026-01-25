@@ -14,7 +14,7 @@
 //
 // ============================================================================
 
-use crate::message::ChatMessage;
+use construct_types::ChatMessage;
 use crate::message_gateway::grpc::*;
 use anyhow::{Result, anyhow};
 use tonic::transport::Channel;

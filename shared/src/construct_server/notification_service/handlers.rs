@@ -12,7 +12,7 @@
 use axum::{Json, extract::State, response::IntoResponse};
 use std::sync::Arc;
 
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::notification_service::NotificationServiceContext;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::notifications;

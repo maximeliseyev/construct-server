@@ -7,6 +7,8 @@
 //
 // ============================================================================
 
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 
 /// Hybrid KEM (Key Encapsulation Mechanism) public key

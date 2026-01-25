@@ -20,7 +20,9 @@ type HmacSha256 = Hmac<Sha256>;
 ///
 /// # Example
 /// ```
-/// let hash = compute_message_hash("550e8400-e29b-41d4-a716-446655440000", &secret_key);
+/// use construct_crypto::compute_message_hash;
+/// let secret_key = b"01234567890123456789012345678901"; // 32 bytes
+/// let hash = compute_message_hash("550e8400-e29b-41d4-a716-446655440000", secret_key);
 /// assert_eq!(hash.len(), 64); // 32 bytes = 64 hex chars
 /// ```
 pub fn compute_message_hash(message_id: &str, secret_key: &[u8]) -> String {

@@ -19,8 +19,8 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::e2e::EncryptedMessage;
-use crate::error::AppError;
+use construct_crypto::EncryptedMessage;
+use construct_error::AppError;
 use crate::messaging_service::MessagingServiceContext;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::messages;

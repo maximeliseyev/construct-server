@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::context::AppContext;
 use crate::db;
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::request_signing::{
     compute_body_hash, extract_request_signature, verify_request_signature,

@@ -5,6 +5,15 @@ use tokio::signal;
 use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+// Re-export types from modular crates (Phase 4)
+pub use construct_types::{ChatMessage, ClientMessage, ServerMessage, UserId};
+pub use construct_error::AppError;
+pub use construct_crypto::{
+    ServerCryptoValidator, StoredEncryptedMessage, MessageType,
+    BundleData, UploadableKeyBundle, EncryptedMessage,
+    compute_message_hash, verify_message_hash, compute_user_id_hash,
+};
+
 pub mod apns;
 pub mod audit;
 pub mod auth;
@@ -13,8 +22,8 @@ pub mod config;
 pub mod context;
 pub mod db;
 pub mod delivery_ack;
-pub mod e2e;
-pub mod error;
+// pub mod e2e; // MOVED to construct-crypto crate
+// pub mod error; // MOVED to construct-error crate
 pub mod federation;
 pub mod gateway;
 // WebSocket handlers removed - all clients use REST API now
@@ -25,16 +34,16 @@ pub mod handlers {
 pub mod health;
 pub mod kafka;
 pub mod key_management;
-pub mod message;
+// pub mod message; // MOVED to construct-types crate
 pub mod message_gateway;
 pub mod messaging_service;
 pub mod metrics;
 pub mod notification_service;
-pub mod pqc;
+// pub mod pqc; // MOVED to construct-crypto crate
 pub mod queue;
 pub mod routes;
 pub mod server_registry;
-pub mod user_id;
+// pub mod user_id; // MOVED to construct-types crate
 pub mod user_service;
 pub mod utils;
 

@@ -10,6 +10,11 @@ members = [
     "gateway",
     "media-service",
     "delivery-worker",
+    # New modular crates (Phase 4)
+    "crates/construct-types",
+    "crates/construct-error",
+    "crates/construct-crypto",
+    "crates/construct-db",
 ]
 
 # Единая версия для всех пакетов

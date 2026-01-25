@@ -14,7 +14,7 @@
 
 use crate::federation::mtls::{FederationTrustStore, MtlsConfig};
 use crate::federation::signing::{FederatedEnvelope, ServerSigner};
-use crate::message::ChatMessage;
+use construct_types::ChatMessage;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

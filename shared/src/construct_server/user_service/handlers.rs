@@ -17,7 +17,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::routes::account;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::keys;
@@ -82,7 +82,7 @@ pub async fn upload_keys(
     State(context): State<Arc<UserServiceContext>>,
     user: AuthenticatedUser,
     headers: HeaderMap,
-    Json(bundle): Json<crate::e2e::UploadableKeyBundle>,
+    Json(bundle): Json<construct_crypto::UploadableKeyBundle>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
     keys::upload_keys(State(app_context), user, headers, Json(bundle)).await

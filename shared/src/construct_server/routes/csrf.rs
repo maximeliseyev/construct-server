@@ -29,7 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::CsrfConfig;
 use crate::context::AppContext;
-use crate::error::AppError;
+use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 
 type HmacSha256 = Hmac<Sha256>;

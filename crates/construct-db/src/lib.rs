@@ -1,3 +1,7 @@
+//! # Construct Database
+//!
+//! Database utilities and connection pooling for Construct secure messaging server.
+
 use construct_crypto::{BundleData, UploadableKeyBundle};
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -7,8 +11,10 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
 
+/// Database connection pool type
 pub type DbPool = Pool<Postgres>;
 
+/// User record from database
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
     pub id: Uuid,
@@ -16,8 +22,15 @@ pub struct User {
     pub password_hash: String,
 }
 
-use crate::config::DbConfig;
+/// Database configuration
+#[derive(Debug, Clone)]
+pub struct DbConfig {
+    pub max_connections: u32,
+    pub acquire_timeout_secs: u64,
+    pub idle_timeout_secs: u64,
+}
 
+/// Create a PostgreSQL connection pool
 pub async fn create_pool(database_url: &str, db_config: &DbConfig) -> Result<DbPool> {
     // sqlx 0.8 API - используем доступные методы
     // connect_timeout недоступен в 0.8, используем acquire_timeout и idle_timeout

@@ -22,7 +22,7 @@ mod sessions;
 mod tokens;
 
 use crate::config::{Config, SECONDS_PER_DAY};
-use crate::message::ChatMessage;
+use construct_types::ChatMessage;
 use anyhow::Result;
 // Note: redis::aio::ConnectionManager is available via the "connection-manager" feature
 // It's used the same way in delivery_ack/storage.rs
@@ -376,7 +376,7 @@ impl MessageQueue {
     pub async fn cache_key_bundle(
         &mut self,
         user_id: &str,
-        bundle: &crate::e2e::UploadableKeyBundle,
+        bundle: &construct_crypto::UploadableKeyBundle,
         ttl_hours: i64,
     ) -> Result<()> {
         cache::CacheManager::new(&mut self.client)
@@ -387,7 +387,7 @@ impl MessageQueue {
     pub async fn get_cached_key_bundle(
         &mut self,
         user_id: &str,
-    ) -> Result<Option<crate::e2e::UploadableKeyBundle>> {
+    ) -> Result<Option<construct_crypto::UploadableKeyBundle>> {
         cache::CacheManager::new(&mut self.client)
             .get_cached_key_bundle(user_id)
             .await

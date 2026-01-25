@@ -43,7 +43,7 @@
 
 pub mod batching;
 pub mod cleanup;
-pub mod crypto;
+// pub mod crypto; // MOVED to construct-crypto crate
 pub mod models;
 pub mod storage;
 
@@ -54,11 +54,14 @@ use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use std::sync::Arc;
 
+// Import crypto functions
+use construct_crypto::{compute_message_hash, verify_message_hash, compute_user_id_hash};
+
 pub use batching::AckBatcher;
 pub use cleanup::DeliveryCleanupTask;
-pub use crypto::{compute_message_hash, compute_user_id_hash, verify_message_hash};
 pub use models::{AcknowledgeMessageData, DeliveryPending};
 pub use storage::{DeliveryPendingStorage, KafkaDeliveryStorage, PostgresDeliveryStorage};
+// crypto functions re-exported from construct_server.rs level
 
 /// Delivery ACK operation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
