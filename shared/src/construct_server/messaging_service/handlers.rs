@@ -89,7 +89,7 @@ async fn send_push_notification(
     
     let rows = sqlx::query_as::<_, DeviceTokenRow>(
         "SELECT device_token_encrypted FROM device_tokens 
-         WHERE user_id = $1 AND enabled = true"
+         WHERE user_id = $1::uuid AND enabled = true"
     )
     .bind(recipient_id)
     .fetch_all(&*context.db_pool)
