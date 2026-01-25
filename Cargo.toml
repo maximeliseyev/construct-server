@@ -15,6 +15,7 @@ members = [
     "crates/construct-error",
     "crates/construct-crypto",
     "crates/construct-db",
+    "crates/construct-redis",
 ]
 
 # Единая версия для всех пакетов
