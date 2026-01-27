@@ -201,7 +201,7 @@ impl AckBatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::KafkaConfig;
+    use construct_config::KafkaConfig;
     use crate::kafka::types::DeliveryAckEvent;
 
     #[tokio::test]

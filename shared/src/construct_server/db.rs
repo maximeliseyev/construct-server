@@ -16,7 +16,7 @@ pub struct User {
     pub password_hash: String,
 }
 
-use crate::config::DbConfig;
+use construct_config::DbConfig;
 
 pub async fn create_pool(database_url: &str, db_config: &DbConfig) -> Result<DbPool> {
     // sqlx 0.8 API - используем доступные методы

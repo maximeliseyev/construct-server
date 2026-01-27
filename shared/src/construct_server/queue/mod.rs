@@ -21,7 +21,7 @@ mod replay;
 mod sessions;
 mod tokens;
 
-use crate::config::{Config, SECONDS_PER_DAY};
+use construct_config::{Config, SECONDS_PER_DAY};
 use construct_types::ChatMessage;
 use anyhow::Result;
 // Note: redis::aio::ConnectionManager is available via the "connection-manager" feature
@@ -425,7 +425,7 @@ impl MessageQueue {
 
     #[allow(dead_code)]
     pub async fn track_connection(&mut self, user_id: &str, connection_id: &str) -> Result<u32> {
-        use crate::config::SECONDS_PER_HOUR;
+        use construct_config::SECONDS_PER_HOUR;
         let key = format!("connections:{}", user_id);
         let _: () = self.client.sadd(&key, connection_id).await?;
         let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;

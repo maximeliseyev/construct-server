@@ -25,7 +25,7 @@ use axum::{
     routing::{get, post},
 };
 use construct_server_shared::auth::AuthManager;
-use construct_server_shared::config::Config;
+use construct_config::Config;
 use construct_server_shared::db::DbPool;
 use construct_server_shared::kafka::MessageProducer;
 use construct_server_shared::messaging_service::MessagingServiceContext;

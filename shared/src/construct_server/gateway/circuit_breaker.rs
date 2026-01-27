@@ -12,7 +12,7 @@
 //
 // ============================================================================
 
-use crate::config::CircuitBreakerConfig;
+use construct_config::CircuitBreakerConfig;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;

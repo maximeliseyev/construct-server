@@ -8,7 +8,7 @@ use tracing::{error, info};
 use super::config::create_client_config;
 use super::metrics;
 use super::types::{DeliveryAckEvent, KafkaMessageEnvelope};
-use crate::config::KafkaConfig;
+use construct_config::KafkaConfig;
 
 /// Kafka message producer for reliable message delivery
 ///
@@ -309,7 +309,7 @@ impl Clone for MessageProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::KafkaConfig;
+    use construct_config::KafkaConfig;
 
     #[test]
     fn test_disabled_producer_creation() {

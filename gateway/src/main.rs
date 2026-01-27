@@ -20,7 +20,7 @@
 use anyhow::{Context, Result};
 use axum::{Router, http::StatusCode, middleware, response::Response, routing::any};
 use construct_server_shared::auth::AuthManager;
-use construct_server_shared::config::Config;
+use construct_config::Config;
 use construct_server_shared::gateway::middleware::{
     GatewayMiddlewareState, csrf_protection, jwt_verification, rate_limiting,
 };

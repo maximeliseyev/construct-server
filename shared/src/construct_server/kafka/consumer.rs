@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 use super::config::create_client_config;
 use super::types::KafkaMessageEnvelope;
-use crate::config::KafkaConfig;
+use construct_config::KafkaConfig;
 
 /// Kafka message consumer for delivery worker
 ///

@@ -18,7 +18,7 @@ pub mod apns;
 pub mod audit;
 pub mod auth;
 pub mod auth_service;
-pub mod config;
+// pub mod config; // MIGRATED to construct-config crate (Phase 4.2)
 pub mod context;
 pub mod db;
 pub mod delivery_ack;
@@ -54,7 +54,7 @@ pub mod bin;
 pub mod delivery_worker;
 
 use auth::AuthManager;
-use config::Config;
+use construct_config::Config;
 use context::AppContext;
 use kafka::MessageProducer;
 use queue::MessageQueue;

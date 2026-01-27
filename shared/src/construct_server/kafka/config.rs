@@ -1,4 +1,4 @@
-use crate::config::KafkaConfig;
+use construct_config::KafkaConfig;
 use anyhow::Result;
 use rdkafka::config::ClientConfig;
 use tracing::info;

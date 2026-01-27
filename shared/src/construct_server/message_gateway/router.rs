@@ -176,7 +176,7 @@ impl MessageRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::KafkaConfig;
+    use construct_config::KafkaConfig;
 
     #[tokio::test]
     async fn test_router_creation() {

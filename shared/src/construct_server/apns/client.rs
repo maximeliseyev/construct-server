@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use super::types::{ApnsPayload, NotificationPriority, PushType};
-use crate::config::{ApnsConfig, ApnsEnvironment};
+use construct_config::{ApnsConfig, ApnsEnvironment};
 
 /// APNs client wrapper
 #[derive(Clone)]

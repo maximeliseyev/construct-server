@@ -26,7 +26,7 @@
 //
 // ============================================================================
 
-use crate::config::SECONDS_PER_DAY;
+use construct_config::SECONDS_PER_DAY;
 use crate::delivery_worker::retry::execute_redis_with_retry;
 use crate::delivery_worker::state::WorkerState;
 use anyhow::{Context, Result};

@@ -8,6 +8,7 @@ edition.workspace = true
 construct-types = { path = "../crates/construct-types" }
 construct-error = { path = "../crates/construct-error", features = ["full"] }
 construct-crypto = { path = "../crates/construct-crypto", features = ["full"] }
+construct-config = { path = "../crates/construct-config" }
 
 tokio = {workspace = true}
 anyhow = {workspace = true}

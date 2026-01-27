@@ -127,7 +127,7 @@ pub async fn refresh_token(
     {
         let mut queue = app_context.queue.lock().await;
         let refresh_ttl_seconds =
-            app_context.config.refresh_token_ttl_days * crate::config::SECONDS_PER_DAY;
+            app_context.config.refresh_token_ttl_days * construct_config::SECONDS_PER_DAY;
 
         if let Err(e) = queue
             .store_refresh_token(&refresh_jti, &user_id.to_string(), refresh_ttl_seconds)
@@ -390,7 +390,7 @@ pub async fn register(
     {
         let mut queue = app_context.queue.lock().await;
         let refresh_ttl_seconds =
-            app_context.config.refresh_token_ttl_days * crate::config::SECONDS_PER_DAY;
+            app_context.config.refresh_token_ttl_days * construct_config::SECONDS_PER_DAY;
 
         if let Err(e) = queue
             .store_refresh_token(&refresh_jti, &user.id.to_string(), refresh_ttl_seconds)
@@ -550,7 +550,7 @@ pub async fn login(
             {
                 let mut queue = app_context.queue.lock().await;
                 let refresh_ttl_seconds =
-                    app_context.config.refresh_token_ttl_days * crate::config::SECONDS_PER_DAY;
+                    app_context.config.refresh_token_ttl_days * construct_config::SECONDS_PER_DAY;
 
                 if let Err(e) = queue
                     .store_refresh_token(&refresh_jti, &user.id.to_string(), refresh_ttl_seconds)

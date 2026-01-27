@@ -119,16 +119,16 @@ pub async fn send_message(
     }
 
     // SECURITY: Validate message size to prevent DoS
-    if message.ciphertext.len() > crate::config::MAX_MESSAGE_SIZE {
+    if message.ciphertext.len() > construct_config::MAX_MESSAGE_SIZE {
         tracing::warn!(
             size = message.ciphertext.len(),
-            limit = crate::config::MAX_MESSAGE_SIZE,
+            limit = construct_config::MAX_MESSAGE_SIZE,
             sender_hash = %log_safe_id(&sender_id.to_string(), &app_context.config.logging.hash_salt),
             "Message ciphertext too large"
         );
         return Err(AppError::Validation(format!(
             "Message size exceeds maximum of {} bytes",
-            crate::config::MAX_MESSAGE_SIZE
+            construct_config::MAX_MESSAGE_SIZE
         )));
     }
 

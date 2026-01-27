@@ -9,7 +9,7 @@
 pub mod handlers;
 
 use crate::auth::AuthManager;
-use crate::config::Config;
+use construct_config::Config;
 use crate::db::DbPool;
 
 use crate::key_management::KeyManagementSystem;

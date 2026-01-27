@@ -9,7 +9,7 @@
 //
 // ============================================================================
 
-use crate::config::Config;
+use construct_config::Config;
 use crate::queue::MessageQueue;
 use std::sync::Arc;
 use tokio::sync::Mutex;

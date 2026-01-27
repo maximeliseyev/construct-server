@@ -12,7 +12,7 @@
 //
 // ============================================================================
 
-use crate::config::CircuitBreakerConfig;
+use construct_config::CircuitBreakerConfig;
 use crate::gateway::circuit_breaker::{CircuitBreaker, CircuitState};
 use crate::metrics::{
     GATEWAY_CIRCUIT_BREAKER_STATE, GATEWAY_REQUEST_DURATION_SECONDS, GATEWAY_REQUESTS_TOTAL,

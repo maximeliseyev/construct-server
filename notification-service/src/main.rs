@@ -25,7 +25,7 @@ use axum::{
 };
 use construct_server_shared::apns::{ApnsClient, DeviceTokenEncryption};
 use construct_server_shared::auth::AuthManager;
-use construct_server_shared::config::Config;
+use construct_config::Config;
 use construct_server_shared::db::DbPool;
 use construct_server_shared::notification_service::NotificationServiceContext;
 use construct_server_shared::queue::MessageQueue;

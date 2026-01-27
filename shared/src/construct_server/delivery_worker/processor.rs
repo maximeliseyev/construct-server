@@ -31,7 +31,7 @@
 //
 // ============================================================================
 
-use crate::config::SECONDS_PER_DAY;
+use construct_config::SECONDS_PER_DAY;
 use crate::delivery_worker::deduplication::{mark_message_processed, should_skip_message};
 use crate::delivery_worker::redis_streams::push_to_offline_stream;
 use crate::delivery_worker::state::WorkerState;

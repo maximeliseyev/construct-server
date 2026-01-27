@@ -37,7 +37,7 @@
 // ============================================================================
 
 use anyhow::{Context, Result};
-use construct_server_shared::config::Config;
+use construct_config::Config;
 use construct_server_shared::delivery_worker::{ProcessResult, WorkerState, process_kafka_message};
 use construct_server_shared::kafka::MessageConsumer;
 use construct_server_shared::utils::log_safe_id;

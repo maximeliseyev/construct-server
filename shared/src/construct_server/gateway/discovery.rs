@@ -10,7 +10,7 @@
 //
 // ============================================================================
 
-use crate::config::MicroservicesConfig;
+use construct_config::MicroservicesConfig;
 use anyhow::Result;
 use std::sync::Arc;
 

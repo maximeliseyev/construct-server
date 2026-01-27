@@ -7,7 +7,7 @@
 //
 // ============================================================================
 
-use crate::config::Config;
+use construct_config::Config;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
