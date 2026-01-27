@@ -41,3 +41,5 @@ shared/tests/keys/
 *.swo
 .DS_Store
 .docs-cache
+# Proto files are in shared/proto/, root proto/ is copy for build.rs
+proto/

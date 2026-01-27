@@ -15,8 +15,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace files
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY crates ./crates
 COPY shared ./shared
+COPY proto ./proto
 COPY auth-service ./auth-service
 COPY messaging-service ./messaging-service
 COPY user-service ./user-service
