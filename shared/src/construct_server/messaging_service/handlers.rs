@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use construct_crypto::EncryptedMessage;
 use construct_error::AppError;
+use construct_types::message::EndSessionData;
 use crate::messaging_service::MessagingServiceContext;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::messages;
@@ -172,4 +173,19 @@ async fn send_push_notification(
     */
 
     Ok(())
+}
+
+// ============================================================================
+// Phase 4.5: Control Messages Handler
+// ============================================================================
+
+/// Wrapper for send_control_message handler (POST /api/v1/control)
+pub async fn send_control_message(
+    State(context): State<Arc<MessagingServiceContext>>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Json(data): Json<EndSessionData>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    messages::send_control_message(State(app_context), user, headers, Json(data)).await
 }

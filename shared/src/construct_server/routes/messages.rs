@@ -27,6 +27,7 @@ use construct_error::AppError;
 use crate::kafka::types::KafkaMessageEnvelope;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id};
+use construct_types::message::{EndSessionData, ChatMessage};
 
 /// POST /api/v1/messages
 /// Sends an E2E-encrypted message using Double Ratchet protocol
@@ -307,6 +308,10 @@ pub struct MessageResponse {
     pub from: String,
     pub to: String,
 
+    // Phase 4.5: Message type (Regular or EndSession)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_type: Option<String>, // "DIRECT_MESSAGE" | "CONTROL_MESSAGE"
+
     // ✅ SPEC: Required fields for Double Ratchet protocol
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ephemeral_public_key: Option<String>, // Base64<Bytes>
@@ -453,12 +458,26 @@ pub async fn get_messages(
             let collected_messages = msgs
                 .into_iter()
                 .map(|(stream_id, envelope)| {
+                    // Convert MessageType enum to string for API response
+                    let message_type_str = match envelope.message_type {
+                        crate::kafka::types::MessageType::DirectMessage => Some("DIRECT_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::ControlMessage => Some("CONTROL_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::MLSMessage => Some("MLS_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::MLSKeyPackage => Some("MLS_KEY_PACKAGE".to_string()),
+                        crate::kafka::types::MessageType::MLSWelcome => Some("MLS_WELCOME".to_string()),
+                        crate::kafka::types::MessageType::MLSCommit => Some("MLS_COMMIT".to_string()),
+                        crate::kafka::types::MessageType::MLSProposal => Some("MLS_PROPOSAL".to_string()),
+                        crate::kafka::types::MessageType::FederatedMessage => Some("FEDERATED_MESSAGE".to_string()),
+                    };
+
                     MessageResponse {
                         id: envelope.message_id,
                         stream_id: stream_id, // Internal use, skip in serialization
                         // ✅ SPEC: Use "from"/"to" as per specification
                         from: envelope.sender_id,
                         to: envelope.recipient_id,
+                        // Phase 4.5: Include message type
+                        message_type: message_type_str,
                         // ✅ SPEC: Include Double Ratchet fields
                         ephemeral_public_key: envelope.ephemeral_public_key,
                         message_number: envelope.message_number,
@@ -567,21 +586,37 @@ pub async fn get_messages(
         let new_messages = match stream_messages {
             Ok(msgs) => msgs
                 .into_iter()
-                .map(|(stream_id, envelope)| MessageResponse {
-                    id: envelope.message_id,
-                    stream_id: stream_id, // Internal use, skip in serialization
-                    // ✅ SPEC: Use "from"/"to" as per specification
-                    from: envelope.sender_id,
-                    to: envelope.recipient_id,
-                    // ✅ SPEC: Include Double Ratchet fields
-                    ephemeral_public_key: envelope.ephemeral_public_key,
-                    message_number: envelope.message_number,
-                    // ✅ SPEC: Use "content" field name
-                    content: envelope.encrypted_payload,
-                    timestamp: envelope.timestamp as u64,
-                    suite_id: envelope.suite_id as u16,
-                    nonce: None,
-                    delivery_status: Some("delivered".to_string()),
+                .map(|(stream_id, envelope)| {
+                    // Convert MessageType enum to string for API response
+                    let message_type_str = match envelope.message_type {
+                        crate::kafka::types::MessageType::DirectMessage => Some("DIRECT_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::ControlMessage => Some("CONTROL_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::MLSMessage => Some("MLS_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::MLSKeyPackage => Some("MLS_KEY_PACKAGE".to_string()),
+                        crate::kafka::types::MessageType::MLSWelcome => Some("MLS_WELCOME".to_string()),
+                        crate::kafka::types::MessageType::MLSCommit => Some("MLS_COMMIT".to_string()),
+                        crate::kafka::types::MessageType::MLSProposal => Some("MLS_PROPOSAL".to_string()),
+                        crate::kafka::types::MessageType::FederatedMessage => Some("FEDERATED_MESSAGE".to_string()),
+                    };
+
+                    MessageResponse {
+                        id: envelope.message_id,
+                        stream_id: stream_id, // Internal use, skip in serialization
+                        // ✅ SPEC: Use "from"/"to" as per specification
+                        from: envelope.sender_id,
+                        to: envelope.recipient_id,
+                        // Phase 4.5: Include message type
+                        message_type: message_type_str,
+                        // ✅ SPEC: Include Double Ratchet fields
+                        ephemeral_public_key: envelope.ephemeral_public_key,
+                        message_number: envelope.message_number,
+                        // ✅ SPEC: Use "content" field name
+                        content: envelope.encrypted_payload,
+                        timestamp: envelope.timestamp as u64,
+                        suite_id: envelope.suite_id as u16,
+                        nonce: None,
+                        delivery_status: Some("delivered".to_string()),
+                    }
                 })
                 .collect::<Vec<_>>(),
             Err(e) => {
@@ -624,5 +659,191 @@ pub async fn get_messages(
             next_since,
             has_more: false,
         }),
+    ))
+}
+
+// ============================================================================
+// Phase 4.5: END_SESSION Control Messages
+// ============================================================================
+
+/// POST /api/v1/control
+/// Sends a control message (e.g., END_SESSION) to notify recipient
+pub async fn send_control_message(
+    State(app_context): State<Arc<AppContext>>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Json(data): Json<EndSessionData>,
+) -> Result<impl IntoResponse, AppError> {
+    let sender_id = user.0;
+    let sender_id_str = sender_id.to_string();
+
+    // SECURITY: Check rate limiting BEFORE processing (DoS protection)
+    {
+        let mut queue = app_context.queue.lock().await;
+        if let Ok(Some(reason)) = queue.is_user_blocked(&sender_id_str).await {
+            drop(queue);
+            tracing::warn!(
+                sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
+                reason = %reason,
+                "Blocked user attempted to send control message"
+            );
+            return Err(AppError::Auth(format!(
+                "Your account is temporarily blocked: {}",
+                reason
+            )));
+        }
+
+        // Check combined rate limit (user_id + IP) for authenticated operations
+        let client_ip = extract_client_ip(&headers, None);
+
+        // Use combined rate limiting if enabled
+        if app_context.config.security.combined_rate_limiting_enabled {
+            match queue
+                .increment_combined_rate_limit(&sender_id_str, &client_ip, 3600)
+                .await
+            {
+                Ok(count) => {
+                    let max_combined = app_context
+                        .config
+                        .security
+                        .max_requests_per_user_ip_per_hour;
+                    if count > max_combined {
+                        drop(queue);
+                        tracing::warn!(
+                            sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
+                            ip = %client_ip,
+                            count = count,
+                            limit = max_combined,
+                            "Combined rate limit exceeded for control messages"
+                        );
+                        return Err(AppError::Validation(format!(
+                            "Rate limit exceeded: maximum {} requests per hour",
+                            max_combined
+                        )));
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to check combined rate limit");
+                }
+            }
+        }
+
+        // Also check user_id-only rate limit
+        match queue.increment_message_count(&sender_id_str).await {
+            Ok(count) => {
+                let max_messages = app_context.config.security.max_messages_per_hour;
+                if count > max_messages {
+                    drop(queue);
+                    tracing::warn!(
+                        sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
+                        count = count,
+                        limit = max_messages,
+                        "Control message rate limit exceeded"
+                    );
+                    return Err(AppError::Validation(format!(
+                        "Rate limit exceeded: maximum {} control messages per hour",
+                        max_messages
+                    )));
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to check control message rate limit");
+            }
+        }
+        drop(queue);
+    }
+
+    // Parse recipient_id
+    let recipient_id = Uuid::parse_str(&data.recipient_id)
+        .map_err(|_| AppError::Validation("Invalid recipient ID format".to_string()))?;
+
+    // Security check: prevent sending to self
+    if sender_id == recipient_id {
+        return Err(AppError::Validation(
+            "Cannot send control message to self".to_string(),
+        ));
+    }
+
+    // Check if recipient exists in database
+    {
+        let user_exists: Option<bool> = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE user_id = $1)"
+        )
+        .bind(recipient_id)
+        .fetch_one(&*app_context.db_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to check if recipient exists");
+            AppError::Database(e)
+        })?;
+
+        if !user_exists.unwrap_or(false) {
+            return Err(AppError::Validation(
+                "Recipient does not exist".to_string(),
+            ));
+        }
+    }
+
+    // Create END_SESSION ChatMessage
+    let chat_message = ChatMessage::new_end_session(
+        sender_id_str.clone(),
+        data.recipient_id.clone(),
+    );
+    
+    let message_id = chat_message.id.clone();
+
+    // Validate the control message
+    if !chat_message.is_valid() {
+        tracing::error!(
+            sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
+            "Failed to create valid END_SESSION message"
+        );
+        return Err(AppError::Internal(
+            "Failed to create valid control message".to_string(),
+        ));
+    }
+
+    // Convert to Kafka envelope (will automatically map to ControlMessage type)
+    let envelope = KafkaMessageEnvelope::from(chat_message);
+
+    // Write to Kafka (Phase 5: source of truth)
+    let salt = &app_context.config.logging.hash_salt;
+    if let Some(kafka_producer) = &app_context.kafka_producer {
+        if let Err(e) = kafka_producer.send_message(&envelope).await {
+            tracing::error!(
+                error = %e,
+                sender_hash = %log_safe_id(&sender_id_str, salt),
+                recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+                message_id = %message_id,
+                "Failed to send END_SESSION to Kafka"
+            );
+            return Err(AppError::Kafka(e.to_string()));
+        }
+    } else {
+        tracing::error!(
+            sender_hash = %log_safe_id(&sender_id_str, salt),
+            recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+            message_id = %message_id,
+            "Kafka producer not available - cannot send control message"
+        );
+        return Err(AppError::Kafka("Kafka producer not available".to_string()));
+    }
+
+    tracing::info!(
+        sender_hash = %log_safe_id(&sender_id_str, salt),
+        recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+        message_id = %message_id,
+        reason = ?data.reason,
+        "END_SESSION control message sent successfully"
+    );
+
+    // Return success
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "message_id": message_id,
+            "type": "END_SESSION"
+        })),
     ))
 }

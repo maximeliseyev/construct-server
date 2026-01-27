@@ -1,643 +1,468 @@
-.PHONY: help build run-worker run-media-service test check clean \
-	docker-up docker-down docker-logs docker-build docker-rebuild \
-	deploy-worker check-before-deploy \
-	deploy-api-gateway deploy-auth-service deploy-user-service deploy-messaging-service deploy-notification-service deploy-media-service \
-	deploy-microservices \
-	secrets-worker secrets-media-service \
-	secrets-api-gateway secrets-auth-service secrets-user-service secrets-messaging-service secrets-notification-service secrets-media-service \
-	logs-worker logs-media-service \
-	logs-api-gateway logs-auth-service logs-user-service logs-messaging-service logs-notification-service \
-	logs-microservices \
-	status-worker status-media-service \
-	status-api-gateway status-auth-service status-user-service status-messaging-service status-notification-service \
-	status-microservices \
-	db-migrate db-up db-down \
-	generate-jwt-keys vault-dev-up vault-dev-down vault-dev-status vault-dev-init \
-	key-mgmt-check key-mgmt-init
-
 # ============================================================================
-# Help
+# Construct Server - Makefile (Phase 4.5+ optimized)
+# ============================================================================
+# 
+# Microservices Architecture:
+# - API Gateway (routing, auth, rate limiting)
+# - Auth Service (JWT, registration, login)
+# - User Service (profiles, keys, contacts)
+# - Messaging Service (send/receive messages, END_SESSION)
+# - Notification Service (APNs push notifications)
+# - Media Service (image/video upload)
+# - Delivery Worker (Kafka consumer, message delivery)
+#
 # ============================================================================
 
+.PHONY: help
+
+# Default target
 help:
 	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║  Construct Server - Centralized Build & Deploy Commands       ║"
+	@echo "║  Construct Server - Build & Deploy Commands (Phase 4.5+)      ║"
 	@echo "╚════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "📦 Local Development:"
-	@echo "  make build              Build all binaries (release mode)"
-	@echo "  make run-worker         Run delivery worker locally"
-	@echo "  make run-media-service  Run media service locally"
-	@echo "  make test               Run all tests"
-	@echo "  make check              Check code (clippy + fmt)"
-	@echo "  make fmt                Format code"
-	@echo "  make clean              Clean build artifacts"
+	@echo "🔨 Development:"
+	@echo "  make dev             Start local stack (db + redis + kafka)"
+	@echo "  make dev-down        Stop local stack"
+	@echo "  make dev-logs        View local stack logs"
+	@echo "  make build           Build all binaries (release)"
+	@echo "  make test            Run all tests"
+	@echo "  make check           Run clippy + fmt check"
+	@echo "  make fmt             Format code"
 	@echo ""
-	@echo "🐳 Docker (Local Stack):"
-	@echo "  make docker-up          Start all services (db + redis)"
-	@echo "  make docker-down        Stop all docker-compose services"
-	@echo "  make docker-logs        View docker-compose logs (tail -f)"
-	@echo "  make docker-build       Rebuild docker images"
-	@echo "  make docker-rebuild     Rebuild & restart all services"
+	@echo "🚀 Deployment (Fly.io):"
+	@echo "  make deploy          Deploy all microservices"
+	@echo "  make deploy-gateway  Deploy API Gateway only"
+	@echo "  make deploy-auth     Deploy Auth Service only"
+	@echo "  make deploy-user     Deploy User Service only"
+	@echo "  make deploy-msg      Deploy Messaging Service only"
+	@echo "  make deploy-notif    Deploy Notification Service only"
+	@echo "  make deploy-media    Deploy Media Service only"
+	@echo "  make deploy-worker   Deploy Delivery Worker only"
 	@echo ""
-	@echo "🚀 Fly.io Deployment:"
-	@echo "  make deploy-worker      Deploy delivery worker to Fly.io"
+	@echo "🔐 Secrets Management:"
+	@echo "  make secrets         Setup secrets for all services"
+	@echo "  make secrets-<name>  Setup secrets for specific service"
+	@echo "                       (gateway, auth, user, msg, notif, media, worker)"
 	@echo ""
-	@echo "🚀 Microservices Deployment:"
-	@echo "  make deploy-worker              Deploy Delivery Worker to Fly.io"
-	@echo "  make deploy-api-gateway         Deploy API Gateway to Fly.io"
-	@echo "  make deploy-auth-service        Deploy Auth Service to Fly.io"
-	@echo "  make deploy-user-service        Deploy User Service to Fly.io"
-	@echo "  make deploy-messaging-service   Deploy Messaging Service to Fly.io"
-	@echo "  make deploy-notification-service Deploy Notification Service to Fly.io"
-	@echo "  make deploy-media-service       Deploy Media Service to Fly.io"
-	@echo "  make deploy-microservices      Deploy all microservices"
-	@echo ""
-	@echo "🔐 Fly.io Secrets Management:"
-	@echo "  make secrets-worker     Set secrets for construct-delivery-worker"
-	@echo ""
-	@echo "🔐 Microservices Secrets:"
-	@echo "  make secrets-api-gateway         Set secrets for API Gateway"
-	@echo "  make secrets-auth-service        Set secrets for Auth Service"
-	@echo "  make secrets-user-service        Set secrets for User Service"
-	@echo "  make secrets-messaging-service   Set secrets for Messaging Service"
-	@echo "  make secrets-notification-service Set secrets for Notification Service"
-	@echo "  make secrets-media-service       Set secrets for Media Service"
-	@echo ""
-	@echo "📊 Fly.io Monitoring:"
-	@echo "  make logs-worker        View delivery worker logs"
-	@echo "  make logs-media-service View media service logs"
-	@echo "  make status-worker      Show construct-delivery-worker status"
-	@echo "  make status-media-service Show construct-media-service status"
-	@echo ""
-	@echo "📊 Microservices Monitoring:"
-	@echo "  make logs-worker              View Delivery Worker logs"
-	@echo "  make logs-api-gateway         View API Gateway logs"
-	@echo "  make logs-auth-service        View Auth Service logs"
-	@echo "  make logs-user-service        View User Service logs"
-	@echo "  make logs-messaging-service   View Messaging Service logs"
-	@echo "  make logs-notification-service View Notification Service logs"
-	@echo "  make status-worker            Show Delivery Worker status"
-	@echo "  make status-api-gateway       Show API Gateway status"
-	@echo "  make status-auth-service      Show Auth Service status"
-	@echo "  make status-user-service      Show User Service status"
-	@echo "  make status-messaging-service Show Messaging Service status"
-	@echo "  make status-notification-service Show Notification Service status"
-	@echo "  make status-microservices     Show status of all microservices"
-	@echo "  make logs-microservices       View recent logs from all microservices"
+	@echo "📊 Monitoring:"
+	@echo "  make status          Show status of all services"
+	@echo "  make logs            View logs of all services"
+	@echo "  make logs-<name>     View logs of specific service"
+	@echo "                       (gateway, auth, user, msg, notif, media, worker)"
 	@echo ""
 	@echo "🗄️  Database:"
-	@echo "  make db-migrate         Run database migrations"
-	@echo "  make db-up              Start local PostgreSQL + Redis"
-	@echo "  make db-down            Stop local databases"
+	@echo "  make db-migrate      Run database migrations"
+	@echo "  make db-dev          Start local PostgreSQL + Redis"
+	@echo "  make db-dev-down     Stop local databases"
 	@echo ""
-	@echo "🔑 Key Management & RS256:"
-	@echo "  make generate-jwt-keys  Generate RSA keypair for RS256 (JWT_PRIVATE_KEY/JWT_PUBLIC_KEY)"
-	@echo "  make vault-dev-up       Start Vault in dev mode (Docker)"
-	@echo "  make vault-dev-down     Stop Vault dev container"
-	@echo "  make vault-dev-status   Check Vault dev status"
-	@echo "  make vault-dev-init     Initialize Vault dev with Transit keys"
-	@echo "  make key-mgmt-check     Check Key Management System configuration"
-	@echo "  make key-mgmt-init      Initialize Key Management System in database"
+	@echo "🔑 Security & Keys:"
+	@echo "  make gen-jwt         Generate RSA keypair for RS256 JWT"
+	@echo "  make vault-up        Start Vault in dev mode"
+	@echo "  make vault-down      Stop Vault"
+	@echo "  make vault-init      Initialize Vault with Transit keys"
 	@echo ""
-	@echo "💡 Common Workflows:"
-	@echo "  Development:   make docker-up && make docker-logs"
-	@echo "  Deploy microservices: make deploy-microservices"
-	@echo "  First deploy:  make secrets-api-gateway && make deploy-microservices"
-	@echo "  RS256 setup:   make generate-jwt-keys && make vault-dev-up && make vault-dev-init"
-	@echo "  Key Management: make vault-dev-up && make vault-dev-init && make key-mgmt-init"
-	@echo "  Monitor microservices: make status-microservices && make logs-api-gateway"
+	@echo "💡 Quick Start:"
+	@echo "  Development: make dev && make dev-logs"
+	@echo "  First deploy: make secrets && make deploy"
+	@echo "  Update code: make build && make deploy-msg"
 
 # ============================================================================
-# Local Development
+# Variables
 # ============================================================================
+
+# Service names (Fly.io apps)
+APP_GATEWAY = construct-api-gateway
+APP_AUTH = construct-auth-service
+APP_USER = construct-user-service
+APP_MSG = construct-messaging-service
+APP_NOTIF = construct-notification-service
+APP_MEDIA = construct-media-service
+APP_WORKER = construct-delivery-worker
+
+# Docker Compose files
+COMPOSE = docker-compose -f ops/docker-compose.yml
+COMPOSE_KAFKA = docker-compose -f ops/docker-compose.kafka.yml
+
+# Colors for output
+COLOR_RESET = \033[0m
+COLOR_INFO = \033[0;36m
+COLOR_SUCCESS = \033[0;32m
+COLOR_WARNING = \033[0;33m
+COLOR_ERROR = \033[0;31m
+
+# ============================================================================
+# Development
+# ============================================================================
+
+.PHONY: dev dev-down dev-logs build test check fmt clean
+
+dev:
+	@echo "$(COLOR_INFO)🐳 Starting local development stack...$(COLOR_RESET)"
+	@$(COMPOSE) up -d postgres redis
+	@$(COMPOSE_KAFKA) up -d kafka
+	@echo "$(COLOR_SUCCESS)✅ Stack started. Services:$(COLOR_RESET)"
+	@echo "   PostgreSQL: localhost:5432"
+	@echo "   Redis: localhost:6379"
+	@echo "   Kafka: localhost:9092"
+	@echo ""
+	@echo "$(COLOR_INFO)💡 Next steps:$(COLOR_RESET)"
+	@echo "   make dev-logs    # View logs"
+	@echo "   make db-migrate  # Run migrations"
+
+dev-down:
+	@echo "$(COLOR_INFO)🛑 Stopping local stack...$(COLOR_RESET)"
+	@$(COMPOSE) down
+	@$(COMPOSE_KAFKA) down
+	@echo "$(COLOR_SUCCESS)✅ Stack stopped$(COLOR_RESET)"
+
+dev-logs:
+	@echo "$(COLOR_INFO)📋 Tailing logs from local stack...$(COLOR_RESET)"
+	@$(COMPOSE) logs -f
 
 build:
-	@echo "🔨 Building all binaries..."
-	cargo build --release --bins
-
-run-worker:
-	@echo "⚙️  Running delivery worker locally..."
-	RUST_LOG=info cargo run --bin delivery-worker
-
-run-media-service:
-	@echo "📸 Running media service locally..."
-	RUST_LOG=info MEDIA_UPLOAD_TOKEN_SECRET=dev-secret-minimum-32-chars-long cargo run --bin media-service
+	@echo "$(COLOR_INFO)🔨 Building all binaries (release mode)...$(COLOR_RESET)"
+	@cargo build --release --workspace --bins
+	@echo "$(COLOR_SUCCESS)✅ Build complete$(COLOR_RESET)"
 
 test:
-	@echo "🧪 Running tests..."
-	cargo test
+	@echo "$(COLOR_INFO)🧪 Running tests...$(COLOR_RESET)"
+	@cargo test --workspace --lib
+	@echo "$(COLOR_SUCCESS)✅ Tests passed$(COLOR_RESET)"
 
 check:
-	@echo "🔍 Checking code..."
-	cargo clippy -- -D warnings
-	cargo fmt --check
+	@echo "$(COLOR_INFO)🔍 Running code checks...$(COLOR_RESET)"
+	@cargo clippy --workspace -- -D warnings
+	@cargo fmt --check
+	@echo "$(COLOR_SUCCESS)✅ Code checks passed$(COLOR_RESET)"
 
 fmt:
-	@echo "✨ Formatting code..."
-	cargo fmt
+	@echo "$(COLOR_INFO)✨ Formatting code...$(COLOR_RESET)"
+	@cargo fmt --all
 
 clean:
-	@echo "🧹 Cleaning build artifacts..."
-	cargo clean
+	@echo "$(COLOR_INFO)🧹 Cleaning build artifacts...$(COLOR_RESET)"
+	@cargo clean
+	@echo "$(COLOR_SUCCESS)✅ Clean complete$(COLOR_RESET)"
 
 # ============================================================================
-# Docker (Local Development Stack)
+# Deployment (Fly.io)
 # ============================================================================
 
-docker-up:
-	@echo "🐳 Starting all services with Docker Compose..."
-	docker-compose -f ops/docker-compose.yml up -d
-	@echo "✅ Services started. Use 'make docker-logs' to view logs."
+.PHONY: deploy deploy-gateway deploy-auth deploy-user deploy-msg deploy-notif deploy-media deploy-worker check-deploy
 
-docker-down:
-	@echo "🛑 Stopping all Docker Compose services..."
-	docker-compose -f ops/docker-compose.yml down
-
-docker-logs:
-	@echo "📋 Tailing Docker Compose logs..."
-	docker-compose -f ops/docker-compose.yml logs -f
-
-docker-build:
-	@echo "🔨 Building Docker images..."
-	docker-compose -f ops/docker-compose.yml build
-
-docker-rebuild:
-	@echo "🔄 Rebuilding and restarting all services..."
-	docker-compose -f ops/docker-compose.yml up -d --build
-
-# ============================================================================
-# Fly.io Deployment
-# ============================================================================
-
-deploy-worker: check-before-deploy
-	@echo "⚙️  Deploying delivery worker to Fly.io..."
-	fly deploy . --config ops/fly.worker.toml --dockerfile ./ops/Dockerfile --app construct-delivery-worker
-	@echo "✅ Worker deployed. View logs: make logs-worker"
-
-check-before-deploy:
+# Check compilation before deploying
+check-deploy:
 	@if [ -z "$$SKIP_CHECK" ]; then \
-		echo "🔍 Checking code compilation before deploy..."; \
-		cargo check --release || (echo "❌ Compilation failed! Fix errors before deploying." && exit 1); \
-		echo "✓ Code compiles successfully"; \
+		echo "$(COLOR_INFO)🔍 Checking code compilation...$(COLOR_RESET)"; \
+		cargo check --release --workspace || \
+			(echo "$(COLOR_ERROR)❌ Compilation failed!$(COLOR_RESET)" && exit 1); \
+		echo "$(COLOR_SUCCESS)✓ Code compiles successfully$(COLOR_RESET)"; \
 	fi
 
+# Deploy all microservices
+deploy: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying all microservices...$(COLOR_RESET)"
+	@echo ""
+	@echo "1/7 Deploying API Gateway..."
+	@SKIP_CHECK=1 $(MAKE) deploy-gateway
+	@echo ""
+	@echo "2/7 Deploying Auth Service..."
+	@SKIP_CHECK=1 $(MAKE) deploy-auth
+	@echo ""
+	@echo "3/7 Deploying User Service..."
+	@SKIP_CHECK=1 $(MAKE) deploy-user
+	@echo ""
+	@echo "4/7 Deploying Messaging Service (Phase 4.5: END_SESSION support)..."
+	@SKIP_CHECK=1 $(MAKE) deploy-msg
+	@echo ""
+	@echo "5/7 Deploying Notification Service..."
+	@SKIP_CHECK=1 $(MAKE) deploy-notif
+	@echo ""
+	@echo "6/7 Deploying Media Service..."
+	@SKIP_CHECK=1 $(MAKE) deploy-media
+	@echo ""
+	@echo "7/7 Deploying Delivery Worker..."
+	@SKIP_CHECK=1 $(MAKE) deploy-worker
+	@echo ""
+	@echo "$(COLOR_SUCCESS)✅ All microservices deployed!$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_INFO)💡 Next steps:$(COLOR_RESET)"
+	@echo "   make status      # Check deployment status"
+	@echo "   make logs-msg    # View messaging service logs"
+
+# Deploy individual services
+deploy-gateway: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying API Gateway...$(COLOR_RESET)"
+	@fly apps create $(APP_GATEWAY) 2>/dev/null || true
+	@fly deploy --config ops/fly.api-gateway.toml --dockerfile ops/Dockerfile --app $(APP_GATEWAY)
+	@echo "$(COLOR_SUCCESS)✅ Gateway deployed$(COLOR_RESET)"
+
+deploy-auth: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying Auth Service...$(COLOR_RESET)"
+	@fly apps create $(APP_AUTH) 2>/dev/null || true
+	@fly deploy --config ops/fly.auth-service.toml --dockerfile ops/Dockerfile --app $(APP_AUTH)
+	@echo "$(COLOR_SUCCESS)✅ Auth Service deployed$(COLOR_RESET)"
+
+deploy-user: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying User Service...$(COLOR_RESET)"
+	@fly apps create $(APP_USER) 2>/dev/null || true
+	@fly deploy --config ops/fly.user-service.toml --dockerfile ops/Dockerfile --app $(APP_USER)
+	@echo "$(COLOR_SUCCESS)✅ User Service deployed$(COLOR_RESET)"
+
+deploy-msg: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying Messaging Service (Phase 4.5: /api/v1/control)...$(COLOR_RESET)"
+	@fly apps create $(APP_MSG) 2>/dev/null || true
+	@fly deploy --config ops/fly.messaging-service.toml --dockerfile ops/Dockerfile --app $(APP_MSG)
+	@echo "$(COLOR_SUCCESS)✅ Messaging Service deployed$(COLOR_RESET)"
+
+deploy-notif: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying Notification Service...$(COLOR_RESET)"
+	@fly apps create $(APP_NOTIF) 2>/dev/null || true
+	@fly deploy --config ops/fly.notification-service.toml --dockerfile ops/Dockerfile --app $(APP_NOTIF)
+	@echo "$(COLOR_SUCCESS)✅ Notification Service deployed$(COLOR_RESET)"
+
+deploy-media: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying Media Service...$(COLOR_RESET)"
+	@fly apps create $(APP_MEDIA) 2>/dev/null || true
+	@fly deploy --config ops/fly.media.toml --dockerfile ops/Dockerfile --app $(APP_MEDIA)
+	@echo "$(COLOR_SUCCESS)✅ Media Service deployed$(COLOR_RESET)"
+
+deploy-worker: check-deploy
+	@echo "$(COLOR_INFO)🚀 Deploying Delivery Worker...$(COLOR_RESET)"
+	@fly apps create $(APP_WORKER) 2>/dev/null || true
+	@fly deploy --config ops/fly.worker.toml --dockerfile ops/Dockerfile --app $(APP_WORKER)
+	@echo "$(COLOR_SUCCESS)✅ Delivery Worker deployed$(COLOR_RESET)"
+
 # ============================================================================
-# Microservices Deployment
+# Secrets Management
 # ============================================================================
 
-deploy-api-gateway: check-before-deploy
-	@echo "🚀 Deploying API Gateway to Fly.io..."
-	@fly apps create construct-api-gateway 2>/dev/null || true
-	@fly deploy . --config ops/fly.api-gateway.toml --dockerfile ./ops/Dockerfile --app construct-api-gateway
-	@echo "✅ API Gateway deployed. View logs: make logs-api-gateway"
+.PHONY: secrets secrets-gateway secrets-auth secrets-user secrets-msg secrets-notif secrets-media secrets-worker
 
-deploy-auth-service: check-before-deploy
-	@echo "🚀 Deploying Auth Service to Fly.io..."
-	@fly apps create construct-auth-service 2>/dev/null || true
-	@fly deploy . --config ops/fly.auth-service.toml --dockerfile ./ops/Dockerfile --app construct-auth-service
-	@echo "✅ Auth Service deployed. View logs: make logs-auth-service"
+secrets:
+	@echo "$(COLOR_INFO)🔐 Setting secrets for all services...$(COLOR_RESET)"
+	@if [ ! -f .env ]; then \
+		echo "$(COLOR_ERROR)❌ Error: .env file not found$(COLOR_RESET)"; \
+		exit 1; \
+	fi
+	@echo ""
+	@$(MAKE) secrets-gateway
+	@$(MAKE) secrets-auth
+	@$(MAKE) secrets-user
+	@$(MAKE) secrets-msg
+	@$(MAKE) secrets-notif
+	@$(MAKE) secrets-media
+	@$(MAKE) secrets-worker
+	@echo ""
+	@echo "$(COLOR_SUCCESS)✅ Secrets set for all services$(COLOR_RESET)"
 
-deploy-user-service: check-before-deploy
-	@echo "🚀 Deploying User Service to Fly.io..."
-	@fly apps create construct-user-service 2>/dev/null || true
-	@fly deploy . --config ops/fly.user-service.toml --dockerfile ./ops/Dockerfile --app construct-user-service
-	@echo "✅ User Service deployed. View logs: make logs-user-service"
+secrets-gateway:
+	@echo "$(COLOR_INFO)🔐 Setting secrets for API Gateway...$(COLOR_RESET)"
+	@bash ops/setup-fly-secrets.sh api-gateway
 
-deploy-messaging-service: check-before-deploy
-	@echo "🚀 Deploying Messaging Service to Fly.io..."
-	@fly apps create construct-messaging-service 2>/dev/null || true
-	@fly deploy . --config ops/fly.messaging-service.toml --dockerfile ./ops/Dockerfile --app construct-messaging-service
-	@echo "✅ Messaging Service deployed. View logs: make logs-messaging-service"
+secrets-auth:
+	@echo "$(COLOR_INFO)🔐 Setting secrets for Auth Service...$(COLOR_RESET)"
+	@bash ops/setup-fly-secrets.sh auth-service
 
-deploy-notification-service: check-before-deploy
-	@echo "🚀 Deploying Notification Service to Fly.io..."
-	@fly apps create construct-notification-service 2>/dev/null || true
-	@fly deploy . --config ops/fly.notification-service.toml --dockerfile ./ops/Dockerfile --app construct-notification-service
-	@echo "✅ Notification Service deployed. View logs: make logs-notification-service"
+secrets-user:
+	@echo "$(COLOR_INFO)🔐 Setting secrets for User Service...$(COLOR_RESET)"
+	@bash ops/setup-fly-secrets.sh user-service
 
-deploy-media-service: check-before-deploy
-	@echo "📸 Deploying Media Service to Fly.io..."
-	@fly apps create construct-media-service 2>/dev/null || true
-	@fly deploy . --config ops/fly.media.toml --dockerfile ./ops/Dockerfile --app construct-media-service
-	@echo "✅ Media Service deployed. View logs: make logs-media-service"
+secrets-msg:
+	@echo "$(COLOR_INFO)🔐 Setting secrets for Messaging Service...$(COLOR_RESET)"
+	@bash ops/setup-fly-secrets.sh messaging-service
 
-deploy-microservices:
-	@echo "🔍 Checking code compilation before deploying all microservices..."
-	@cargo check --release || (echo "❌ Compilation failed! Fix errors before deploying." && exit 1)
-	@echo "✓ Code compiles successfully"
-	@echo ""
-	@echo "🚀 Deploying all microservices to Fly.io..."
-	@echo ""
-	@echo "1/7 Deploying Delivery Worker..."
-	@SKIP_CHECK=1 make deploy-worker
-	@echo ""
-	@echo "2/7 Deploying API Gateway..."
-	@SKIP_CHECK=1 make deploy-api-gateway
-	@echo ""
-	@echo "3/7 Deploying Auth Service..."
-	@SKIP_CHECK=1 make deploy-auth-service
-	@echo ""
-	@echo "4/7 Deploying User Service..."
-	@SKIP_CHECK=1 make deploy-user-service
-	@echo ""
-	@echo "5/7 Deploying Messaging Service..."
-	@SKIP_CHECK=1 make deploy-messaging-service
-	@echo ""
-	@echo "6/7 Deploying Notification Service..."
-	@SKIP_CHECK=1 make deploy-notification-service
-	@echo ""
-	@echo "7/7 Deploying Media Service..."
-	@SKIP_CHECK=1 make deploy-media-service
-	@echo ""
-	@echo "✅ All microservices deployed!"
+secrets-notif:
+	@echo "$(COLOR_INFO)🔐 Setting secrets for Notification Service...$(COLOR_RESET)"
+	@bash ops/setup-fly-secrets.sh notification-service
 
-# ============================================================================
-# Fly.io Secrets Management
-# ============================================================================
+secrets-media:
+	@echo "$(COLOR_INFO)🔐 Setting secrets for Media Service...$(COLOR_RESET)"
+	@bash ops/setup-fly-secrets.sh media-service
 
 secrets-worker:
-	@echo "🔐 Setting secrets for construct-delivery-worker from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
+	@echo "$(COLOR_INFO)🔐 Setting secrets for Delivery Worker...$(COLOR_RESET)"
 	@bash ops/setup-fly-secrets.sh worker
 
 # ============================================================================
-# Microservices Secrets Management
+# Monitoring
 # ============================================================================
 
-secrets-api-gateway:
-	@echo "🔐 Setting secrets for construct-api-gateway from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh api-gateway
+.PHONY: status logs logs-gateway logs-auth logs-user logs-msg logs-notif logs-media logs-worker
 
-secrets-auth-service:
-	@echo "🔐 Setting secrets for construct-auth-service from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh auth-service
-
-secrets-user-service:
-	@echo "🔐 Setting secrets for construct-user-service from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh user-service
-
-secrets-messaging-service:
-	@echo "🔐 Setting secrets for construct-messaging-service from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh messaging-service
-
-secrets-notification-service:
-	@echo "🔐 Setting secrets for construct-notification-service from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh notification-service
-
-secrets-media-service:
-	@echo "🔐 Setting secrets for construct-media-service from .env..."
-	@if [ ! -f .env ]; then echo "❌ Error: .env file not found"; exit 1; fi
-	@bash ops/setup-fly-secrets.sh media-service
-
-# ============================================================================
-# Fly.io Monitoring
-# ============================================================================
-
-logs-worker:
-	@echo "📋 Viewing construct-delivery-worker logs..."
-	fly logs -a construct-delivery-worker
-
-logs-media-service:
-	@echo "📋 Viewing construct-media-service logs..."
-	fly logs -a construct-media-service
-
-status-worker:
-	@echo "📊 construct-delivery-worker status:"
-	@fly status -a construct-delivery-worker
-
-status-media-service:
-	@echo "📊 construct-media-service status:"
-	@fly status -a construct-media-service
-
-# ============================================================================
-# Microservices Monitoring
-# ============================================================================
-
-logs-api-gateway:
-	@echo "📋 Viewing API Gateway logs..."
-	@fly logs --app construct-api-gateway
-
-logs-auth-service:
-	@echo "📋 Viewing Auth Service logs..."
-	@fly logs --app construct-auth-service
-
-logs-user-service:
-	@echo "📋 Viewing User Service logs..."
-	@fly logs --app construct-user-service
-
-logs-messaging-service:
-	@echo "📋 Viewing Messaging Service logs..."
-	@fly logs --app construct-messaging-service
-
-logs-notification-service:
-	@echo "📋 Viewing Notification Service logs..."
-	@fly logs --app construct-notification-service
-
-logs-media-service:
-	@echo "📋 Viewing Media Service logs..."
-	@fly logs --app construct-media-service
-
-status-api-gateway:
-	@echo "📊 API Gateway status:"
-	@fly status --app construct-api-gateway || echo "❌ App not found or not deployed"
-
-status-auth-service:
-	@echo "📊 Auth Service status:"
-	@fly status --app construct-auth-service || echo "❌ App not found or not deployed"
-
-status-user-service:
-	@echo "📊 User Service status:"
-	@fly status --app construct-user-service || echo "❌ App not found or not deployed"
-
-status-messaging-service:
-	@echo "📊 Messaging Service status:"
-	@fly status --app construct-messaging-service || echo "❌ App not found or not deployed"
-
-status-notification-service:
-	@echo "📊 Notification Service status:"
-	@fly status --app construct-notification-service || echo "❌ App not found or not deployed"
-
-status-media-service:
-	@echo "📊 Media Service status:"
-	@fly status --app construct-media-service || echo "❌ App not found or not deployed"
-
-status-microservices:
-	@echo "📊 Checking status of all microservices..."
-	@echo ""
-	@echo "=== Delivery Worker ==="
-	@fly status --app construct-delivery-worker || echo "❌ App not found or not deployed"
+status:
+	@echo "$(COLOR_INFO)📊 Checking status of all microservices...$(COLOR_RESET)"
 	@echo ""
 	@echo "=== API Gateway ==="
-	@fly status --app construct-api-gateway || echo "❌ App not found or not deployed"
+	@fly status --app $(APP_GATEWAY) 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not deployed$(COLOR_RESET)"
 	@echo ""
 	@echo "=== Auth Service ==="
-	@fly status --app construct-auth-service || echo "❌ App not found or not deployed"
+	@fly status --app $(APP_AUTH) 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not deployed$(COLOR_RESET)"
 	@echo ""
 	@echo "=== User Service ==="
-	@fly status --app construct-user-service || echo "❌ App not found or not deployed"
+	@fly status --app $(APP_USER) 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not deployed$(COLOR_RESET)"
 	@echo ""
-	@echo "=== Messaging Service ==="
-	@fly status --app construct-messaging-service || echo "❌ App not found or not deployed"
+	@echo "=== Messaging Service (Phase 4.5) ==="
+	@fly status --app $(APP_MSG) 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not deployed$(COLOR_RESET)"
 	@echo ""
 	@echo "=== Notification Service ==="
-	@fly status --app construct-notification-service || echo "❌ App not found or not deployed"
+	@fly status --app $(APP_NOTIF) 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not deployed$(COLOR_RESET)"
 	@echo ""
 	@echo "=== Media Service ==="
-	@fly status --app construct-media-service || echo "❌ App not found or not deployed"
-
-# Combined monitoring commands
-logs-microservices:
-	@echo "📋 Viewing all microservices logs..."
-	@echo "Note: Use individual 'make logs-<service>' commands for better control"
+	@fly status --app $(APP_MEDIA) 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not deployed$(COLOR_RESET)"
 	@echo ""
 	@echo "=== Delivery Worker ==="
-	@fly logs --app construct-delivery-worker || true
+	@fly status --app $(APP_WORKER) 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not deployed$(COLOR_RESET)"
+
+logs:
+	@echo "$(COLOR_INFO)📋 Recent logs from all services (last 100 lines each)...$(COLOR_RESET)"
 	@echo ""
 	@echo "=== API Gateway ==="
-	@fly logs --app construct-api-gateway || true
-	@echo ""
-	@echo "=== Auth Service ==="
-	@fly logs --app construct-auth-service || true
-	@echo ""
-	@echo "=== User Service ==="
-	@fly logs --app construct-user-service || true
+	@fly logs --app $(APP_GATEWAY) -n 100 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not available$(COLOR_RESET)"
 	@echo ""
 	@echo "=== Messaging Service ==="
-	@fly logs --app construct-messaging-service || true
+	@fly logs --app $(APP_MSG) -n 100 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not available$(COLOR_RESET)"
 	@echo ""
-	@echo "=== Notification Service ==="
-	@fly logs --app construct-notification-service || true
+	@echo "=== Delivery Worker ==="
+	@fly logs --app $(APP_WORKER) -n 100 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not available$(COLOR_RESET)"
+
+logs-gateway:
+	@echo "$(COLOR_INFO)📋 Streaming API Gateway logs...$(COLOR_RESET)"
+	@fly logs --app $(APP_GATEWAY)
+
+logs-auth:
+	@echo "$(COLOR_INFO)📋 Streaming Auth Service logs...$(COLOR_RESET)"
+	@fly logs --app $(APP_AUTH)
+
+logs-user:
+	@echo "$(COLOR_INFO)📋 Streaming User Service logs...$(COLOR_RESET)"
+	@fly logs --app $(APP_USER)
+
+logs-msg:
+	@echo "$(COLOR_INFO)📋 Streaming Messaging Service logs...$(COLOR_RESET)"
+	@fly logs --app $(APP_MSG)
+
+logs-notif:
+	@echo "$(COLOR_INFO)📋 Streaming Notification Service logs...$(COLOR_RESET)"
+	@fly logs --app $(APP_NOTIF)
+
+logs-media:
+	@echo "$(COLOR_INFO)📋 Streaming Media Service logs...$(COLOR_RESET)"
+	@fly logs --app $(APP_MEDIA)
+
+logs-worker:
+	@echo "$(COLOR_INFO)📋 Streaming Delivery Worker logs...$(COLOR_RESET)"
+	@fly logs --app $(APP_WORKER)
 
 # ============================================================================
-# Database Management
+# Database
 # ============================================================================
+
+.PHONY: db-migrate db-dev db-dev-down
 
 db-migrate:
-	@echo "🗄️  Running database migrations..."
-	sqlx migrate run
+	@echo "$(COLOR_INFO)🗄️  Running database migrations...$(COLOR_RESET)"
+	@sqlx migrate run --source shared/migrations
+	@echo "$(COLOR_SUCCESS)✅ Migrations complete$(COLOR_RESET)"
 
-db-up:
-	@echo "🗄️  Starting local PostgreSQL + Redis..."
-	docker-compose -f ops/docker-compose.yml up postgres redis -d
-	@echo "✅ Databases started."
+db-dev:
+	@echo "$(COLOR_INFO)🗄️  Starting local PostgreSQL + Redis...$(COLOR_RESET)"
+	@$(COMPOSE) up -d postgres redis
+	@echo "$(COLOR_SUCCESS)✅ Databases started$(COLOR_RESET)"
+	@echo "   PostgreSQL: localhost:5432"
+	@echo "   Redis: localhost:6379"
 
-db-down:
-	@echo "🛑 Stopping local databases..."
-	docker-compose -f ops/docker-compose.yml stop postgres redis
+db-dev-down:
+	@echo "$(COLOR_INFO)🛑 Stopping local databases...$(COLOR_RESET)"
+	@$(COMPOSE) stop postgres redis
+	@echo "$(COLOR_SUCCESS)✅ Databases stopped$(COLOR_RESET)"
 
 # ============================================================================
-# Key Management & RS256
+# Security & Key Management
 # ============================================================================
 
-generate-jwt-keys:
-	@echo "🔑 Generating RSA keypair for RS256..."
+.PHONY: gen-jwt vault-up vault-down vault-init vault-status
+
+gen-jwt:
+	@echo "$(COLOR_INFO)🔑 Generating RSA keypair for RS256 JWT...$(COLOR_RESET)"
 	@if [ -f jwt-private.pem ] || [ -f jwt-public.pem ]; then \
-		echo "⚠️  Warning: jwt-private.pem or jwt-public.pem already exists"; \
-		echo "   Delete them first if you want to regenerate:"; \
-		echo "   rm -f jwt-private.pem jwt-public.pem"; \
+		echo "$(COLOR_WARNING)⚠️  Keys already exist:$(COLOR_RESET)"; \
+		ls -lh jwt-*.pem 2>/dev/null || true; \
+		echo ""; \
+		echo "Delete them first if you want to regenerate:"; \
+		echo "  rm -f jwt-private.pem jwt-public.pem"; \
 		exit 1; \
 	fi
 	@openssl genrsa -out jwt-private.pem 4096
 	@openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem
-	@echo "✅ RSA keypair generated:"
-	@echo "   Private key: jwt-private.pem"
-	@echo "   Public key:  jwt-public.pem"
+	@echo "$(COLOR_SUCCESS)✅ RSA keypair generated$(COLOR_RESET)"
+	@echo "   Private: jwt-private.pem (4096 bits)"
+	@echo "   Public:  jwt-public.pem"
 	@echo ""
-	@echo "📝 Add to .env file:"
+	@echo "$(COLOR_INFO)📝 Add to .env:$(COLOR_RESET)"
 	@echo "   JWT_PRIVATE_KEY=\"\$$(cat jwt-private.pem)\""
 	@echo "   JWT_PUBLIC_KEY=\"\$$(cat jwt-public.pem)\""
-	@echo ""
-	@echo "⚠️  Keep jwt-private.pem secure and never commit it to git!"
 
-vault-dev-up:
-	@echo "🔐 Starting Vault in dev mode (Docker)..."
-	@if docker ps -a --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
-		echo "⚠️  Vault container already exists. Starting it..."; \
-		docker start vault-dev || true; \
+vault-up:
+	@echo "$(COLOR_INFO)🔐 Starting Vault in dev mode...$(COLOR_RESET)"
+	@if docker ps --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
+		echo "$(COLOR_SUCCESS)✅ Vault already running$(COLOR_RESET)"; \
 	else \
 		docker run -d --name vault-dev \
 			-p 8200:8200 \
 			-e 'VAULT_DEV_ROOT_TOKEN_ID=dev-root-token' \
 			-e 'VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200' \
-			vault:latest; \
+			vault:latest && \
+		sleep 2 && \
+		echo "$(COLOR_SUCCESS)✅ Vault started$(COLOR_RESET)" && \
+		echo "   URL: http://127.0.0.1:8200" && \
+		echo "   Token: dev-root-token"; \
 	fi
-	@sleep 2
-	@echo "✅ Vault started at http://127.0.0.1:8200"
-	@echo "   Root token: dev-root-token"
 	@echo ""
-	@echo "📝 Add to .env file:"
-	@echo "   VAULT_ADDR=http://127.0.0.1:8200"
-	@echo "   VAULT_TOKEN=dev-root-token"
-	@echo ""
-	@echo "💡 Next steps:"
-	@echo "   make vault-dev-init    Initialize Transit keys"
+	@echo "$(COLOR_INFO)💡 Next: make vault-init$(COLOR_RESET)"
 
-vault-dev-down:
-	@echo "🛑 Stopping Vault dev container..."
-	@docker stop vault-dev 2>/dev/null || echo "Vault container not running"
-	@echo "✅ Vault stopped"
+vault-down:
+	@echo "$(COLOR_INFO)🛑 Stopping Vault...$(COLOR_RESET)"
+	@docker stop vault-dev 2>/dev/null || echo "$(COLOR_WARNING)⚠️  Not running$(COLOR_RESET)"
+	@docker rm vault-dev 2>/dev/null || true
+	@echo "$(COLOR_SUCCESS)✅ Vault stopped$(COLOR_RESET)"
 
-vault-dev-status:
-	@echo "📊 Checking Vault dev status..."
-	@if ! docker ps --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
-		echo "❌ Vault container is not running"; \
-		echo "   Start it with: make vault-dev-up"; \
-		exit 1; \
+vault-status:
+	@echo "$(COLOR_INFO)📊 Checking Vault status...$(COLOR_RESET)"
+	@if docker ps --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
+		echo "$(COLOR_SUCCESS)✅ Container running$(COLOR_RESET)"; \
+		VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root-token vault status 2>/dev/null && \
+			echo "$(COLOR_SUCCESS)✅ Vault accessible$(COLOR_RESET)" || \
+			echo "$(COLOR_ERROR)❌ Cannot connect$(COLOR_RESET)"; \
+	else \
+		echo "$(COLOR_WARNING)⚠️  Container not running$(COLOR_RESET)"; \
+		echo "   Start with: make vault-up"; \
 	fi
-	@echo "✅ Vault container is running"
-	@echo ""
-	@echo "Testing connection..."
-	@VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root-token vault status 2>/dev/null || \
-		(echo "❌ Cannot connect to Vault. Is it running?" && exit 1)
-	@echo "✅ Vault is accessible"
-	@echo ""
-	@echo "Checking Transit engine..."
-	@VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root-token vault secrets list 2>/dev/null | grep -q transit && \
-		echo "✅ Transit engine is enabled" || \
-		echo "⚠️  Transit engine not enabled. Run: make vault-dev-init"
 
-vault-dev-init:
-	@echo "🔧 Initializing Vault dev with Transit keys..."
+vault-init:
+	@echo "$(COLOR_INFO)🔧 Initializing Vault with Transit keys...$(COLOR_RESET)"
 	@if ! docker ps --format '{{.Names}}' | grep -q '^vault-dev$$'; then \
-		echo "❌ Vault container is not running"; \
-		echo "   Start it first: make vault-dev-up"; \
+		echo "$(COLOR_ERROR)❌ Vault not running. Start with: make vault-up$(COLOR_RESET)"; \
 		exit 1; \
 	fi
 	@export VAULT_ADDR=http://127.0.0.1:8200 && \
 	export VAULT_TOKEN=dev-root-token && \
-		echo "Enabling Transit secrets engine..." && \
-		vault secrets enable transit 2>/dev/null || echo "Transit engine already enabled" && \
-		echo "" && \
-		echo "Creating Transit keys..." && \
-		vault write transit/keys/jwt-signing type=rsa-4096 auto_rotate_period=0 deletion_allowed=false && \
-		echo "✅ Created jwt-signing key" && \
-		vault write transit/keys/apns-encryption type=chacha20-poly1305 auto_rotate_period=0 deletion_allowed=false && \
-		echo "✅ Created apns-encryption key" && \
-		vault write transit/keys/federation-signing type=ed25519 auto_rotate_period=0 deletion_allowed=false && \
-		echo "✅ Created federation-signing key" && \
-		vault write transit/keys/database-encryption type=aes256-gcm96 auto_rotate_period=0 deletion_allowed=false && \
-		echo "✅ Created database-encryption key" && \
-		echo "" && \
-		echo "✅ Vault initialized with all Transit keys!"
-	@echo ""
-	@echo "💡 Next steps:"
-	@echo "   1. Make sure VAULT_ADDR and VAULT_TOKEN are in .env"
-	@echo "   2. Run database migrations: make db-migrate"
-	@echo "   3. Initialize keys in database: make key-mgmt-init"
+	vault secrets enable transit 2>/dev/null || echo "Transit already enabled" && \
+	vault write transit/keys/jwt-signing type=rsa-4096 && \
+	vault write transit/keys/apns-encryption type=chacha20-poly1305 && \
+	vault write transit/keys/federation-signing type=ed25519 && \
+	vault write transit/keys/database-encryption type=aes256-gcm96 && \
+	echo "$(COLOR_SUCCESS)✅ Vault initialized with all keys$(COLOR_RESET)"
 
-key-mgmt-check:
-	@echo "🔍 Checking Key Management System configuration..."
-	@if [ ! -f .env ]; then \
-		echo "❌ .env file not found"; \
-		exit 1; \
-	fi
-	@echo "Checking environment variables..."
-	@grep -q "^VAULT_ADDR=" .env 2>/dev/null && \
-		echo "✅ VAULT_ADDR is set" || \
-		echo "⚠️  VAULT_ADDR is not set in .env"
-	@grep -q "^VAULT_TOKEN=" .env 2>/dev/null && \
-		echo "✅ VAULT_TOKEN is set" || \
-		(grep -q "^VAULT_K8S_ROLE=" .env 2>/dev/null && \
-			echo "✅ VAULT_K8S_ROLE is set (Kubernetes auth)" || \
-			echo "⚠️  Neither VAULT_TOKEN nor VAULT_K8S_ROLE is set")
-	@grep -q "^JWT_PRIVATE_KEY=" .env 2>/dev/null && \
-		echo "✅ JWT_PRIVATE_KEY is set (RS256)" || \
-		echo "⚠️  JWT_PRIVATE_KEY is not set (RS256 required for Key Management)"
-	@grep -q "^JWT_PUBLIC_KEY=" .env 2>/dev/null && \
-		echo "✅ JWT_PUBLIC_KEY is set (RS256)" || \
-		echo "⚠️  JWT_PUBLIC_KEY is not set (RS256 required for Key Management)"
-	@echo ""
-	@echo "Checking Vault connection..."
-	@if grep -q "^VAULT_ADDR=" .env 2>/dev/null; then \
-		VAULT_ADDR=$$(grep "^VAULT_ADDR=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'"); \
-		if grep -q "^VAULT_TOKEN=" .env 2>/dev/null; then \
-			VAULT_TOKEN=$$(grep "^VAULT_TOKEN=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'"); \
-			export VAULT_ADDR && export VAULT_TOKEN && \
-			vault status >/dev/null 2>&1 && \
-				echo "✅ Vault is accessible" || \
-				echo "❌ Cannot connect to Vault at $$VAULT_ADDR"; \
-		else \
-			echo "⚠️  Cannot test Vault connection (VAULT_TOKEN not set)"; \
-		fi; \
-	else \
-		echo "⚠️  Cannot test Vault connection (VAULT_ADDR not set)"; \
-	fi
+# ============================================================================
+# Utility
+# ============================================================================
 
-key-mgmt-init:
-	@echo "🔧 Initializing Key Management System in database..."
-	@echo "This will insert initial key records into the master_keys table."
-	@echo ""
-	@echo "⚠️  Make sure you have:"
-	@echo "   1. Run database migrations: make db-migrate"
-	@echo "   2. Initialized Vault with Transit keys: make vault-dev-init"
-	@echo "   3. Set VAULT_ADDR and VAULT_TOKEN in .env"
-	@echo ""
-	@read -p "Continue? [y/N] " REPLY; \
-	if [ "$$REPLY" != "y" ] && [ "$$REPLY" != "Y" ]; then \
-		echo "Cancelled."; \
-		exit 1; \
-	fi
-	@if [ -z "$$DATABASE_URL" ]; then \
-		if [ -f .env ]; then \
-			export $$(grep -v '^#' .env | xargs); \
-		fi; \
-	fi
-	@if [ -z "$$DATABASE_URL" ]; then \
-		echo "❌ DATABASE_URL not set. Set it in .env or environment."; \
-		exit 1; \
-	fi
-	@echo "Connecting to database..."
-	@psql "$$DATABASE_URL" -c "SELECT COUNT(*) FROM master_keys WHERE key_type = 'jwt' AND status = 'active';" >/dev/null 2>&1 || \
-		(echo "❌ Cannot connect to database or master_keys table doesn't exist." && \
-		 echo "   Run migrations first: make db-migrate" && exit 1)
-	@echo "Inserting initial keys..."
-	@TMPFILE=$$(mktemp) && \
-	printf '%s\n' \
-		"-- Insert initial JWT key" \
-		"INSERT INTO master_keys (" \
-		"    key_type, vault_path, vault_version, status, activated_at," \
-		"    key_id, algorithm, rotation_reason, rotated_by" \
-		") VALUES (" \
-		"    'jwt', 'jwt-signing', 1, 'active', NOW()," \
-		"    'jwt_' || gen_random_uuid(), 'RS256', 'initial', 'system:init'" \
-		") ON CONFLICT DO NOTHING;" \
-		"" \
-		"-- Insert initial APNS key" \
-		"INSERT INTO master_keys (" \
-		"    key_type, vault_path, vault_version, status, activated_at," \
-		"    key_id, algorithm, rotation_reason, rotated_by" \
-		") VALUES (" \
-		"    'apns', 'apns-encryption', 1, 'active', NOW()," \
-		"    'apns_' || gen_random_uuid(), 'ChaCha20-Poly1305', 'initial', 'system:init'" \
-		") ON CONFLICT DO NOTHING;" \
-		"" \
-		"-- Insert initial Federation key" \
-		"INSERT INTO master_keys (" \
-		"    key_type, vault_path, vault_version, status, activated_at," \
-		"    key_id, algorithm, rotation_reason, rotated_by" \
-		") VALUES (" \
-		"    'federation', 'federation-signing', 1, 'active', NOW()," \
-		"    'federation_' || gen_random_uuid(), 'Ed25519', 'initial', 'system:init'" \
-		") ON CONFLICT DO NOTHING;" \
-		"" \
-		"-- Insert initial Database encryption key" \
-		"INSERT INTO master_keys (" \
-		"    key_type, vault_path, vault_version, status, activated_at," \
-		"    key_id, algorithm, rotation_reason, rotated_by" \
-		") VALUES (" \
-		"    'database', 'database-encryption', 1, 'active', NOW()," \
-		"    'database_' || gen_random_uuid(), 'AES-256-GCM', 'initial', 'system:init'" \
-		") ON CONFLICT DO NOTHING;" \
-		> $$TMPFILE && \
-	psql "$$DATABASE_URL" -f $$TMPFILE && \
-	rm -f $$TMPFILE
-	@echo "✅ Key Management System initialized in database"
-	@echo ""
-	@echo "💡 Verify with:"
-	@echo "   psql \$$DATABASE_URL -c \"SELECT key_type, key_id, status FROM master_keys;\""
+.PHONY: version
+
+version:
+	@echo "Construct Server - Phase 4.5+"
+	@echo "Features: END_SESSION protocol, modular crates, microservices"
+	@cargo --version
+	@rustc --version
