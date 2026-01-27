@@ -43,3 +43,13 @@ shared/tests/keys/
 .docs-cache
 # Proto files are in shared/proto/, root proto/ is copy for build.rs
 proto/
+
+# Documentation moved to Obsidian vault (~/Documents/Konstruct/)
+docs/
+TODO.md
+*.md.backup
+
+# Session state (already in ~/.copilot/session-state/)
+plan.md
+DEPLOY_*.md
+*.old
