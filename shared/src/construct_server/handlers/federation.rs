@@ -335,14 +335,15 @@ async fn receive_federated_message_http_impl(
         }
     }
 
-    // 5. Convert to ChatMessage format
+    // 5. Convert to ChatMessage format (federated messages are always Regular encrypted)
     let chat_message = ChatMessage {
         id: req.message_id.clone(),
         from: req.from.clone(),
         to: req.to.clone(),
-        ephemeral_public_key: req.ephemeral_public_key,
-        message_number: req.message_number,
-        content: req.ciphertext,
+        message_type: construct_types::MessageType::Regular,
+        ephemeral_public_key: Some(req.ephemeral_public_key),
+        message_number: Some(req.message_number),
+        content: Some(req.ciphertext),
         timestamp: req.timestamp,
     };
 

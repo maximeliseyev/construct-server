@@ -31,21 +31,32 @@ impl MessageValidator {
     /// - Ciphertext is non-empty
     /// - Message ID is valid UUID format
     pub fn validate_structure(&self, msg: &ChatMessage) -> Result<()> {
+        // Message gateway only handles Regular encrypted messages
+        if msg.message_type != construct_types::MessageType::Regular {
+            return Err(anyhow!("Message gateway only handles Regular encrypted messages"));
+        }
+
         // Use existing ChatMessage::is_valid()
         if !msg.is_valid() {
             return Err(anyhow!("Invalid message structure"));
         }
 
         // Additional validation: ephemeral_public_key must be 32 bytes
-        if msg.ephemeral_public_key.len() != 32 {
+        let ephemeral_key = msg.ephemeral_public_key.as_ref()
+            .ok_or_else(|| anyhow!("Regular message must have ephemeral_public_key"))?;
+            
+        if ephemeral_key.len() != 32 {
             return Err(anyhow!(
                 "Invalid ephemeral public key size: expected 32 bytes, got {}",
-                msg.ephemeral_public_key.len()
+                ephemeral_key.len()
             ));
         }
 
         // Ciphertext must not be empty
-        if msg.content.is_empty() {
+        let content = msg.content.as_ref()
+            .ok_or_else(|| anyhow!("Regular message must have content"))?;
+            
+        if content.is_empty() {
             return Err(anyhow!("Empty ciphertext"));
         }
 
@@ -75,7 +86,10 @@ impl MessageValidator {
     /// this provides strong replay protection.
     pub fn create_dedup_key(&self, msg: &ChatMessage) -> String {
         let ephemeral_key_b64 =
-            base64::engine::general_purpose::STANDARD.encode(&msg.ephemeral_public_key);
+            base64::engine::general_purpose::STANDARD.encode(
+                msg.ephemeral_public_key.as_ref()
+                    .expect("Regular message must have ephemeral_public_key")
+            );
 
         format!("msg_dedup:{}:{}", msg.id, ephemeral_key_b64)
     }
@@ -96,9 +110,10 @@ mod tests {
             id: uuid::Uuid::new_v4().to_string(),
             from: uuid::Uuid::new_v4().to_string(),
             to: uuid::Uuid::new_v4().to_string(),
-            ephemeral_public_key: vec![0u8; 32],
-            content: "base64encodedcontent".to_string(), // Base64-encoded ciphertext
-            message_number: 1,
+            message_type: construct_types::MessageType::Regular,
+            ephemeral_public_key: Some(vec![0u8; 32]),
+            content: Some("base64encodedcontent".to_string()), // Base64-encoded ciphertext
+            message_number: Some(1),
             timestamp: chrono::Utc::now().timestamp() as u64,
         }
     }
@@ -115,7 +130,7 @@ mod tests {
     fn test_invalid_ephemeral_key_size() {
         let validator = MessageValidator::new();
         let mut msg = create_valid_message();
-        msg.ephemeral_public_key = vec![0u8; 16]; // Wrong size
+        msg.ephemeral_public_key = Some(vec![0u8; 16]); // Wrong size
 
         assert!(validator.validate_structure(&msg).is_err());
     }
@@ -124,7 +139,7 @@ mod tests {
     fn test_empty_ciphertext() {
         let validator = MessageValidator::new();
         let mut msg = create_valid_message();
-        msg.content = "".to_string(); // Empty
+        msg.content = Some("".to_string()); // Empty
 
         assert!(validator.validate_structure(&msg).is_err());
     }

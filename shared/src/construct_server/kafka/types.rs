@@ -9,6 +9,9 @@ pub enum MessageType {
     /// 1-on-1 chat using Double Ratchet protocol (current implementation)
     DirectMessage,
 
+    /// Control message (END_SESSION, etc.) - Phase 4.5
+    ControlMessage,
+
     /// MLS group message (application message)
     #[allow(dead_code)]
     MLSMessage,
@@ -177,6 +180,11 @@ impl KafkaMessageEnvelope {
                     anyhow::bail!("message_number required for DirectMessage (Double Ratchet)");
                 }
             }
+            MessageType::ControlMessage => {
+                // Control messages (END_SESSION) have no encryption fields
+                // Only basic fields (message_id, sender_id, recipient_id, timestamp) required
+                // encrypted_payload is used for control message type/data
+            }
             MessageType::MLSMessage
             | MessageType::MLSKeyPackage
             | MessageType::MLSWelcome
@@ -206,32 +214,65 @@ impl KafkaMessageEnvelope {
 
 impl From<&construct_types::ChatMessage> for KafkaMessageEnvelope {
     fn from(msg: &construct_types::ChatMessage) -> Self {
-        // Calculate content hash for deduplication
-        let mut hasher = Sha256::new();
-        hasher.update(msg.id.as_bytes());
-        hasher.update(&msg.ephemeral_public_key);
-        hasher.update(msg.content.as_bytes());
-        let content_hash = format!("{:x}", hasher.finalize());
+        use construct_types::MessageType as ConstructMessageType;
+        
+        match msg.message_type {
+            ConstructMessageType::Regular => {
+                // Calculate content hash for deduplication
+                let mut hasher = Sha256::new();
+                hasher.update(msg.id.as_bytes());
+                hasher.update(msg.ephemeral_public_key.as_ref().expect("Regular message must have ephemeral_public_key"));
+                hasher.update(msg.content.as_ref().expect("Regular message must have content"));
+                let content_hash = format!("{:x}", hasher.finalize());
 
-        Self {
-            message_id: msg.id.clone(),
-            sender_id: msg.from.clone(),
-            recipient_id: msg.to.clone(),
-            timestamp: msg.timestamp as i64,
-            message_type: MessageType::DirectMessage,
-            ephemeral_public_key: Some(base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &msg.ephemeral_public_key,
-            )),
-            message_number: Some(msg.message_number),
-            mls_payload: None,
-            group_id: None,
-            encrypted_payload: msg.content.clone(),
-            content_hash,
-            suite_id: 0, // ChaCha20-Poly1305 (classic Double Ratchet)
-            origin_server: None,
-            federated: false,
-            server_signature: None,
+                Self {
+                    message_id: msg.id.clone(),
+                    sender_id: msg.from.clone(),
+                    recipient_id: msg.to.clone(),
+                    timestamp: msg.timestamp as i64,
+                    message_type: MessageType::DirectMessage,
+                    ephemeral_public_key: Some(base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        msg.ephemeral_public_key.as_ref().unwrap(),
+                    )),
+                    message_number: msg.message_number,
+                    mls_payload: None,
+                    group_id: None,
+                    encrypted_payload: msg.content.as_ref().unwrap().clone(),
+                    content_hash,
+                    suite_id: 0, // ChaCha20-Poly1305 (classic Double Ratchet)
+                    origin_server: None,
+                    federated: false,
+                    server_signature: None,
+                }
+            }
+            ConstructMessageType::EndSession => {
+                // For control messages, hash only message_id and timestamp
+                let mut hasher = Sha256::new();
+                hasher.update(msg.id.as_bytes());
+                hasher.update(msg.timestamp.to_string().as_bytes());
+                hasher.update(b"END_SESSION");
+                let content_hash = format!("{:x}", hasher.finalize());
+
+                Self {
+                    message_id: msg.id.clone(),
+                    sender_id: msg.from.clone(),
+                    recipient_id: msg.to.clone(),
+                    timestamp: msg.timestamp as i64,
+                    message_type: MessageType::ControlMessage,
+                    ephemeral_public_key: None,
+                    message_number: None,
+                    mls_payload: None,
+                    group_id: None,
+                    // Use encrypted_payload to store control message type
+                    encrypted_payload: "END_SESSION".to_string(),
+                    content_hash,
+                    suite_id: 0,
+                    origin_server: None,
+                    federated: false,
+                    server_signature: None,
+                }
+            }
         }
     }
 }

@@ -70,17 +70,23 @@ impl MessageGatewayClient {
 
         // Convert ChatMessage to gRPC request
         // Note: content is base64 in ChatMessage, need to decode to bytes for gRPC
+        // Message gateway only handles Regular encrypted messages
         let ciphertext =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &msg.content)
-                .map_err(|e| anyhow!("Failed to decode message content: {}", e))?;
+            base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                msg.content.as_ref().expect("Message gateway only handles Regular encrypted messages")
+            )
+            .map_err(|e| anyhow!("Failed to decode message content: {}", e))?;
 
         let request = tonic::Request::new(SubmitMessageRequest {
             message_id: msg.id.clone(),
             from: msg.from.clone(),
             to: msg.to.clone(),
-            ephemeral_public_key: msg.ephemeral_public_key.clone(),
+            ephemeral_public_key: msg.ephemeral_public_key.clone()
+                .expect("Message gateway only handles Regular encrypted messages"),
             ciphertext,
-            message_number: msg.message_number,
+            message_number: msg.message_number
+                .expect("Message gateway only handles Regular encrypted messages"),
             authenticated_user_id: authenticated_user_id.to_string(),
         });
 

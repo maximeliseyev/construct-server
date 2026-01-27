@@ -154,7 +154,10 @@ impl FederationClient {
             origin_server: self.instance_domain.clone(),
             destination_server: target_domain.to_string(),
             timestamp: message.timestamp,
-            payload_hash: FederatedEnvelope::hash_payload(&message.content),
+            payload_hash: FederatedEnvelope::hash_payload(
+                message.content.as_ref()
+                    .expect("Federated messages must be Regular encrypted messages with content")
+            ),
         };
 
         // Sign if signer is available
@@ -173,9 +176,12 @@ impl FederationClient {
             message_id: message.id.clone(),
             from: message.from.clone(),
             to: message.to.clone(),
-            ephemeral_public_key: message.ephemeral_public_key.clone(),
-            ciphertext: message.content.clone(),
-            message_number: message.message_number,
+            ephemeral_public_key: message.ephemeral_public_key.clone()
+                .expect("Federated messages must be Regular encrypted messages with ephemeral_public_key"),
+            ciphertext: message.content.clone()
+                .expect("Federated messages must be Regular encrypted messages with content"),
+            message_number: message.message_number
+                .expect("Federated messages must be Regular encrypted messages with message_number"),
             timestamp: message.timestamp,
             origin_server: self.instance_domain.clone(),
             payload_hash: envelope.payload_hash,
