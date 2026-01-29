@@ -10,8 +10,8 @@
 //
 // ============================================================================
 
-use construct_config::MicroservicesConfig;
 use anyhow::Result;
+use construct_config::MicroservicesConfig;
 use std::sync::Arc;
 
 /// Service discovery abstraction

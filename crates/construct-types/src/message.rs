@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Re-export types from construct-crypto
-pub use construct_crypto::{UploadableKeyBundle, EncryptedMessage};
+pub use construct_crypto::{EncryptedMessage, UploadableKeyBundle};
 
 // Re-export UserId for convenience
 pub use crate::user_id::UserId;
@@ -32,7 +32,7 @@ impl MessageType {
 
 impl std::str::FromStr for MessageType {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "REGULAR" => Ok(MessageType::Regular),
@@ -87,7 +87,7 @@ pub struct ChatMessage {
 // Helper module for Option<Vec<u8>> with serde_bytes
 mod serde_bytes_option {
     use serde::{Deserialize, Deserializer, Serializer};
-    
+
     pub fn serialize<S>(value: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -97,7 +97,7 @@ mod serde_bytes_option {
             None => serializer.serialize_none(),
         }
     }
-    
+
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
     where
         D: Deserializer<'de>,
@@ -146,8 +146,8 @@ impl ChatMessage {
     /// Validate message structure based on type
     pub fn is_valid(&self) -> bool {
         // Basic validation
-        if self.from.is_empty() 
-            || self.to.is_empty() 
+        if self.from.is_empty()
+            || self.to.is_empty()
             || Uuid::parse_str(&self.id).is_err()
             || UserId::parse(&self.from).is_err()
             || UserId::parse(&self.to).is_err()
@@ -159,9 +159,16 @@ impl ChatMessage {
         match self.message_type {
             MessageType::Regular => {
                 // Regular messages MUST have all encryption fields
-                self.ephemeral_public_key.as_ref().map(|k| k.len() == 32).unwrap_or(false)
+                self.ephemeral_public_key
+                    .as_ref()
+                    .map(|k| k.len() == 32)
+                    .unwrap_or(false)
                     && self.message_number.is_some()
-                    && self.content.as_ref().map(|c| !c.is_empty()).unwrap_or(false)
+                    && self
+                        .content
+                        .as_ref()
+                        .map(|c| !c.is_empty())
+                        .unwrap_or(false)
             }
             MessageType::EndSession => {
                 // END_SESSION messages MUST NOT have encryption fields
@@ -307,7 +314,7 @@ pub struct DummyMessageData {
 pub struct EndSessionData {
     /// Recipient user ID (who should archive the session)
     pub recipient_id: String,
-    
+
     /// Optional reason for session reset (for logging/debugging)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -410,10 +417,10 @@ pub struct ErrorData {
 pub struct SessionEndedData {
     /// User ID who ended the session
     pub from_user_id: String,
-    
+
     /// When the session was ended (ISO 8601 timestamp)
     pub timestamp: String,
-    
+
     /// Optional reason for session reset
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -550,11 +557,11 @@ mod tests {
         // Regular
         let regular = MessageType::Regular;
         assert_eq!(regular.as_str(), "REGULAR");
-        
+
         // EndSession
         let end_session = MessageType::EndSession;
         assert_eq!(end_session.as_str(), "END_SESSION");
-        
+
         // Default
         let default = MessageType::default();
         assert_eq!(default, MessageType::Regular);
@@ -563,9 +570,15 @@ mod tests {
     #[test]
     fn test_message_type_from_str() {
         use std::str::FromStr;
-        
-        assert_eq!(MessageType::from_str("REGULAR").unwrap(), MessageType::Regular);
-        assert_eq!(MessageType::from_str("END_SESSION").unwrap(), MessageType::EndSession);
+
+        assert_eq!(
+            MessageType::from_str("REGULAR").unwrap(),
+            MessageType::Regular
+        );
+        assert_eq!(
+            MessageType::from_str("END_SESSION").unwrap(),
+            MessageType::EndSession
+        );
         assert!(MessageType::from_str("UNKNOWN").is_err());
     }
 
@@ -606,10 +619,8 @@ mod tests {
     #[test]
     fn test_chat_message_end_session_validation() {
         // Valid END_SESSION message
-        let valid_end_session = ChatMessage::new_end_session(
-            Uuid::new_v4().to_string(),
-            Uuid::new_v4().to_string(),
-        );
+        let valid_end_session =
+            ChatMessage::new_end_session(Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
         assert!(valid_end_session.is_valid());
         assert_eq!(valid_end_session.message_type, MessageType::EndSession);
         assert!(valid_end_session.ephemeral_public_key.is_none());
@@ -636,7 +647,7 @@ mod tests {
     fn test_chat_message_backward_compatibility() {
         // Message without type field should default to Regular
         let json = r#"{"id":"123","from":"alice","to":"bob","ephemeralPublicKey":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31],"messageNumber":0,"content":"test","timestamp":1234567890}"#;
-        
+
         let msg: ChatMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.message_type, MessageType::Regular);
     }

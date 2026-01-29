@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use crate::context::AppContext;
 use crate::db;
-use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::request_signing::{
     compute_body_hash, extract_request_signature, verify_request_signature,
 };
 use crate::utils::log_safe_id;
+use construct_error::AppError;
 
 /// Account information response
 #[derive(Debug, Serialize)]

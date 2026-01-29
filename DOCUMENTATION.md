@@ -11,9 +11,9 @@
 ```
 ~/Documents/Konstruct/
 ├── 00_Project_Overview/          # Обзор проекта
-├── 01_Architecture/               # Архитектура системы
+├── 01_Architecture/              # Архитектура системы
 ├── 02_Core_Crypto_and_WASM/      # Криптография и WASM
-├── 03_Server_Backend/             # Server Backend (основная документация)
+├── 03_Server_Backend/            # Server Backend (основная документация)
 │   ├── 00_Server_Architecture/
 │   │   ├── 06_Phase4_Modular_Crates.md
 │   │   ├── 06_Phase4_5_END_SESSION_Protocol.md

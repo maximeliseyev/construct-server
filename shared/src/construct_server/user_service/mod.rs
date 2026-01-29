@@ -9,8 +9,8 @@
 pub mod handlers;
 
 use crate::auth::AuthManager;
-use construct_config::Config;
 use crate::db::DbPool;
+use construct_config::Config;
 
 use crate::queue::MessageQueue;
 use std::sync::Arc;

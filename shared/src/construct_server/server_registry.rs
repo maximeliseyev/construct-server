@@ -9,8 +9,8 @@
 //
 // ============================================================================
 
-use construct_config::Config;
 use crate::queue::MessageQueue;
+use construct_config::Config;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, interval};

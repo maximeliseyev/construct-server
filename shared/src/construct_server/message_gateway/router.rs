@@ -11,9 +11,9 @@
 use crate::federation::mtls::MtlsConfig;
 use crate::federation::{FederationClient, ServerSigner};
 use crate::kafka::MessageProducer;
+use anyhow::{Context, Result};
 use construct_types::ChatMessage;
 use construct_types::UserId;
-use anyhow::{Context, Result};
 use std::sync::Arc;
 
 pub struct MessageRouter {

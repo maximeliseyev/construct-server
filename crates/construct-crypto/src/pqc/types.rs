@@ -242,7 +242,8 @@ pub mod key_sizes {
     pub const HYBRID_SIGNATURE_PUBLIC_KEY: usize = ED25519_PUBLIC_KEY + ML_DSA_65_PUBLIC_KEY; // 1984 bytes
 
     /// Hybrid signature total size
-    pub const HYBRID_SIGNATURE: usize = ED25519_SIGNATURE + ML_DSA_65_SIGNATURE; // 3357 bytes
+    pub const HYBRID_SIGNATURE: usize = ED25519_SIGNATURE + ML_DSA_65_SIGNATURE;
+    // 3357 bytes
 }
 
 #[cfg(test)]

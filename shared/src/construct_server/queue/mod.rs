@@ -21,9 +21,9 @@ mod replay;
 mod sessions;
 mod tokens;
 
+use anyhow::Result;
 use construct_config::{Config, SECONDS_PER_DAY};
 use construct_types::ChatMessage;
-use anyhow::Result;
 // Note: redis::aio::ConnectionManager is available via the "connection-manager" feature
 // It's used the same way in delivery_ack/storage.rs
 use redis::AsyncCommands;

@@ -15,9 +15,9 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::context::AppContext;
-use construct_error::AppError;
 use crate::health;
 use crate::metrics;
+use construct_error::AppError;
 
 /// GET /health
 /// Health check endpoint

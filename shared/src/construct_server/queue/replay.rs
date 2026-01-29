@@ -3,8 +3,8 @@
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
 
-use construct_config::SECONDS_PER_DAY;
 use anyhow::Result;
+use construct_config::SECONDS_PER_DAY;
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 

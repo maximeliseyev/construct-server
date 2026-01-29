@@ -14,8 +14,8 @@
 
 use crate::federation::mtls::{FederationTrustStore, MtlsConfig};
 use crate::federation::signing::{FederatedEnvelope, ServerSigner};
-use construct_types::ChatMessage;
 use anyhow::{Context, Result};
+use construct_types::ChatMessage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -155,8 +155,10 @@ impl FederationClient {
             destination_server: target_domain.to_string(),
             timestamp: message.timestamp,
             payload_hash: FederatedEnvelope::hash_payload(
-                message.content.as_ref()
-                    .expect("Federated messages must be Regular encrypted messages with content")
+                message
+                    .content
+                    .as_ref()
+                    .expect("Federated messages must be Regular encrypted messages with content"),
             ),
         };
 
@@ -176,12 +178,16 @@ impl FederationClient {
             message_id: message.id.clone(),
             from: message.from.clone(),
             to: message.to.clone(),
-            ephemeral_public_key: message.ephemeral_public_key.clone()
-                .expect("Federated messages must be Regular encrypted messages with ephemeral_public_key"),
-            ciphertext: message.content.clone()
+            ephemeral_public_key: message.ephemeral_public_key.clone().expect(
+                "Federated messages must be Regular encrypted messages with ephemeral_public_key",
+            ),
+            ciphertext: message
+                .content
+                .clone()
                 .expect("Federated messages must be Regular encrypted messages with content"),
-            message_number: message.message_number
-                .expect("Federated messages must be Regular encrypted messages with message_number"),
+            message_number: message.message_number.expect(
+                "Federated messages must be Regular encrypted messages with message_number",
+            ),
             timestamp: message.timestamp,
             origin_server: self.instance_domain.clone(),
             payload_hash: envelope.payload_hash,

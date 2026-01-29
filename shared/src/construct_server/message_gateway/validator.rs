@@ -11,9 +11,9 @@
 // All validation is stateless - can be run on any instance
 // ============================================================================
 
-use construct_types::ChatMessage;
 use anyhow::{Result, anyhow};
 use base64::Engine;
+use construct_types::ChatMessage;
 
 pub struct MessageValidator;
 
@@ -33,7 +33,9 @@ impl MessageValidator {
     pub fn validate_structure(&self, msg: &ChatMessage) -> Result<()> {
         // Message gateway only handles Regular encrypted messages
         if msg.message_type != construct_types::MessageType::Regular {
-            return Err(anyhow!("Message gateway only handles Regular encrypted messages"));
+            return Err(anyhow!(
+                "Message gateway only handles Regular encrypted messages"
+            ));
         }
 
         // Use existing ChatMessage::is_valid()
@@ -42,9 +44,11 @@ impl MessageValidator {
         }
 
         // Additional validation: ephemeral_public_key must be 32 bytes
-        let ephemeral_key = msg.ephemeral_public_key.as_ref()
+        let ephemeral_key = msg
+            .ephemeral_public_key
+            .as_ref()
             .ok_or_else(|| anyhow!("Regular message must have ephemeral_public_key"))?;
-            
+
         if ephemeral_key.len() != 32 {
             return Err(anyhow!(
                 "Invalid ephemeral public key size: expected 32 bytes, got {}",
@@ -53,9 +57,11 @@ impl MessageValidator {
         }
 
         // Ciphertext must not be empty
-        let content = msg.content.as_ref()
+        let content = msg
+            .content
+            .as_ref()
             .ok_or_else(|| anyhow!("Regular message must have content"))?;
-            
+
         if content.is_empty() {
             return Err(anyhow!("Empty ciphertext"));
         }
@@ -85,11 +91,11 @@ impl MessageValidator {
     /// Since each message should have a unique ephemeral key in Double Ratchet,
     /// this provides strong replay protection.
     pub fn create_dedup_key(&self, msg: &ChatMessage) -> String {
-        let ephemeral_key_b64 =
-            base64::engine::general_purpose::STANDARD.encode(
-                msg.ephemeral_public_key.as_ref()
-                    .expect("Regular message must have ephemeral_public_key")
-            );
+        let ephemeral_key_b64 = base64::engine::general_purpose::STANDARD.encode(
+            msg.ephemeral_public_key
+                .as_ref()
+                .expect("Regular message must have ephemeral_public_key"),
+        );
 
         format!("msg_dedup:{}:{}", msg.id, ephemeral_key_b64)
     }

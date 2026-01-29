@@ -14,8 +14,8 @@ pub mod handlers;
 
 use crate::apns::ApnsClient;
 use crate::auth::AuthManager;
-use construct_config::Config;
 use crate::db::DbPool;
+use construct_config::Config;
 
 use crate::kafka::MessageProducer;
 use crate::key_management::KeyManagementSystem;
@@ -46,8 +46,9 @@ impl MessagingServiceContext {
 
         // Token encryption for device token management
         let token_encryption = Arc::new(
-            DeviceTokenEncryption::from_hex(&self.config.apns.device_token_encryption_key)
-                .expect("Failed to create token encryption - APNS_DEVICE_TOKEN_ENCRYPTION_KEY is invalid")
+            DeviceTokenEncryption::from_hex(&self.config.apns.device_token_encryption_key).expect(
+                "Failed to create token encryption - APNS_DEVICE_TOKEN_ENCRYPTION_KEY is invalid",
+            ),
         );
 
         // Create AppContext using builder pattern (Phase 2.8)
@@ -57,7 +58,7 @@ impl MessagingServiceContext {
             .with_auth_manager(self.auth_manager.clone())
             .with_config(self.config.clone())
             .with_kafka_producer(self.kafka_producer.clone())
-            .with_apns_client(self.apns_client.clone())  // ✅ Use real APNs client
+            .with_apns_client(self.apns_client.clone()) // ✅ Use real APNs client
             .with_token_encryption(token_encryption)
             .with_server_instance_id(uuid::Uuid::new_v4().to_string())
             .build()

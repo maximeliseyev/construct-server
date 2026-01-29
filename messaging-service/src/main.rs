@@ -24,8 +24,8 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use construct_server_shared::auth::AuthManager;
 use construct_config::Config;
+use construct_server_shared::auth::AuthManager;
 use construct_server_shared::db::DbPool;
 use construct_server_shared::kafka::MessageProducer;
 use construct_server_shared::messaging_service::MessagingServiceContext;
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     info!("Initializing APNs client...");
     let apns_client = Arc::new(
         construct_server_shared::apns::ApnsClient::new(config.apns.clone())
-            .context("Failed to initialize APNs client")?
+            .context("Failed to initialize APNs client")?,
     );
     if config.apns.enabled {
         info!("APNs client initialized and ENABLED");
@@ -151,13 +151,16 @@ async fn main() -> Result<()> {
         queue,
         auth_manager,
         kafka_producer,
-        apns_client,  // ✅ NEW: Add APNs client to context
+        apns_client, // ✅ NEW: Add APNs client to context
         config: config.clone(),
         key_management,
     });
 
     // Import messaging service handlers
     use construct_server_shared::messaging_service::handlers;
+
+    // Import media routes
+    use construct_server_shared::routes::media;
 
     // Create router
     let app = Router::new()
@@ -170,6 +173,8 @@ async fn main() -> Result<()> {
         .route("/api/v1/messages", get(handlers::get_messages))
         // Phase 4.5: Control messages endpoint
         .route("/api/v1/control", post(handlers::send_control_message))
+        // Media upload token endpoint
+        .route("/api/v1/media/token", post(media::generate_media_token))
         // Legacy endpoints (for backward compatibility)
         .route("/messages/send", post(handlers::send_message))
         // Apply middleware

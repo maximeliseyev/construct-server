@@ -22,8 +22,8 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
-use construct_server_shared::auth::AuthManager;
 use construct_config::Config;
+use construct_server_shared::auth::AuthManager;
 use construct_server_shared::db::DbPool;
 use construct_server_shared::queue::MessageQueue;
 use construct_server_shared::user_service::UserServiceContext;

@@ -31,9 +31,9 @@ pub mod pqc;
 // Re-export commonly used types
 #[cfg(feature = "e2ee")]
 pub use e2e::{
-    ServerCryptoValidator, StoredEncryptedMessage, MessageType,
-    SuiteKeyMaterial, BundleData, UploadableKeyBundle, EncryptedMessage,
+    BundleData, EncryptedMessage, MessageType, ServerCryptoValidator, StoredEncryptedMessage,
+    SuiteKeyMaterial, UploadableKeyBundle,
 };
 
 #[cfg(feature = "delivery-ack")]
-pub use delivery_ack::{compute_message_hash, verify_message_hash, compute_user_id_hash};
+pub use delivery_ack::{compute_message_hash, compute_user_id_hash, verify_message_hash};

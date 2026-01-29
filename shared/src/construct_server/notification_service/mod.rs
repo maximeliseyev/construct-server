@@ -10,8 +10,8 @@ pub mod handlers;
 
 use crate::apns::{ApnsClient, DeviceTokenEncryption};
 use crate::auth::AuthManager;
-use construct_config::Config;
 use crate::db::DbPool;
+use construct_config::Config;
 
 use crate::key_management::KeyManagementSystem;
 use crate::queue::MessageQueue;

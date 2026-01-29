@@ -55,7 +55,7 @@ use chrono::{Duration, Utc};
 use std::sync::Arc;
 
 // Import crypto functions
-use construct_crypto::{compute_message_hash, verify_message_hash, compute_user_id_hash};
+use construct_crypto::{compute_message_hash, compute_user_id_hash, verify_message_hash};
 
 pub use batching::AckBatcher;
 pub use cleanup::DeliveryCleanupTask;

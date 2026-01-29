@@ -10,7 +10,6 @@
 // ============================================================================
 
 use crate::auth::AuthManager;
-use construct_config::Config;
 use crate::queue::MessageQueue;
 use crate::routes::csrf::{
     extract_csrf_token, has_custom_header, is_browser_request, validate_csrf_token,
@@ -22,6 +21,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use construct_config::Config;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;

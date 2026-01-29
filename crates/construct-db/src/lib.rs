@@ -2,11 +2,11 @@
 //!
 //! Database utilities and connection pooling for Construct secure messaging server.
 
-use construct_crypto::{BundleData, UploadableKeyBundle};
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use bcrypt::{DEFAULT_COST, hash};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use bcrypt::{hash, DEFAULT_COST};
 use chrono::{DateTime, Utc};
+use construct_crypto::{BundleData, UploadableKeyBundle};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;

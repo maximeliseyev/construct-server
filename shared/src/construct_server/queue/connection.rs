@@ -3,8 +3,8 @@
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
 
-use construct_config::Config;
 use anyhow::Result;
+use construct_config::Config;
 
 /// Redis connection manager wrapper
 #[allow(dead_code)]

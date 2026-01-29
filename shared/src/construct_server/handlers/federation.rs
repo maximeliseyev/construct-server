@@ -15,9 +15,9 @@ use crate::{
     kafka::KafkaMessageEnvelope,
     utils::{add_security_headers, log_safe_id},
 };
+use bytes::Bytes;
 use construct_error::AppError;
 use construct_types::{ChatMessage, UserId};
-use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{StatusCode, body::Incoming as IncomingBody};
 use serde::{Deserialize, Serialize};

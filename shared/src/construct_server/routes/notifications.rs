@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use crate::apns::DeviceTokenEncryption;
 use crate::context::AppContext;
-use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::log_safe_id;
+use construct_error::AppError;
 
 /// Request body for device token registration
 #[derive(Debug, Deserialize)]

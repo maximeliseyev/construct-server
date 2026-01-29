@@ -215,14 +215,22 @@ impl KafkaMessageEnvelope {
 impl From<&construct_types::ChatMessage> for KafkaMessageEnvelope {
     fn from(msg: &construct_types::ChatMessage) -> Self {
         use construct_types::MessageType as ConstructMessageType;
-        
+
         match msg.message_type {
             ConstructMessageType::Regular => {
                 // Calculate content hash for deduplication
                 let mut hasher = Sha256::new();
                 hasher.update(msg.id.as_bytes());
-                hasher.update(msg.ephemeral_public_key.as_ref().expect("Regular message must have ephemeral_public_key"));
-                hasher.update(msg.content.as_ref().expect("Regular message must have content"));
+                hasher.update(
+                    msg.ephemeral_public_key
+                        .as_ref()
+                        .expect("Regular message must have ephemeral_public_key"),
+                );
+                hasher.update(
+                    msg.content
+                        .as_ref()
+                        .expect("Regular message must have content"),
+                );
                 let content_hash = format!("{:x}", hasher.finalize());
 
                 Self {

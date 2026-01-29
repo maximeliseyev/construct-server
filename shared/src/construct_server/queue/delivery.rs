@@ -3,8 +3,8 @@
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
 
-use construct_config::{Config, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 use anyhow::{Context, Result};
+use construct_config::{Config, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 use redis::AsyncCommands;
 use std::collections::HashMap;
 

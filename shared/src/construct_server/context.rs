@@ -14,10 +14,10 @@ pub mod traits;
 
 use crate::apns::{ApnsClient, DeviceTokenEncryption};
 use crate::auth::AuthManager;
-use construct_config::Config;
 use crate::db::DbPool;
 use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
+use construct_config::Config;
 
 use crate::kafka::MessageProducer;
 use crate::key_management::KeyManagementSystem;

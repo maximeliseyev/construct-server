@@ -27,10 +27,10 @@ use sha2::Sha256;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use construct_config::CsrfConfig;
 use crate::context::AppContext;
-use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
+use construct_config::CsrfConfig;
+use construct_error::AppError;
 
 type HmacSha256 = Hmac<Sha256>;
 

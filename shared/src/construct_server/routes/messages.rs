@@ -22,12 +22,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::context::AppContext;
-use construct_crypto::{EncryptedMessage, ServerCryptoValidator};
-use construct_error::AppError;
 use crate::kafka::types::KafkaMessageEnvelope;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id};
-use construct_types::message::{EndSessionData, ChatMessage};
+use construct_crypto::{EncryptedMessage, ServerCryptoValidator};
+use construct_error::AppError;
+use construct_types::message::{ChatMessage, EndSessionData};
 
 /// POST /api/v1/messages
 /// Sends an E2E-encrypted message using Double Ratchet protocol
@@ -405,12 +405,18 @@ pub async fn get_messages(
     // Long-polling naturally limits itself (30-60s timeout), so we only need to prevent abuse
     // Default: 100 requests per 60 seconds - prevents spam but allows normal usage
     {
-        let max_requests = app_context.config.security.max_long_poll_requests_per_window;
+        let max_requests = app_context
+            .config
+            .security
+            .max_long_poll_requests_per_window;
         let window_secs = app_context.config.security.long_poll_rate_limit_window_secs;
 
         let mut queue = app_context.queue.lock().await;
         let rate_limit_key = format!("rate:get_messages:{}", user_id_str);
-        match queue.increment_rate_limit(&rate_limit_key, window_secs).await {
+        match queue
+            .increment_rate_limit(&rate_limit_key, window_secs)
+            .await
+        {
             Ok(count) => {
                 if count > max_requests as i64 {
                     drop(queue);
@@ -421,9 +427,10 @@ pub async fn get_messages(
                         window_secs = window_secs,
                         "Rate limit exceeded for get_messages"
                     );
-                    return Err(AppError::Validation(
-                        format!("Rate limit exceeded: maximum {} requests per {} seconds", max_requests, window_secs),
-                    ));
+                    return Err(AppError::Validation(format!(
+                        "Rate limit exceeded: maximum {} requests per {} seconds",
+                        max_requests, window_secs
+                    )));
                 }
             }
             Err(e) => {
@@ -460,14 +467,30 @@ pub async fn get_messages(
                 .map(|(stream_id, envelope)| {
                     // Convert MessageType enum to string for API response
                     let message_type_str = match envelope.message_type {
-                        crate::kafka::types::MessageType::DirectMessage => Some("DIRECT_MESSAGE".to_string()),
-                        crate::kafka::types::MessageType::ControlMessage => Some("CONTROL_MESSAGE".to_string()),
-                        crate::kafka::types::MessageType::MLSMessage => Some("MLS_MESSAGE".to_string()),
-                        crate::kafka::types::MessageType::MLSKeyPackage => Some("MLS_KEY_PACKAGE".to_string()),
-                        crate::kafka::types::MessageType::MLSWelcome => Some("MLS_WELCOME".to_string()),
-                        crate::kafka::types::MessageType::MLSCommit => Some("MLS_COMMIT".to_string()),
-                        crate::kafka::types::MessageType::MLSProposal => Some("MLS_PROPOSAL".to_string()),
-                        crate::kafka::types::MessageType::FederatedMessage => Some("FEDERATED_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::DirectMessage => {
+                            Some("DIRECT_MESSAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::ControlMessage => {
+                            Some("CONTROL_MESSAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSMessage => {
+                            Some("MLS_MESSAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSKeyPackage => {
+                            Some("MLS_KEY_PACKAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSWelcome => {
+                            Some("MLS_WELCOME".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSCommit => {
+                            Some("MLS_COMMIT".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSProposal => {
+                            Some("MLS_PROPOSAL".to_string())
+                        }
+                        crate::kafka::types::MessageType::FederatedMessage => {
+                            Some("FEDERATED_MESSAGE".to_string())
+                        }
                     };
 
                     MessageResponse {
@@ -589,14 +612,30 @@ pub async fn get_messages(
                 .map(|(stream_id, envelope)| {
                     // Convert MessageType enum to string for API response
                     let message_type_str = match envelope.message_type {
-                        crate::kafka::types::MessageType::DirectMessage => Some("DIRECT_MESSAGE".to_string()),
-                        crate::kafka::types::MessageType::ControlMessage => Some("CONTROL_MESSAGE".to_string()),
-                        crate::kafka::types::MessageType::MLSMessage => Some("MLS_MESSAGE".to_string()),
-                        crate::kafka::types::MessageType::MLSKeyPackage => Some("MLS_KEY_PACKAGE".to_string()),
-                        crate::kafka::types::MessageType::MLSWelcome => Some("MLS_WELCOME".to_string()),
-                        crate::kafka::types::MessageType::MLSCommit => Some("MLS_COMMIT".to_string()),
-                        crate::kafka::types::MessageType::MLSProposal => Some("MLS_PROPOSAL".to_string()),
-                        crate::kafka::types::MessageType::FederatedMessage => Some("FEDERATED_MESSAGE".to_string()),
+                        crate::kafka::types::MessageType::DirectMessage => {
+                            Some("DIRECT_MESSAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::ControlMessage => {
+                            Some("CONTROL_MESSAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSMessage => {
+                            Some("MLS_MESSAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSKeyPackage => {
+                            Some("MLS_KEY_PACKAGE".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSWelcome => {
+                            Some("MLS_WELCOME".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSCommit => {
+                            Some("MLS_COMMIT".to_string())
+                        }
+                        crate::kafka::types::MessageType::MLSProposal => {
+                            Some("MLS_PROPOSAL".to_string())
+                        }
+                        crate::kafka::types::MessageType::FederatedMessage => {
+                            Some("FEDERATED_MESSAGE".to_string())
+                        }
                     };
 
                     MessageResponse {
@@ -766,30 +805,25 @@ pub async fn send_control_message(
 
     // Check if recipient exists in database
     {
-        let user_exists: Option<bool> = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE user_id = $1)"
-        )
-        .bind(recipient_id)
-        .fetch_one(&*app_context.db_pool)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to check if recipient exists");
-            AppError::Database(e)
-        })?;
+        let user_exists: Option<bool> =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE user_id = $1)")
+                .bind(recipient_id)
+                .fetch_one(&*app_context.db_pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Failed to check if recipient exists");
+                    AppError::Database(e)
+                })?;
 
         if !user_exists.unwrap_or(false) {
-            return Err(AppError::Validation(
-                "Recipient does not exist".to_string(),
-            ));
+            return Err(AppError::Validation("Recipient does not exist".to_string()));
         }
     }
 
     // Create END_SESSION ChatMessage
-    let chat_message = ChatMessage::new_end_session(
-        sender_id_str.clone(),
-        data.recipient_id.clone(),
-    );
-    
+    let chat_message =
+        ChatMessage::new_end_session(sender_id_str.clone(), data.recipient_id.clone());
+
     let message_id = chat_message.id.clone();
 
     // Validate the control message

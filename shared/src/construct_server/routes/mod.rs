@@ -24,6 +24,7 @@ pub mod extractors; // Made public for auth-service, user-service, messaging-ser
 mod federation;
 mod health;
 pub mod keys; // Made public for user-service
+pub mod media; // Made public for messaging-service
 pub mod messages; // Made public for messaging-service
 mod middleware;
 pub mod notifications; // Made public for notification-service

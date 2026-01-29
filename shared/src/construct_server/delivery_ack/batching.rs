@@ -201,8 +201,8 @@ impl AckBatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use construct_config::KafkaConfig;
     use crate::kafka::types::DeliveryAckEvent;
+    use construct_config::KafkaConfig;
 
     #[tokio::test]
     async fn test_passthrough_mode() {

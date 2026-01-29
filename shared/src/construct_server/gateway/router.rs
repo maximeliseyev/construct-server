@@ -8,6 +8,7 @@
 // Routing rules:
 // - /api/v1/auth/* → auth-service
 // - /api/v1/messages → messaging-service
+// - /api/v1/media/* → messaging-service
 // - /api/v1/users/* → user-service
 // - /api/v1/account → user-service
 // - /api/v1/keys/* → user-service
@@ -17,7 +18,6 @@
 // ============================================================================
 
 use crate::auth::AuthManager;
-use construct_config::Config;
 use crate::gateway::discovery::ServiceDiscovery;
 use crate::gateway::service_client::ServiceClient;
 use crate::queue::MessageQueue;
@@ -27,6 +27,7 @@ use axum::{
     http::StatusCode,
     response::Response,
 };
+use construct_config::Config;
 use std::sync::Arc;
 
 /// Gateway router state
@@ -56,6 +57,7 @@ pub async fn route_request(
     let service_name = match path {
         path if path.starts_with("/api/v1/auth") => "auth",
         path if path.starts_with("/api/v1/messages") => "messaging",
+        path if path.starts_with("/api/v1/media") => "messaging",
         path if path.starts_with("/api/v1/users") => "user",
         path if path.starts_with("/api/v1/account") => "user",
         path if path.starts_with("/api/v1/keys") => "user",

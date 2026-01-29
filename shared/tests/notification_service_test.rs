@@ -89,10 +89,7 @@ struct AuthResponse {
 }
 
 /// Helper function to register a user and get access token
-async fn register_and_get_token(
-    client: &reqwest::Client,
-    auth_url: &str,
-) -> AuthResponse {
+async fn register_and_get_token(client: &reqwest::Client, auth_url: &str) -> AuthResponse {
     let bundle = create_test_bundle(None);
     let request = json!({
         "username": generate_test_username("notif_test"),
@@ -113,7 +110,10 @@ async fn register_and_get_token(
         "Registration failed"
     );
 
-    response.json().await.expect("Failed to parse auth response")
+    response
+        .json()
+        .await
+        .expect("Failed to parse auth response")
 }
 
 /// Generate a valid device token (64 hex characters for APNs)

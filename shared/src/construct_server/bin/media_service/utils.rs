@@ -2,32 +2,47 @@
 // Media Service Utilities
 // ============================================================================
 
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
-/// Validate upload token using HMAC
+type HmacSha256 = Hmac<Sha256>;
+
+/// Validate upload token
+/// Expected format: {timestamp_hex}.{random_hex}.{hmac_hex}
 pub fn validate_upload_token(token: &str, secret: &str) -> bool {
-    if token.len() < 65 {
-        // 64 chars HMAC + 1 char separator
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        tracing::warn!(
+            "Invalid token format: expected 3 parts, got {}",
+            parts.len()
+        );
         return false;
     }
 
-    let parts: Vec<&str> = token.split(':').collect();
-    if parts.len() != 2 {
+    let timestamp_hex = parts[0];
+    let random_hex = parts[1];
+    let expected_hmac = parts[2];
+
+    // Validate hex format
+    if hex::decode(timestamp_hex).is_err() || hex::decode(random_hex).is_err() {
+        tracing::warn!("Invalid hex encoding in token");
         return false;
     }
 
-    let expected_hmac = parts[0];
-    let message = parts[1];
+    // Reconstruct message
+    let message = format!("{}.{}", timestamp_hex, random_hex);
+    let computed_hmac = compute_hmac(&message, secret);
 
-    let computed_hmac = compute_hmac(message, secret);
+    // Constant-time comparison
     expected_hmac == computed_hmac
 }
 
 /// Compute HMAC-SHA256
 pub fn compute_hmac(message: &str, secret: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(secret.as_bytes());
-    hasher.update(message.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(result)
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(message.as_bytes());
+
+    let result = mac.finalize();
+    hex::encode(result.into_bytes())
 }

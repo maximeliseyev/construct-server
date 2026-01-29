@@ -12,10 +12,10 @@
 use axum::{Json, extract::State, response::IntoResponse};
 use std::sync::Arc;
 
-use construct_error::AppError;
 use crate::notification_service::NotificationServiceContext;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::notifications;
+use construct_error::AppError;
 
 /// Wrapper for register_device handler (POST /api/v1/notifications/register-device)
 pub async fn register_device(

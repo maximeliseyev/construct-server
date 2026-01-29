@@ -393,7 +393,7 @@ async fn test_message_delivery_to_online_user() {
     let online_server = redis_streams::check_user_online(&state, user_id)
         .await
         .unwrap();
-    
+
     assert_eq!(online_server, Some(server_instance_id.to_string()));
 
     // Push message to the user's delivery stream
@@ -432,7 +432,7 @@ async fn test_message_delivery_to_offline_user() {
     let state = create_test_state().await;
     let user_id = "test-user-offline-001";
     let message_id = "test-msg-offline-001";
-    
+
     // Cleanup before test
     cleanup_test_keys(&state, "test_user:*").await;
     cleanup_test_keys(&state, "test_queue:*").await;
@@ -548,7 +548,7 @@ async fn test_dead_letter_handling() {
         .query_async(&mut *conn)
         .await
         .unwrap();
-    
+
     assert_eq!(retry_count, max_retries);
 
     // If retries exceeded, push to dead letter queue
@@ -578,7 +578,7 @@ async fn test_dead_letter_handling() {
 async fn test_batch_processing_multiple_messages() {
     let state = create_test_state().await;
     let stream_key = "test_delivery_queue:batch-server-001";
-    
+
     // Cleanup before test
     cleanup_test_keys(&state, "test_delivery_queue:*").await;
 
@@ -611,7 +611,7 @@ async fn test_batch_processing_multiple_messages() {
         .query_async(&mut *conn)
         .await
         .unwrap();
-    
+
     assert_eq!(length, 5);
 
     // Cleanup
@@ -675,7 +675,7 @@ async fn test_concurrent_delivery_same_recipient() {
             tokio::spawn(async move {
                 let message_id = format!("concurrent-msg-{:03}", i);
                 let message_bytes = format!("concurrent payload {}", i);
-                
+
                 redis_streams::push_to_delivery_stream(
                     &state_clone,
                     &stream_key,
@@ -701,7 +701,7 @@ async fn test_concurrent_delivery_same_recipient() {
         .query_async(&mut *conn)
         .await
         .unwrap();
-    
+
     assert_eq!(length, 10);
 
     // Cleanup
@@ -720,7 +720,7 @@ async fn test_kafka_consumer_receives_message() {
     // 2. Produce a message to the test topic
     // 3. Verify consumer receives the message
     // 4. Verify message format (MessageEnvelope)
-    
+
     // TODO: Implement when Kafka integration is ready
     // For now, we'll skip this test
     println!("Kafka integration test - to be implemented in Phase 5+");

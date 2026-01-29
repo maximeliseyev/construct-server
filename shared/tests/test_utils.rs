@@ -55,10 +55,14 @@ async fn create_test_config(db_name: &str) -> Config {
         .or_else(|_| dotenvy::from_filename_override("../../.env.test"));
 
     // Read JWT keys directly from files - try multiple paths for workspace compatibility
-    let private_key = try_read_key_file(&["prkeys/jwt_private_key.pem", "../prkeys/jwt_private_key.pem"])
-        .expect("Failed to read JWT private key file");
-    let public_key = try_read_key_file(&["prkeys/jwt_public_key.pem", "../prkeys/jwt_public_key.pem"])
-        .expect("Failed to read JWT public key file");
+    let private_key = try_read_key_file(&[
+        "prkeys/jwt_private_key.pem",
+        "../prkeys/jwt_private_key.pem",
+    ])
+    .expect("Failed to read JWT private key file");
+    let public_key =
+        try_read_key_file(&["prkeys/jwt_public_key.pem", "../prkeys/jwt_public_key.pem"])
+            .expect("Failed to read JWT public key file");
 
     // Set env vars before Config::from_env() reads them
     // SAFETY: Tests run single-threaded (--test-threads=1) so this is safe

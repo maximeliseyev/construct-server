@@ -19,8 +19,8 @@ use chrono::{Duration, Utc};
 use construct_server_shared::{
     config::{Config, RedisKeyPrefixes},
     delivery_ack::{
-        compute_message_hash, DeliveryAckConfig, DeliveryAckManager, DeliveryAckMode,
-        DeliveryPending, DeliveryPendingStorage, PostgresDeliveryStorage,
+        DeliveryAckConfig, DeliveryAckManager, DeliveryAckMode, DeliveryPending,
+        DeliveryPendingStorage, PostgresDeliveryStorage, compute_message_hash,
     },
 };
 use serial_test::serial;
@@ -87,7 +87,10 @@ fn create_test_config() -> DeliveryAckConfig {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_single_message() {
-    let db_name = format!("test_delivery_ack_single_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_single_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();
@@ -132,7 +135,10 @@ async fn delivery_ack_single_message() {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_batch_messages() {
-    let db_name = format!("test_delivery_ack_batch_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_batch_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();
@@ -175,7 +181,10 @@ async fn delivery_ack_batch_messages() {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_idempotency() {
-    let db_name = format!("test_delivery_ack_idempotent_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_idempotent_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();
@@ -223,7 +232,10 @@ async fn delivery_ack_idempotency() {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_invalid_message_id() {
-    let db_name = format!("test_delivery_ack_invalid_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_invalid_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();
@@ -255,7 +267,10 @@ async fn delivery_ack_invalid_message_id() {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_unauthorized_access() {
-    let db_name = format!("test_delivery_ack_auth_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_auth_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();
@@ -290,7 +305,10 @@ async fn delivery_ack_unauthorized_access() {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_wrong_user() {
-    let db_name = format!("test_delivery_ack_wrong_user_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_wrong_user_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();
@@ -352,13 +370,13 @@ async fn delivery_ack_hmac_key_isolation() {
     let message_id = Uuid::new_v4().to_string();
 
     // Key 1
-    let key1 = hex::decode("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2")
-        .unwrap();
+    let key1 =
+        hex::decode("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2").unwrap();
     let hash1 = compute_message_hash(&message_id, &key1);
 
     // Key 2 (different)
-    let key2 = hex::decode("b1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2")
-        .unwrap();
+    let key2 =
+        hex::decode("b1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2").unwrap();
     let hash2 = compute_message_hash(&message_id, &key2);
 
     // Hashes should be different
@@ -376,7 +394,10 @@ async fn delivery_ack_hmac_key_isolation() {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_expired_record() {
-    let db_name = format!("test_delivery_ack_expiry_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_expiry_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();
@@ -421,7 +442,10 @@ async fn delivery_ack_expired_record() {
 #[tokio::test]
 #[serial]
 async fn delivery_ack_gdpr_user_deletion() {
-    let db_name = format!("test_delivery_ack_gdpr_{}", Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_delivery_ack_gdpr_{}",
+        Uuid::new_v4().to_string().replace('-', "_")
+    );
     let pool = setup_test_database(&db_name).await;
 
     let config = create_test_config();

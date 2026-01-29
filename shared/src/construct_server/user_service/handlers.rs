@@ -17,11 +17,11 @@ use axum::{
 };
 use std::sync::Arc;
 
-use construct_error::AppError;
 use crate::routes::account;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::keys;
 use crate::user_service::UserServiceContext;
+use construct_error::AppError;
 
 /// Wrapper for get_account handler
 pub async fn get_account(

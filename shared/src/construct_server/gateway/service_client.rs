@@ -12,7 +12,6 @@
 //
 // ============================================================================
 
-use construct_config::CircuitBreakerConfig;
 use crate::gateway::circuit_breaker::{CircuitBreaker, CircuitState};
 use crate::metrics::{
     GATEWAY_CIRCUIT_BREAKER_STATE, GATEWAY_REQUEST_DURATION_SECONDS, GATEWAY_REQUESTS_TOTAL,
@@ -20,6 +19,7 @@ use crate::metrics::{
 use anyhow::Result;
 use axum::body::Body;
 use axum::http::{Request, Response};
+use construct_config::CircuitBreakerConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

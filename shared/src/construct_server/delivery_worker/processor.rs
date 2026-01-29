@@ -31,13 +31,13 @@
 //
 // ============================================================================
 
-use construct_config::SECONDS_PER_DAY;
 use crate::delivery_worker::deduplication::{mark_message_processed, should_skip_message};
 use crate::delivery_worker::redis_streams::push_to_offline_stream;
 use crate::delivery_worker::state::WorkerState;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::utils::log_safe_id;
 use anyhow::{Context, Result};
+use construct_config::SECONDS_PER_DAY;
 use redis::cmd;
 use tracing::{debug, info};
 

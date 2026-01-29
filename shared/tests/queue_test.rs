@@ -268,7 +268,7 @@ async fn test_rate_limit_increment_and_check() {
             .increment_message_count(&user_id)
             .await
             .expect("Failed to increment rate limit");
-        
+
         assert_eq!(count, i, "Rate limit count should match iteration");
     }
 
@@ -277,7 +277,7 @@ async fn test_rate_limit_increment_and_check() {
         .increment_message_count(&user_id)
         .await
         .expect("Failed to get rate limit count");
-    
+
     assert_eq!(final_count, 6);
 
     // Test that count is under limit
@@ -311,10 +311,8 @@ async fn test_rate_limit_window_expiry() {
 
     // Check TTL
     let rate_key = format!("test_rate:{}", user_id);
-    let ttl: i64 = redis_conn
-        .ttl(&rate_key)
-        .expect("Failed to get TTL");
-    
+    let ttl: i64 = redis_conn.ttl(&rate_key).expect("Failed to get TTL");
+
     assert!(ttl > 0 && ttl <= 3600, "TTL should be set");
 
     // Cleanup
@@ -358,8 +356,12 @@ async fn test_rate_limit_different_keys() {
     assert_eq!(count2_check, 2); // Now 2 because we just incremented
 
     // Cleanup
-    let _: () = redis_conn.del(&format!("test_rate:{}", user1)).unwrap_or_default();
-    let _: () = redis_conn.del(&format!("test_rate:{}", user2)).unwrap_or_default();
+    let _: () = redis_conn
+        .del(&format!("test_rate:{}", user1))
+        .unwrap_or_default();
+    let _: () = redis_conn
+        .del(&format!("test_rate:{}", user2))
+        .unwrap_or_default();
 }
 
 // Test 5: Session Store and Retrieve
@@ -369,12 +371,15 @@ async fn test_session_store_and_retrieve() {
     let (mut message_queue, mut redis_conn) = setup_queue().await;
     let session_id = Uuid::new_v4().to_string();
     let user_id = Uuid::new_v4().to_string();
-    let session_data = format!(r#"{{"user_id":"{}","created_at":"2026-01-25T12:00:00Z"}}"#, user_id);
+    let session_data = format!(
+        r#"{{"user_id":"{}","created_at":"2026-01-25T12:00:00Z"}}"#,
+        user_id
+    );
 
     // Store session
     let session_key = format!("test_session:{}", session_id);
     let ttl_secs: i64 = 86400; // 24 hours
-    
+
     let _: () = redis_conn
         .set_ex(&session_key, &session_data, ttl_secs as u64)
         .expect("Failed to store session");
@@ -383,13 +388,11 @@ async fn test_session_store_and_retrieve() {
     let retrieved: String = redis_conn
         .get(&session_key)
         .expect("Failed to retrieve session");
-    
+
     assert_eq!(retrieved, session_data);
 
     // Verify TTL is set
-    let ttl: i64 = redis_conn
-        .ttl(&session_key)
-        .expect("Failed to get TTL");
+    let ttl: i64 = redis_conn.ttl(&session_key).expect("Failed to get TTL");
     assert!(ttl > 0 && ttl <= ttl_secs);
 
     // Cleanup
@@ -443,21 +446,17 @@ async fn test_delivery_stream_push_pop() {
     let message2 = r#"{"message_id":"msg-002","payload":"test2"}"#;
 
     use redis::Commands;
-    
-    let _: String = redis_conn
-        .xadd(
-            &stream_key,
-            "*", // Auto-generate ID
-            &[("data", message1)]
-        )
-        .expect("Failed to push message 1");
 
     let _: String = redis_conn
         .xadd(
             &stream_key,
-            "*",
-            &[("data", message2)]
+            "*", // Auto-generate ID
+            &[("data", message1)],
         )
+        .expect("Failed to push message 1");
+
+    let _: String = redis_conn
+        .xadd(&stream_key, "*", &[("data", message2)])
         .expect("Failed to push message 2");
 
     // Check stream length
@@ -483,13 +482,11 @@ async fn test_delivery_stream_push_pop() {
 #[serial]
 async fn test_pubsub_publish_subscribe() {
     use redis::AsyncCommands;
-    
-    let redis_url = env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    
-    let client = redis::Client::open(redis_url.as_str())
-        .expect("Failed to create Redis client");
-    
+
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
+    let client = redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
+
     let mut pubsub_conn = client
         .get_multiplexed_async_connection()
         .await
@@ -516,37 +513,33 @@ async fn test_pubsub_publish_subscribe() {
 #[serial]
 async fn test_connection_pool_under_load() {
     let (_message_queue, mut redis_conn) = setup_queue().await;
-    
+
     // Perform multiple concurrent operations directly with Redis
     let mut handles = vec![];
-    
-    let redis_url = env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    
+
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
     for i in 0..10 {
         let user_id = format!("test-load-user-{}", i);
         let redis_url_clone = redis_url.clone();
-        
+
         let handle = tokio::spawn(async move {
             use redis::AsyncCommands;
-            
+
             let client = redis::Client::open(redis_url_clone.as_str())
                 .expect("Failed to create Redis client");
-            
+
             let mut conn = client
                 .get_multiplexed_async_connection()
                 .await
                 .expect("Failed to get connection");
-            
+
             let rate_key = format!("test_rate:{}", user_id);
-            
+
             // Increment rate limit counter
-            let _: i64 = conn
-                .incr(&rate_key, 1)
-                .await
-                .expect("Failed to increment");
+            let _: i64 = conn.incr(&rate_key, 1).await.expect("Failed to increment");
         });
-        
+
         handles.push(handle);
     }
 

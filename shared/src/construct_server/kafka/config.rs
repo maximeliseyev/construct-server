@@ -1,5 +1,5 @@
-use construct_config::KafkaConfig;
 use anyhow::Result;
+use construct_config::KafkaConfig;
 use rdkafka::config::ClientConfig;
 use tracing::info;
 

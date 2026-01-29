@@ -26,7 +26,7 @@ impl MediaConfig {
     pub fn default() -> Self {
         Self {
             storage_dir: PathBuf::from("./media_storage"),
-            max_file_size: 50 * 1024 * 1024,    // 50MB
+            max_file_size: 100 * 1024 * 1024, // 100MB (unified with messaging-service)
             file_ttl_seconds: 7 * 24 * 60 * 60, // 7 days
             hmac_secret: "change-me-in-production".to_string(),
             bind_address: "0.0.0.0:8082".to_string(),
@@ -43,12 +43,13 @@ impl MediaConfig {
             max_file_size: std::env::var("MEDIA_MAX_FILE_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(50 * 1024 * 1024), // 50MB
+                .unwrap_or(100 * 1024 * 1024), // 100MB (unified with messaging-service)
             file_ttl_seconds: std::env::var("MEDIA_FILE_TTL_SECONDS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(7 * 24 * 60 * 60), // 7 days
-            hmac_secret: std::env::var("MEDIA_HMAC_SECRET")
+            hmac_secret: std::env::var("MEDIA_UPLOAD_TOKEN_SECRET")
+                .or_else(|_| std::env::var("MEDIA_HMAC_SECRET"))
                 .unwrap_or_else(|_| "change-me-in-production".to_string()),
             bind_address: std::env::var("MEDIA_BIND_ADDRESS")
                 .unwrap_or_else(|_| "0.0.0.0:8082".to_string()),

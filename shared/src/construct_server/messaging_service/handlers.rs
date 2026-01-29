@@ -19,13 +19,13 @@ use axum::{
 };
 use std::sync::Arc;
 
-use construct_crypto::EncryptedMessage;
-use construct_error::AppError;
-use construct_types::message::EndSessionData;
 use crate::messaging_service::MessagingServiceContext;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::messages;
 use crate::utils::log_safe_id;
+use construct_crypto::EncryptedMessage;
+use construct_error::AppError;
+use construct_types::message::EndSessionData;
 
 /// Wrapper for send_message handler (POST /api/v1/messages)
 pub async fn send_message(
@@ -35,13 +35,13 @@ pub async fn send_message(
     Json(message): Json<EncryptedMessage>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
-    
+
     // Store recipient_id before message is consumed
     let recipient_id = message.recipient_id.clone();
-    
+
     // Send message (existing handler)
     let result = messages::send_message(State(app_context), user, headers, Json(message)).await?;
-    
+
     // ✅ NEW: Send push notification asynchronously (non-blocking)
     if context.config.apns.enabled {
         let context_clone = context.clone();
@@ -55,7 +55,7 @@ pub async fn send_message(
             }
         });
     }
-    
+
     Ok(result)
 }
 
@@ -74,7 +74,7 @@ pub async fn get_messages(
 // ============================================================================
 
 /// Send silent push notification to wake up recipient's app
-/// 
+///
 /// This is called asynchronously after message is stored, so failures don't
 /// affect message delivery. The push notification is silent (no content)
 /// and only wakes the app to fetch messages via long-polling.
@@ -87,10 +87,10 @@ async fn send_push_notification(
     struct DeviceTokenRow {
         device_token_encrypted: Vec<u8>,
     }
-    
+
     let rows = sqlx::query_as::<_, DeviceTokenRow>(
         "SELECT device_token_encrypted FROM device_tokens 
-         WHERE user_id = $1::uuid AND enabled = true"
+         WHERE user_id = $1::uuid AND enabled = true",
     )
     .bind(recipient_id)
     .fetch_all(&*context.db_pool)
@@ -118,17 +118,17 @@ async fn send_push_notification(
         recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
         "Device token decryption not yet implemented - push notifications disabled"
     );
-    
+
     // NOTE: Temporarily disabled until encryption is implemented
     // The schema is ready (device_token_encrypted), but we need to:
     // 1. Implement DeviceTokenEncryption module
     // 2. Decrypt tokens before sending to APNs
     // 3. Re-enable this code
-    
+
     /* PLACEHOLDER for future implementation:
-    
+
     use crate::device_token_encryption::DeviceTokenEncryption;
-    
+
     let mut send_errors = 0;
     for row in &rows {
         // Decrypt the token
@@ -140,7 +140,7 @@ async fn send_push_notification(
                 continue;
             }
         };
-        
+
         match context.apns_client
             .send_silent_push(&token, None)
             .await

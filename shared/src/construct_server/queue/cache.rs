@@ -3,9 +3,9 @@
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
 
+use anyhow::Result;
 use construct_config::SECONDS_PER_HOUR;
 use construct_crypto::UploadableKeyBundle;
-use anyhow::Result;
 use redis::AsyncCommands;
 
 pub(crate) struct CacheManager<'a> {

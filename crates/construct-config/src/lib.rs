@@ -43,44 +43,44 @@ use constants::*;
 pub struct Config {
     pub database_url: String,
     pub redis_url: String,
-    
+
     /// DEPRECATED: JWT_SECRET is no longer used. RS256 is now required.
     /// Kept for backward compatibility but ignored.
     #[allow(dead_code)]
     pub jwt_secret: String,
-    
+
     /// RSA private key for JWT signing (RS256)
     /// Required for auth-service (to create tokens)
     /// Optional for other services (verify-only mode)
     pub jwt_private_key: Option<String>,
-    
+
     /// RSA public key for JWT verification (RS256)
     /// REQUIRED for all services
     pub jwt_public_key: Option<String>,
-    
+
     pub port: u16,
     pub bind_address: String,
     pub health_port: u16,
     pub heartbeat_interval_secs: i64,
     pub server_registry_ttl_secs: i64,
     pub message_ttl_days: i64,
-    
+
     /// Access token TTL in hours (for REST API - short-lived for security)
     pub access_token_ttl_hours: i64,
-    
+
     /// Session TTL in days (for WebSocket sessions - legacy, kept for backward compatibility)
     pub session_ttl_days: i64,
-    
+
     /// Refresh token TTL in days (long-lived for user convenience)
     pub refresh_token_ttl_days: i64,
-    
+
     pub jwt_issuer: String,
     pub online_channel: String,
     pub offline_queue_prefix: String,
     pub delivery_queue_prefix: String,
     pub delivery_poll_interval_ms: u64,
     pub rust_log: String,
-    
+
     // Sub-configurations
     pub logging: LoggingConfig,
     pub security: SecurityConfig,
@@ -100,13 +100,13 @@ pub struct Config {
     // TODO: Remove after updating all usages to config.federation.*
     /// Instance domain (e.g., "eu.konstruct.cc")
     pub instance_domain: String,
-    
+
     /// Base federation domain (e.g., "konstruct.cc")
     pub federation_base_domain: String,
-    
+
     /// Whether federation is enabled
     pub federation_enabled: bool,
-    
+
     /// Deep link base URL (e.g., "https://konstruct.cc")
     pub deep_link_base_url: String,
 }
@@ -144,18 +144,18 @@ impl Config {
         Ok(Self {
             database_url: std::env::var("DATABASE_URL")?,
             redis_url: std::env::var("REDIS_URL")?,
-            
+
             // JWT_SECRET is deprecated - RS256 is now required
             jwt_secret: std::env::var("JWT_SECRET").unwrap_or_default(),
-            
+
             jwt_private_key: Self::load_jwt_private_key(),
             jwt_public_key: Self::load_jwt_public_key(),
-            
+
             port: std::env::var("PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(DEFAULT_PORT),
-                
+
             bind_address: format!(
                 "[::]:{}",
                 std::env::var("PORT")
@@ -163,60 +163,60 @@ impl Config {
                     .and_then(|p| p.parse().ok())
                     .unwrap_or(DEFAULT_PORT)
             ),
-            
+
             health_port: std::env::var("HEALTH_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(DEFAULT_HEALTH_PORT),
-                
+
             heartbeat_interval_secs: std::env::var("HEARTBEAT_INTERVAL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(DEFAULT_HEARTBEAT_INTERVAL_SECS),
-                
+
             server_registry_ttl_secs: std::env::var("SERVER_REGISTRY_TTL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(DEFAULT_SERVER_REGISTRY_TTL_SECS),
-                
+
             message_ttl_days: std::env::var("MESSAGE_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(DEFAULT_MESSAGE_TTL_DAYS),
-                
+
             access_token_ttl_hours: std::env::var("ACCESS_TOKEN_TTL_HOURS")
                 .ok()
                 .and_then(|h| h.parse().ok())
                 .unwrap_or(DEFAULT_ACCESS_TOKEN_TTL_HOURS),
-                
+
             session_ttl_days: std::env::var("SESSION_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(DEFAULT_SESSION_TTL_DAYS),
-                
+
             refresh_token_ttl_days: std::env::var("REFRESH_TOKEN_TTL_DAYS")
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
-                
+
             jwt_issuer: std::env::var("JWT_ISSUER")
                 .unwrap_or_else(|_| "construct-server".to_string()),
-                
+
             online_channel: std::env::var("ONLINE_CHANNEL")?,
-            
+
             offline_queue_prefix: std::env::var("OFFLINE_QUEUE_PREFIX")
                 .unwrap_or_else(|_| "queue:".to_string()),
-                
+
             delivery_queue_prefix: std::env::var("DELIVERY_QUEUE_PREFIX")
                 .unwrap_or_else(|_| "delivery_queue:".to_string()),
-                
+
             delivery_poll_interval_ms: std::env::var("DELIVERY_POLL_INTERVAL_MS")
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(DEFAULT_DELIVERY_POLL_INTERVAL_MS),
-                
+
             rust_log: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
-            
+
             logging,
             security,
             kafka,
@@ -230,7 +230,7 @@ impl Config {
             media,
             csrf,
             microservices,
-            
+
             // Legacy aliases
             instance_domain,
             federation_base_domain,
@@ -242,8 +242,10 @@ impl Config {
 
     fn load_jwt_private_key() -> Option<String> {
         std::env::var("JWT_PRIVATE_KEY").ok().map(|key| {
-            let is_pem_in_env = key.starts_with("-----BEGIN") ||
-                (!key.contains(std::path::MAIN_SEPARATOR) && !key.ends_with(".pem") && !key.ends_with(".key"));
+            let is_pem_in_env = key.starts_with("-----BEGIN")
+                || (!key.contains(std::path::MAIN_SEPARATOR)
+                    && !key.ends_with(".pem")
+                    && !key.ends_with(".key"));
 
             if is_pem_in_env && key.contains("PRIVATE") {
                 tracing::warn!(
@@ -253,7 +255,10 @@ impl Config {
                 );
             }
 
-            if key.contains(std::path::MAIN_SEPARATOR) || key.ends_with(".pem") || key.ends_with(".key") {
+            if key.contains(std::path::MAIN_SEPARATOR)
+                || key.ends_with(".pem")
+                || key.ends_with(".key")
+            {
                 std::fs::read_to_string(&key).unwrap_or_else(|e| {
                     tracing::warn!(
                         error = %e,
@@ -297,11 +302,14 @@ mod tests {
     #[test]
     fn test_federation_id() {
         let user_uuid = uuid::Uuid::parse_str("12345678-1234-5678-1234-567812345678").unwrap();
-        
+
         // Простой тест без полной конфигурации
         let instance_domain = "eu.konstruct.cc";
         let federation_id = format!("{}@{}", user_uuid, instance_domain);
-        
-        assert_eq!(federation_id, "12345678-1234-5678-1234-567812345678@eu.konstruct.cc");
+
+        assert_eq!(
+            federation_id,
+            "12345678-1234-5678-1234-567812345678@eu.konstruct.cc"
+        );
     }
 }

@@ -24,11 +24,11 @@ use uuid::Uuid;
 use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::db;
-use construct_crypto::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
-use construct_error::AppError;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id, validate_password_strength, validate_username};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use construct_crypto::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
+use construct_error::AppError;
 
 /// Request body for token refresh
 #[derive(Debug, Deserialize)]
