@@ -1,5 +1,5 @@
 [package]
-name = "construct-crypto-agility"
+name = "crypto-agility"
 version = "0.1.0"
 edition = "2021"
 
