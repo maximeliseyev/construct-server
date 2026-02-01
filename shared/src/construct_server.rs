@@ -17,32 +17,24 @@ pub mod apns;
 pub mod audit;
 pub mod auth;
 pub mod auth_service;
-// pub mod config; // MIGRATED to construct-config crate (Phase 4.2)
 pub mod context;
 pub mod db;
 pub mod delivery_ack;
-// pub mod e2e; // MOVED to construct-crypto crate
-// pub mod error; // MOVED to construct-error crate
 pub mod federation;
 pub mod gateway;
-// WebSocket handlers removed - all clients use REST API now
-// Only federation handlers remain
 pub mod handlers {
     pub mod federation; // Used in routes/federation.rs
 }
 pub mod health;
 pub mod kafka;
 pub mod key_management;
-// pub mod message; // MOVED to construct-types crate
 pub mod message_gateway;
 pub mod messaging_service;
 pub mod metrics;
 pub mod notification_service;
-// pub mod pqc; // MOVED to construct-crypto crate
 pub mod queue;
 pub mod routes;
 pub mod server_registry;
-// pub mod user_id; // MOVED to construct-types crate
 pub mod user_service;
 pub mod utils;
 
