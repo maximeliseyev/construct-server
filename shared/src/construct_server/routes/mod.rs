@@ -65,7 +65,10 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         .route("/keys/:user_id", get(keys::get_keys)) // Legacy
         // Phase 2.5.4: Migrated endpoints under /api/v1/
         .route("/api/v1/keys/upload", post(keys::upload_keys))
-        .route("/api/v1/users/:id/public-key", get(keys::get_public_key_bundle))
+        .route(
+            "/api/v1/users/:id/public-key",
+            get(keys::get_public_key_bundle),
+        )
         // Messages (CSRF protected)
         .route("/messages/send", post(messages::send_message)) // Legacy
         // Phase 2.5: REST API for messages

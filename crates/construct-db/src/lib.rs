@@ -290,10 +290,10 @@ pub async fn get_key_bundle(
 /// # use construct_db::{DbPool, begin_transaction};
 /// # async fn example(pool: &DbPool) -> anyhow::Result<()> {
 /// let mut tx = begin_transaction(pool).await?;
-/// 
+///
 /// // Perform database operations
 /// sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
-/// 
+///
 /// // Commit on success
 /// tx.commit().await?;
 /// # Ok(())
@@ -303,13 +303,13 @@ pub async fn get_key_bundle(
 /// # Error Handling Pattern
 /// ```rust,ignore
 /// let mut tx = begin_transaction(&pool).await?;
-/// 
+///
 /// let result: Result<(), anyhow::Error> = async {
 ///     sqlx::query("...").execute(&mut *tx).await?;
 ///     sqlx::query("...").execute(&mut *tx).await?;
 ///     Ok(())
 /// }.await;
-/// 
+///
 /// match result {
 ///     Ok(_) => tx.commit().await?,
 ///     Err(e) => {
@@ -339,13 +339,11 @@ pub async fn begin_transaction(pool: &DbPool) -> Result<DbTransaction<'_>> {
 /// # }
 /// ```
 pub async fn user_exists(pool: &DbPool, user_id: &Uuid) -> Result<bool> {
-    let result: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)"
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .context("Failed to check user existence")?;
+    let result: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .context("Failed to check user existence")?;
     Ok(result)
 }
 

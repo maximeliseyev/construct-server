@@ -117,7 +117,10 @@ async fn send_push_notification(
 
     for row in &rows {
         // Decrypt the token using token_encryption from context
-        let token = match context.token_encryption.decrypt(&row.device_token_encrypted) {
+        let token = match context
+            .token_encryption
+            .decrypt(&row.device_token_encrypted)
+        {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!(

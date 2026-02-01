@@ -18,11 +18,9 @@
 use chrono::{Duration, Utc};
 use construct_config::{Config, RedisKeyPrefixes};
 use construct_crypto::compute_message_hash;
-use construct_server_shared::{
-    delivery_ack::{
-        DeliveryAckConfig, DeliveryAckManager, DeliveryAckMode, DeliveryPending,
-        DeliveryPendingStorage, PostgresDeliveryStorage,
-    },
+use construct_server_shared::delivery_ack::{
+    DeliveryAckConfig, DeliveryAckManager, DeliveryAckMode, DeliveryPending,
+    DeliveryPendingStorage, PostgresDeliveryStorage,
 };
 use serial_test::serial;
 use sqlx::{Connection, Executor, PgConnection, PgPool};

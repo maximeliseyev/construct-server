@@ -107,7 +107,10 @@ async fn main() -> Result<()> {
         .route("/api/v1/account", put(handlers::update_account))
         .route("/api/v1/account", delete(handlers::delete_account))
         // Keys management endpoints
-        .route("/api/v1/users/:id/public-key", get(handlers::get_public_key_bundle))
+        .route(
+            "/api/v1/users/:id/public-key",
+            get(handlers::get_public_key_bundle),
+        )
         .route("/api/v1/keys/upload", post(handlers::upload_keys))
         // Legacy endpoints (for backward compatibility)
         .route("/keys/:user_id", get(handlers::get_keys_legacy))
