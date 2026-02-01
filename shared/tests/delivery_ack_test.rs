@@ -16,11 +16,12 @@
 // ============================================================================
 
 use chrono::{Duration, Utc};
+use construct_config::{Config, RedisKeyPrefixes};
+use construct_crypto::compute_message_hash;
 use construct_server_shared::{
-    config::{Config, RedisKeyPrefixes},
     delivery_ack::{
         DeliveryAckConfig, DeliveryAckManager, DeliveryAckMode, DeliveryPending,
-        DeliveryPendingStorage, PostgresDeliveryStorage, compute_message_hash,
+        DeliveryPendingStorage, PostgresDeliveryStorage,
     },
 };
 use serial_test::serial;

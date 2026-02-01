@@ -455,8 +455,8 @@ async fn get_keys_impl(
 }
 
 /// GET /api/v1/users/:id/public-key
-/// Retrieves a user's public key bundle (new API path)
-pub async fn get_keys_v1(
+/// Retrieves a user's public key bundle (REST API endpoint)
+pub async fn get_public_key_bundle(
     State(app_context): State<Arc<AppContext>>,
     user: AuthenticatedUser,
     Path(id): Path<String>,

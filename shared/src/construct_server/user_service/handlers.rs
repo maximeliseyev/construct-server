@@ -54,27 +54,26 @@ pub async fn delete_account(
     account::delete_account(State(app_context), user, headers, Json(request)).await
 }
 
-/// Wrapper for get_keys_v1 handler (GET /api/v1/users/:id/public-key)
+/// Wrapper for get_public_key_bundle handler (GET /api/v1/users/:id/public-key)
 /// Also handles legacy GET /keys/:user_id
-pub async fn get_keys_v1(
+pub async fn get_public_key_bundle(
     State(context): State<Arc<UserServiceContext>>,
     user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
-    // get_keys_v1 uses Path(id: String), which matches both /api/v1/users/:id/public-key and /keys/:user_id
-    keys::get_keys_v1(State(app_context), user, Path(id)).await
+    keys::get_public_key_bundle(State(app_context), user, Path(id)).await
 }
 
 /// Wrapper for legacy get_keys handler (GET /keys/:user_id)
-/// This is the same as get_keys_v1, but kept for clarity
+/// This is the same as get_public_key_bundle, but kept for backward compatibility
 pub async fn get_keys_legacy(
     State(context): State<Arc<UserServiceContext>>,
     user: AuthenticatedUser,
     Path(user_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    // Legacy endpoint uses same handler as v1
-    get_keys_v1(State(context), user, Path(user_id)).await
+    // Legacy endpoint uses same handler as modern API
+    get_public_key_bundle(State(context), user, Path(user_id)).await
 }
 
 /// Wrapper for upload_keys handler (POST /api/v1/keys/upload)

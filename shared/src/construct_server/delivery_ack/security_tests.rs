@@ -15,6 +15,7 @@
 mod security_tests {
     use crate::delivery_ack::*;
     use crate::kafka::types::DeliveryAckEvent;
+    use construct_crypto::{compute_message_hash, compute_user_id_hash, verify_message_hash};
     use serial_test::serial;
 
     /// Test 1: Verify HMAC hashes are deterministic and collision-resistant

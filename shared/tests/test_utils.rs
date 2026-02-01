@@ -10,11 +10,11 @@
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
+use construct_config::Config;
 use construct_server_shared::{
     apns::{ApnsClient, DeviceTokenEncryption},
     auth::AuthManager,
     auth_service::{AuthServiceContext, handlers as auth_handlers},
-    config::Config,
     db::DbPool,
     kafka::MessageProducer,
     messaging_service::{MessagingServiceContext, handlers as messaging_handlers},

@@ -440,7 +440,7 @@ pub enum ServerMessage {
     SessionExpired,
     PublicKeyBundle(PublicKeyBundleData),
     Message(ChatMessage),
-    EncryptedV3(EncryptedMessage), // New variant for API v3 encrypted messages
+    EncryptedMessage(EncryptedMessage), // Encrypted message (Double Ratchet protocol)
     Ack(AckData),
     KeyRotationSuccess,
     ChangePasswordSuccess,

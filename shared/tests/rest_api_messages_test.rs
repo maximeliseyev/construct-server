@@ -9,7 +9,7 @@
 // ============================================================================
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use construct_crypto::EncryptedMessageV3;
+use construct_crypto::EncryptedMessage;
 use serde_json::json;
 use serial_test::serial;
 use uuid::Uuid;
@@ -42,12 +42,12 @@ fn generate_test_username(prefix: &str) -> String {
 }
 
 // Helper function to create a test encrypted message
-fn create_test_message(recipient_id: &str, suite_id: u16) -> EncryptedMessageV3 {
+fn create_test_message(recipient_id: &str, suite_id: u16) -> EncryptedMessage {
     // Create a dummy ciphertext (base64-encoded random bytes)
     // In real scenario, this would be properly encrypted
     let dummy_ciphertext = BASE64.encode(b"dummy_encrypted_message_content_for_testing");
 
-    EncryptedMessageV3 {
+    EncryptedMessage {
         recipient_id: recipient_id.to_string(),
         suite_id: suite_id, // SuiteId is a type alias for u16
         ciphertext: dummy_ciphertext,

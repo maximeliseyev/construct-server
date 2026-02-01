@@ -54,14 +54,13 @@ use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use std::sync::Arc;
 
-// Import crypto functions
-use construct_crypto::{compute_message_hash, compute_user_id_hash, verify_message_hash};
+// Import crypto functions (re-exported for tests)
+pub use construct_crypto::compute_message_hash;
 
 pub use batching::AckBatcher;
 pub use cleanup::DeliveryCleanupTask;
 pub use models::{AcknowledgeMessageData, DeliveryPending};
 pub use storage::{DeliveryPendingStorage, KafkaDeliveryStorage, PostgresDeliveryStorage};
-// crypto functions re-exported from construct_server.rs level
 
 /// Delivery ACK operation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
