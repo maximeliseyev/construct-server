@@ -28,7 +28,9 @@ use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id, validate_password_strength, validate_username};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use construct_crypto::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
+use construct_db;
 use construct_error::AppError;
+use crypto_agility::ProtocolVersion;
 
 /// Request body for token refresh
 #[derive(Debug, Deserialize)]
@@ -335,6 +337,24 @@ pub async fn register(
             return Err(AppError::Unknown(e));
         }
     };
+
+    // Phase 5: Set initial protocol version to V1Classic for all new users
+    // This ensures backward compatibility while preparing for post-quantum upgrades
+    if let Err(e) = construct_db::update_user_protocol(
+        &app_context.db_pool,
+        &user.id,
+        ProtocolVersion::V1Classic,
+    )
+    .await
+    {
+        tracing::error!(
+            error = %e,
+            user_id = %user.id,
+            "Failed to set initial protocol version during registration"
+        );
+        // Continue anyway - this is not critical for registration to succeed
+        // The database default will be used (protocol_version=1)
+    }
 
     // Update bundle_data with correct user_id
     let mut updated_bundle = request.key_bundle.clone();

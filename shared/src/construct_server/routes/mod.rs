@@ -19,10 +19,12 @@
 
 pub mod account; // Made public for user-service
 pub mod auth; // Made public for auth-service
+mod capabilities; // Phase 5: Crypto-agility capabilities endpoint
 pub mod csrf; // Made public for gateway middleware
 pub mod extractors; // Made public for auth-service, user-service, messaging-service, and notification-service
 mod federation;
 mod health;
+mod invites; // Phase 5: Dynamic invite tokens (one-time QR codes)
 pub mod keys; // Made public for user-service
 pub mod media; // Made public for messaging-service
 pub mod messages; // Made public for messaging-service
@@ -69,6 +71,14 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
             "/api/v1/users/:id/public-key",
             get(keys::get_public_key_bundle),
         )
+        // Phase 5: Crypto-agility capabilities
+        .route(
+            "/api/v1/users/:id/capabilities",
+            get(capabilities::get_user_capabilities),
+        )
+        // Phase 5: Dynamic invites (one-time contact sharing)
+        .route("/api/v1/invites/generate", post(invites::generate_invite))
+        .route("/api/v1/invites/accept", post(invites::accept_invite))
         // Messages (CSRF protected)
         .route("/messages/send", post(messages::send_message)) // Legacy
         // Phase 2.5: REST API for messages

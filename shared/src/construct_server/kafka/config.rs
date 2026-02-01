@@ -30,12 +30,8 @@ pub fn create_client_config(config: &KafkaConfig) -> Result<ClientConfig> {
     let mut client_config = ClientConfig::new();
     client_config.set("bootstrap.servers", &config.brokers);
 
-    // Default to plaintext if SSL is not explicitly enabled and no SASL.
-    client_config.set("security.protocol", "plaintext");
-
     if config.ssl_enabled {
         info!("Enabling SSL/TLS for Kafka connection");
-        client_config.set("security.protocol", "ssl");
     }
 
     // Configure SASL if a mechanism is provided
@@ -50,12 +46,16 @@ pub fn create_client_config(config: &KafkaConfig) -> Result<ClientConfig> {
             .set("sasl.username", username)
             .set("sasl.password", password);
 
-        // For Confluent Cloud, it's always over SSL.
         if config.ssl_enabled {
             client_config.set("security.protocol", "sasl_ssl");
         } else {
-            // This would be for a local setup with SASL but no SSL
-            client_config.set("security.protocol", "sasl_plaintext");
+            client_config.set("security.protocol", "sasl_plaintext"); // SASL без SSL
+        }
+    } else {
+        if config.ssl_enabled {
+            client_config.set("security.protocol", "ssl"); // Только SSL, без SASL
+        } else {
+            client_config.set("security.protocol", "plaintext"); // Без SSL и SASL
         }
     }
 

@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 # Crypto types
 construct-crypto = { path = "../construct-crypto", features = ["e2ee"] }
+crypto-agility = { path = "../crypto-agility" }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "macros"] }

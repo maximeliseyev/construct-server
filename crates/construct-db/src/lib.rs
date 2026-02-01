@@ -31,6 +31,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bcrypt::{hash, DEFAULT_COST};
 use chrono::{DateTime, Utc};
 use construct_crypto::{BundleData, UploadableKeyBundle};
+use crypto_agility::{CryptoSuite, ProtocolVersion, UserCapabilities, PQPrekeys, InviteTokenRecord};
+use serde_json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres, Transaction};
 use uuid::Uuid;
@@ -446,6 +448,292 @@ pub fn map_db_error(err: sqlx::Error) -> DbError {
         }
         e => DbError::Database(e),
     }
+}
+// ============================================================================
+// Crypto-Agility Functions
+// ============================================================================
+
+/// Get user capabilities (protocol version and supported crypto suites)
+pub async fn get_user_capabilities(pool: &DbPool, user_id: &Uuid) -> Result<Option<UserCapabilities>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        protocol_version: i32,
+        crypto_suites: Option<serde_json::Value>,
+    }
+    
+    let row = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT protocol_version, crypto_suites
+        FROM users
+        WHERE id = $1
+        "#
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => {
+            let protocol_version = match r.protocol_version {
+                1 => ProtocolVersion::V1Classic,
+                2 => ProtocolVersion::V2HybridPQ,
+                v => anyhow::bail!("Unknown protocol version: {}", v),
+            };
+            
+            let crypto_suites: Vec<CryptoSuite> = if let Some(suites_json) = r.crypto_suites {
+                serde_json::from_value(suites_json)
+                    .context("Failed to parse crypto_suites JSON")?
+            } else {
+                vec![CryptoSuite::ClassicX25519] // Default for old users
+            };
+            
+            Ok(Some(UserCapabilities {
+                user_id: *user_id,
+                protocol_version,
+                crypto_suites,
+            }))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Update user's protocol version and crypto suites
+pub async fn update_user_protocol(
+    pool: &DbPool,
+    user_id: &Uuid,
+    protocol_version: ProtocolVersion,
+) -> Result<()> {
+    let version_int = match protocol_version {
+        ProtocolVersion::V1Classic => 1,
+        ProtocolVersion::V2HybridPQ => 2,
+    };
+    
+    let crypto_suites = match protocol_version {
+        ProtocolVersion::V1Classic => vec![CryptoSuite::ClassicX25519],
+        ProtocolVersion::V2HybridPQ => vec![
+            CryptoSuite::HybridKyber1024X25519,
+            CryptoSuite::ClassicX25519,
+        ],
+    };
+    
+    let crypto_suites_json = serde_json::to_value(&crypto_suites)?;
+    
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET protocol_version = $1,
+            crypto_suites = $2
+        WHERE id = $3
+        "#
+    )
+    .bind(version_int)
+    .bind(crypto_suites_json)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+/// Get post-quantum prekeys for a user
+pub async fn get_pq_prekeys(pool: &DbPool, user_id: &Uuid) -> Result<Option<PQPrekeys>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        user_id: Uuid,
+        pq_identity_key: Vec<u8>,
+        pq_kem_key: Vec<u8>,
+        pq_signature: Vec<u8>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+        expires_at: Option<DateTime<Utc>>,
+    }
+    
+    let row = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT user_id, pq_identity_key, pq_kem_key, pq_signature,
+               created_at, updated_at, expires_at
+        FROM pq_prekeys
+        WHERE user_id = $1
+        "#
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => Ok(Some(PQPrekeys {
+            user_id: r.user_id,
+            pq_identity_key: r.pq_identity_key,
+            pq_kem_key: r.pq_kem_key,
+            pq_signature: r.pq_signature,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            expires_at: r.expires_at,
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Store or update post-quantum prekeys for a user
+pub async fn upsert_pq_prekeys(
+    pool: &DbPool,
+    user_id: &Uuid,
+    pq_identity_key: &[u8],
+    pq_kem_key: &[u8],
+    pq_signature: &[u8],
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO pq_prekeys (user_id, pq_identity_key, pq_kem_key, pq_signature)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id) 
+        DO UPDATE SET
+            pq_identity_key = EXCLUDED.pq_identity_key,
+            pq_kem_key = EXCLUDED.pq_kem_key,
+            pq_signature = EXCLUDED.pq_signature,
+            updated_at = NOW()
+        "#
+    )
+    .bind(user_id)
+    .bind(pq_identity_key)
+    .bind(pq_kem_key)
+    .bind(pq_signature)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+// ============================================================================
+// Invite Tokens Functions (Dynamic Contact Sharing)
+// ============================================================================
+
+/// Create a new invite token
+pub async fn create_invite_token(
+    pool: &DbPool,
+    jti: &Uuid,
+    user_id: &Uuid,
+    ephemeral_key: &[u8],
+    signature: &[u8],
+) -> Result<InviteTokenRecord> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        jti: Uuid,
+        user_id: Uuid,
+        ephemeral_key: Vec<u8>,
+        signature: Vec<u8>,
+        created_at: DateTime<Utc>,
+        used_at: Option<DateTime<Utc>>,
+    }
+    
+    let row = sqlx::query_as::<_, Row>(
+        r#"
+        INSERT INTO invite_tokens (jti, user_id, ephemeral_key, signature)
+        VALUES ($1, $2, $3, $4)
+        RETURNING jti, user_id, ephemeral_key, signature, created_at, used_at
+        "#
+    )
+    .bind(jti)
+    .bind(user_id)
+    .bind(ephemeral_key)
+    .bind(signature)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(InviteTokenRecord {
+        jti: row.jti,
+        user_id: row.user_id,
+        ephemeral_key: row.ephemeral_key,
+        signature: row.signature,
+        created_at: row.created_at,
+        used_at: row.used_at,
+    })
+}
+
+/// Get an invite token by jti
+pub async fn get_invite_token(pool: &DbPool, jti: &Uuid) -> Result<Option<InviteTokenRecord>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        jti: Uuid,
+        user_id: Uuid,
+        ephemeral_key: Vec<u8>,
+        signature: Vec<u8>,
+        created_at: DateTime<Utc>,
+        used_at: Option<DateTime<Utc>>,
+    }
+    
+    let row = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT jti, user_id, ephemeral_key, signature, created_at, used_at
+        FROM invite_tokens
+        WHERE jti = $1
+        "#
+    )
+    .bind(jti)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => Ok(Some(InviteTokenRecord {
+            jti: r.jti,
+            user_id: r.user_id,
+            ephemeral_key: r.ephemeral_key,
+            signature: r.signature,
+            created_at: r.created_at,
+            used_at: r.used_at,
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Atomically mark an invite token as used (burn it)
+/// Returns true if the token was successfully burned, false if already used or not found
+pub async fn burn_invite_token(pool: &DbPool, jti: &Uuid) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE invite_tokens
+        SET used_at = NOW()
+        WHERE jti = $1 AND used_at IS NULL
+        "#
+    )
+    .bind(jti)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Check if an invite token is valid (exists and not yet used)
+pub async fn is_invite_token_valid(pool: &DbPool, jti: &Uuid) -> Result<bool> {
+    let result = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM invite_tokens
+            WHERE jti = $1 AND used_at IS NULL
+        )
+        "#
+    )
+    .bind(jti)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(result)
+}
+
+/// Cleanup expired invite tokens (called by background job)
+/// Returns the number of tokens deleted
+pub async fn cleanup_expired_invites(pool: &DbPool) -> Result<u64> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM invite_tokens
+        WHERE created_at < NOW() - INTERVAL '5 minutes'
+          AND used_at IS NULL
+        "#
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
 }
 
 // ============================================================================
