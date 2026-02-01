@@ -17,6 +17,8 @@ members = [
     "crates/construct-db",
     "crates/construct-redis",
     "crates/construct-config",
+    # Phase 5 - Crypto-Agility
+    "crates/construct-crypto-agility",
 ]
 
 # Единая версия для всех пакетов
