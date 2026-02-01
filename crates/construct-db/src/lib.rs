@@ -1,6 +1,30 @@
 //! # Construct Database
 //!
 //! Database utilities and connection pooling for Construct secure messaging server.
+//!
+//! ## Features
+//!
+//! - Connection pooling with configuration
+//! - Transaction helpers
+//! - Common query patterns (exists, count, etc.)
+//! - User management functions
+//! - Key bundle storage (crypto-agile)
+//!
+//! ## Usage
+//!
+//! ```rust,no_run
+//! use construct_db::{create_pool, DbConfig, DbPool};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let config = DbConfig {
+//!     max_connections: 20,
+//!     acquire_timeout_secs: 30,
+//!     idle_timeout_secs: 600,
+//! };
+//! let pool = create_pool("postgresql://localhost/mydb", &config).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -8,11 +32,18 @@ use bcrypt::{hash, DEFAULT_COST};
 use chrono::{DateTime, Utc};
 use construct_crypto::{BundleData, UploadableKeyBundle};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{Pool, Postgres};
+use sqlx::{Pool, Postgres, Transaction};
 use uuid::Uuid;
+
+// ============================================================================
+// Core Types
+// ============================================================================
 
 /// Database connection pool type
 pub type DbPool = Pool<Postgres>;
+
+/// Database transaction type
+pub type DbTransaction<'a> = Transaction<'a, Postgres>;
 
 /// User record from database
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -243,4 +274,204 @@ pub async fn get_key_bundle(
             r.username,
         )
     }))
+}
+
+// ============================================================================
+// Transaction Helpers
+// ============================================================================
+
+/// Begin a new database transaction
+///
+/// Returns a `DbTransaction` that can be used to execute queries.
+/// You must manually call `commit()` or `rollback()`.
+///
+/// # Example
+/// ```rust,no_run
+/// # use construct_db::{DbPool, begin_transaction};
+/// # async fn example(pool: &DbPool) -> anyhow::Result<()> {
+/// let mut tx = begin_transaction(pool).await?;
+/// 
+/// // Perform database operations
+/// sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
+/// 
+/// // Commit on success
+/// tx.commit().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Error Handling Pattern
+/// ```rust,ignore
+/// let mut tx = begin_transaction(&pool).await?;
+/// 
+/// let result: Result<(), anyhow::Error> = async {
+///     sqlx::query("...").execute(&mut *tx).await?;
+///     sqlx::query("...").execute(&mut *tx).await?;
+///     Ok(())
+/// }.await;
+/// 
+/// match result {
+///     Ok(_) => tx.commit().await?,
+///     Err(e) => {
+///         tx.rollback().await?;
+///         return Err(e);
+///     }
+/// }
+/// ```
+pub async fn begin_transaction(pool: &DbPool) -> Result<DbTransaction<'_>> {
+    pool.begin().await.context("Failed to begin transaction")
+}
+
+// ============================================================================
+// Common Query Patterns
+// ============================================================================
+
+/// Check if a record exists
+///
+/// **Note:** Query must already include WHERE clause with $1 placeholder
+///
+/// # Example
+/// ```rust,no_run
+/// # use construct_db::{DbPool, user_exists};
+/// # async fn example(pool: &DbPool, user_id: &uuid::Uuid) -> anyhow::Result<()> {
+/// let exists = user_exists(pool, user_id).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn user_exists(pool: &DbPool, user_id: &Uuid) -> Result<bool> {
+    let result: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .context("Failed to check user existence")?;
+    Ok(result)
+}
+
+/// Count records matching a query
+///
+/// # Example
+/// ```rust,no_run
+/// # use construct_db::{DbPool, count};
+/// # async fn example(pool: &DbPool) -> anyhow::Result<()> {
+/// let total_users = count(pool, "SELECT COUNT(*) FROM users").await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn count(pool: &DbPool, query: &str) -> Result<i64> {
+    let count: i64 = sqlx::query_scalar(query)
+        .fetch_one(pool)
+        .await
+        .context("Failed to count records")?;
+    Ok(count)
+}
+
+/// Count records with a parameter
+pub async fn count_where<'a, T>(pool: &DbPool, query: &'a str, param: T) -> Result<i64>
+where
+    T: sqlx::Encode<'a, Postgres> + sqlx::Type<Postgres> + Send + 'a,
+{
+    let count: i64 = sqlx::query_scalar(query)
+        .bind(param)
+        .fetch_one(pool)
+        .await
+        .context("Failed to count records")?;
+    Ok(count)
+}
+
+// ============================================================================
+// Error Handling Utilities
+// ============================================================================
+
+/// Result type for database operations
+pub type DbResult<T> = Result<T, DbError>;
+
+/// Database error types
+#[derive(Debug, thiserror::Error)]
+pub enum DbError {
+    #[error("Record not found")]
+    NotFound,
+
+    #[error("Unique constraint violation: {0}")]
+    UniqueViolation(String),
+
+    #[error("Foreign key violation: {0}")]
+    ForeignKeyViolation(String),
+
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("Other error: {0}")]
+    Other(#[from] anyhow::Error),
+}
+
+/// Check if an sqlx error is a unique constraint violation
+pub fn is_unique_violation(err: &sqlx::Error) -> bool {
+    if let sqlx::Error::Database(db_err) = err {
+        // PostgreSQL unique violation error code is "23505"
+        if let Some(code) = db_err.code() {
+            return code.as_ref() == "23505";
+        }
+    }
+    false
+}
+
+/// Check if an sqlx error is a foreign key violation
+pub fn is_foreign_key_violation(err: &sqlx::Error) -> bool {
+    if let sqlx::Error::Database(db_err) = err {
+        // PostgreSQL foreign key violation error code is "23503"
+        if let Some(code) = db_err.code() {
+            return code.as_ref() == "23503";
+        }
+    }
+    false
+}
+
+/// Convert sqlx::Error to DbError with better context
+pub fn map_db_error(err: sqlx::Error) -> DbError {
+    match err {
+        sqlx::Error::RowNotFound => DbError::NotFound,
+        ref e if is_unique_violation(e) => {
+            if let sqlx::Error::Database(db_err) = &err {
+                DbError::UniqueViolation(db_err.message().to_string())
+            } else {
+                DbError::Database(err)
+            }
+        }
+        ref e if is_foreign_key_violation(e) => {
+            if let sqlx::Error::Database(db_err) = &err {
+                DbError::ForeignKeyViolation(db_err.message().to_string())
+            } else {
+                DbError::Database(err)
+            }
+        }
+        e => DbError::Database(e),
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_db_error_types() {
+        let err = DbError::NotFound;
+        assert!(matches!(err, DbError::NotFound));
+
+        let err = DbError::UniqueViolation("username".to_string());
+        assert!(err.to_string().contains("Unique constraint"));
+    }
+
+    #[test]
+    fn test_error_code_detection() {
+        // These functions require actual database errors to test properly
+        // Just verify they compile
+        let _ = is_unique_violation;
+        let _ = is_foreign_key_violation;
+    }
 }

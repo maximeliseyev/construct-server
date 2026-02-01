@@ -13,8 +13,11 @@ construct-crypto = { path = "../construct-crypto", features = ["e2ee"] }
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "macros"] }
 
-# Utilities
+# Error handling
 anyhow = "1.0"
+thiserror = "1.0"
+
+# Utilities
 bcrypt = "0.16"
 base64 = "0.22"
 uuid = { version = "1.11", features = ["v4", "serde"] }
