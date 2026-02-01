@@ -53,9 +53,10 @@ fn test_chat_message_validates_local_users() {
         id: Uuid::new_v4().to_string(),
         from: sender.clone(),
         to: recipient.clone(),
-        ephemeral_public_key: vec![0u8; 32], // 32 bytes required
-        message_number: 1,
-        content: "base64encodedcontent".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]), // 32 bytes required
+        message_number: Some(1),
+        content: Some("base64encodedcontent".to_string()),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
 
@@ -72,9 +73,10 @@ fn test_chat_message_validates_federated_users() {
         id: Uuid::new_v4().to_string(),
         from: sender.clone(),
         to: recipient.clone(),
-        ephemeral_public_key: vec![0u8; 32],
-        message_number: 1,
-        content: "base64encodedcontent".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]),
+        message_number: Some(1),
+        content: Some("base64encodedcontent".to_string()),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
 
@@ -92,9 +94,10 @@ fn test_chat_message_validates_mixed_format() {
         id: Uuid::new_v4().to_string(),
         from: local_uuid.clone(),
         to: federated_id.clone(),
-        ephemeral_public_key: vec![0u8; 32],
-        message_number: 1,
-        content: "base64encodedcontent".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]),
+        message_number: Some(1),
+        content: Some("base64encodedcontent".to_string()),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
     assert!(msg1.is_valid(), "Local to federated should be valid");
@@ -104,9 +107,10 @@ fn test_chat_message_validates_mixed_format() {
         id: Uuid::new_v4().to_string(),
         from: federated_id.clone(),
         to: local_uuid.clone(),
-        ephemeral_public_key: vec![0u8; 32],
-        message_number: 1,
-        content: "base64encodedcontent".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]),
+        message_number: Some(1),
+        content: Some("base64encodedcontent".to_string()),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
     assert!(msg2.is_valid(), "Federated to local should be valid");
@@ -164,9 +168,10 @@ fn test_chat_message_rejects_invalid_ids() {
         id: Uuid::new_v4().to_string(),
         from: "not-a-valid-id".to_string(),
         to: valid_uuid.clone(),
-        ephemeral_public_key: vec![0u8; 32],
-        message_number: 1,
-        content: "content".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]),
+        message_number: Some(1),
+        content: Some("content".to_string()),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
     assert!(
@@ -179,9 +184,10 @@ fn test_chat_message_rejects_invalid_ids() {
         id: Uuid::new_v4().to_string(),
         from: valid_uuid.clone(),
         to: "not-a-valid-id".to_string(),
-        ephemeral_public_key: vec![0u8; 32],
-        message_number: 1,
-        content: "content".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]),
+        message_number: Some(1),
+        content: Some("content".to_string()),
         timestamp: chrono::Utc::now().timestamp() as u64,
     };
     assert!(
@@ -199,9 +205,10 @@ fn test_message_serialization_compatibility() {
         id: Uuid::new_v4().to_string(),
         from: Uuid::new_v4().to_string(),
         to: Uuid::new_v4().to_string(),
-        ephemeral_public_key: vec![0u8; 32],
-        message_number: 1,
-        content: "base64content".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]),
+        message_number: Some(1),
+        content: Some("base64content".to_string()),
         timestamp: 1234567890,
     };
 
@@ -223,9 +230,10 @@ fn test_message_serialization_compatibility() {
         id: Uuid::new_v4().to_string(),
         from: format!("{}@local.server", Uuid::new_v4()),
         to: format!("{}@remote.server", Uuid::new_v4()),
-        ephemeral_public_key: vec![0u8; 32],
-        message_number: 1,
-        content: "base64content".to_string(),
+        message_type: construct_types::MessageType::default(),
+        ephemeral_public_key: Some(vec![0u8; 32]),
+        message_number: Some(1),
+        content: Some("base64content".to_string()),
         timestamp: 1234567890,
     };
 
@@ -309,9 +317,10 @@ mod messagepack_format_tests {
             id: Uuid::new_v4().to_string(),
             from: Uuid::new_v4().to_string(),
             to: Uuid::new_v4().to_string(),
-            ephemeral_public_key: vec![0u8; 32],
-            message_number: 1,
-            content: "old_client_message".to_string(),
+            message_type: construct_types::MessageType::default(),
+            ephemeral_public_key: Some(vec![0u8; 32]),
+            message_number: Some(1),
+            content: Some("old_client_message".to_string()),
             timestamp: 1234567890,
         };
 
@@ -341,9 +350,10 @@ mod messagepack_format_tests {
             id: Uuid::new_v4().to_string(),
             from: format!("{}@local.server", Uuid::new_v4()),
             to: format!("{}@remote.server", Uuid::new_v4()),
-            ephemeral_public_key: vec![0u8; 32],
-            message_number: 1,
-            content: "federated_client_message".to_string(),
+            message_type: construct_types::MessageType::default(),
+            ephemeral_public_key: Some(vec![0u8; 32]),
+            message_number: Some(1),
+            content: Some("federated_client_message".to_string()),
             timestamp: 1234567890,
         };
 

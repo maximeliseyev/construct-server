@@ -245,6 +245,10 @@ async fn spawn_messaging_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> S
         Arc::new(MessageProducer::new(&config.kafka).expect("Failed to create kafka producer"));
     let apns_client =
         Arc::new(ApnsClient::new(config.apns.clone()).expect("Failed to create APNs client"));
+    let token_encryption = Arc::new(
+        DeviceTokenEncryption::from_hex(&config.apns.device_token_encryption_key)
+            .expect("Failed to create token encryption"),
+    );
 
     let context = Arc::new(MessagingServiceContext {
         db_pool,
@@ -252,6 +256,7 @@ async fn spawn_messaging_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> S
         auth_manager,
         kafka_producer,
         apns_client,
+        token_encryption,
         config: config.clone(),
         key_management: None,
     });

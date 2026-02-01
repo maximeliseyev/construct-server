@@ -270,12 +270,14 @@ pub async fn send_message(
         "Message sent successfully"
     );
 
-    // Return success
+    // Return success with proper status and camelCase field name
+    // "sent" = message queued in Kafka, not yet delivered to recipient
+    // "delivered" status comes later via delivery acknowledgment system
     Ok((
         StatusCode::OK,
         Json(json!({
-            "status": "ok",
-            "message_id": message_id
+            "status": "sent",
+            "messageId": message_id
         })),
     ))
 }
@@ -871,12 +873,12 @@ pub async fn send_control_message(
         "END_SESSION control message sent successfully"
     );
 
-    // Return success
+    // Return success with proper status and camelCase naming
     Ok((
         StatusCode::OK,
         Json(json!({
-            "status": "ok",
-            "message_id": message_id,
+            "status": "sent",
+            "messageId": message_id,
             "type": "END_SESSION"
         })),
     ))

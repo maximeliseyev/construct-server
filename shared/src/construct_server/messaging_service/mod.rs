@@ -12,7 +12,7 @@
 
 pub mod handlers;
 
-use crate::apns::ApnsClient;
+use crate::apns::{ApnsClient, DeviceTokenEncryption};
 use crate::auth::AuthManager;
 use crate::db::DbPool;
 use construct_config::Config;
@@ -32,6 +32,8 @@ pub struct MessagingServiceContext {
     pub kafka_producer: Arc<MessageProducer>,
     /// APNs client for sending push notifications when messages arrive
     pub apns_client: Arc<ApnsClient>,
+    /// Device token encryption for decrypting tokens before sending push
+    pub token_encryption: Arc<DeviceTokenEncryption>,
     pub config: Arc<Config>,
     pub key_management: Option<Arc<KeyManagementSystem>>,
 }
@@ -40,17 +42,6 @@ impl MessagingServiceContext {
     /// Convert to AppContext for use with existing handlers
     /// This is a temporary adapter until handlers are refactored to use traits
     pub fn to_app_context(&self) -> crate::context::AppContext {
-        use crate::apns::DeviceTokenEncryption;
-
-        // WebSocket clients removed - no longer needed
-
-        // Token encryption for device token management
-        let token_encryption = Arc::new(
-            DeviceTokenEncryption::from_hex(&self.config.apns.device_token_encryption_key).expect(
-                "Failed to create token encryption - APNS_DEVICE_TOKEN_ENCRYPTION_KEY is invalid",
-            ),
-        );
-
         // Create AppContext using builder pattern (Phase 2.8)
         crate::context::AppContext::builder()
             .with_db_pool(self.db_pool.clone())
@@ -58,8 +49,8 @@ impl MessagingServiceContext {
             .with_auth_manager(self.auth_manager.clone())
             .with_config(self.config.clone())
             .with_kafka_producer(self.kafka_producer.clone())
-            .with_apns_client(self.apns_client.clone()) // ✅ Use real APNs client
-            .with_token_encryption(token_encryption)
+            .with_apns_client(self.apns_client.clone())
+            .with_token_encryption(self.token_encryption.clone())
             .with_server_instance_id(uuid::Uuid::new_v4().to_string())
             .build()
             .expect("Failed to build AppContext for messaging service")

@@ -10,7 +10,7 @@
 //
 // ============================================================================
 
-use construct_server_shared::config::{Config, RedisKeyPrefixes};
+use construct_config::{Config, RedisKeyPrefixes};
 use construct_server_shared::delivery_worker::{deduplication, redis_streams, state::WorkerState};
 use redis::cmd;
 use serial_test::serial;
@@ -50,12 +50,12 @@ async fn create_test_state() -> WorkerState {
         delivery_queue_prefix: "test_delivery_queue:".to_string(),
         delivery_poll_interval_ms: 30000,
         rust_log: "info".to_string(),
-        logging: construct_server_shared::config::LoggingConfig {
+        logging: construct_config::LoggingConfig {
             enable_message_metadata: false,
             enable_user_identifiers: false,
             hash_salt: "test-salt-that-is-super-secret".to_string(),
         },
-        security: construct_server_shared::config::SecurityConfig {
+        security: construct_config::SecurityConfig {
             prekey_ttl_days: 30,
             prekey_min_ttl_days: 7,
             prekey_max_ttl_days: 90,
@@ -78,7 +78,7 @@ async fn create_test_state() -> WorkerState {
             metrics_ip_whitelist: vec![],
             metrics_bearer_token: None,
         },
-        kafka: construct_server_shared::config::KafkaConfig {
+        kafka: construct_config::KafkaConfig {
             enabled: false,
             brokers: "".to_string(),
             topic: "".to_string(),
@@ -97,9 +97,9 @@ async fn create_test_state() -> WorkerState {
             producer_delivery_timeout_ms: 0,
             producer_enable_idempotence: false,
         },
-        apns: construct_server_shared::config::ApnsConfig {
+        apns: construct_config::ApnsConfig {
             enabled: false,
-            environment: construct_server_shared::config::ApnsEnvironment::Development,
+            environment: construct_config::ApnsEnvironment::Development,
             key_path: "".to_string(),
             key_id: "".to_string(),
             team_id: "".to_string(),
@@ -108,7 +108,7 @@ async fn create_test_state() -> WorkerState {
             device_token_encryption_key:
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
         },
-        federation: construct_server_shared::config::FederationConfig {
+        federation: construct_config::FederationConfig {
             instance_domain: "test.local".to_string(),
             base_domain: "test.local".to_string(),
             enabled: false,
@@ -121,17 +121,17 @@ async fn create_test_state() -> WorkerState {
                 pinned_certs: std::collections::HashMap::new(),
             },
         },
-        db: construct_server_shared::config::DbConfig {
+        db: construct_config::DbConfig {
             max_connections: 10,
             acquire_timeout_secs: 30,
             idle_timeout_secs: 600,
         },
-        deeplinks: construct_server_shared::config::DeepLinksConfig {
+        deeplinks: construct_config::DeepLinksConfig {
             apple_team_id: "".to_string(),
             android_package_name: "".to_string(),
             android_cert_fingerprint: "".to_string(),
         },
-        worker: construct_server_shared::config::WorkerConfig {
+        worker: construct_config::WorkerConfig {
             shadow_read_enabled: false,
         },
         redis_key_prefixes: RedisKeyPrefixes {
@@ -146,19 +146,19 @@ async fn create_test_state() -> WorkerState {
             connections: "test_connections:".to_string(),
             delivered_direct: "test_delivered_direct:".to_string(),
         },
-        redis_channels: construct_server_shared::config::RedisChannels {
+        redis_channels: construct_config::RedisChannels {
             dead_letter_queue: "test_dlq".to_string(),
             delivery_message: "test_delivery_message".to_string(),
             delivery_notification: "test_delivery_notification".to_string(),
         },
-        media: construct_server_shared::config::MediaConfig {
+        media: construct_config::MediaConfig {
             enabled: false,
             base_url: "".to_string(),
             upload_token_secret: "".to_string(),
             max_file_size: 100 * 1024 * 1024,
             rate_limit_per_hour: 50,
         },
-        microservices: construct_server_shared::config::MicroservicesConfig {
+        microservices: construct_config::MicroservicesConfig {
             enabled: false,
             auth_service_url: "http://localhost:8001".to_string(),
             messaging_service_url: "http://localhost:8002".to_string(),
@@ -166,13 +166,13 @@ async fn create_test_state() -> WorkerState {
             notification_service_url: "http://localhost:8004".to_string(),
             discovery_mode: "static".to_string(),
             service_timeout_secs: 30,
-            circuit_breaker: construct_server_shared::config::CircuitBreakerConfig {
+            circuit_breaker: construct_config::CircuitBreakerConfig {
                 failure_threshold: 5,
                 success_threshold: 2,
                 timeout_secs: 60,
             },
         },
-        csrf: construct_server_shared::config::CsrfConfig {
+        csrf: construct_config::CsrfConfig {
             enabled: false, // Disabled for tests
             secret: "test-csrf-secret-at-least-32-characters".to_string(),
             token_ttl_secs: 3600,

@@ -28,6 +28,7 @@ use construct_config::Config;
 use construct_server_shared::auth::AuthManager;
 use construct_server_shared::db::DbPool;
 use construct_server_shared::kafka::MessageProducer;
+use construct_server_shared::apns::DeviceTokenEncryption;
 use construct_server_shared::messaging_service::MessagingServiceContext;
 use construct_server_shared::queue::MessageQueue;
 use serde_json::json;
@@ -101,6 +102,10 @@ async fn main() -> Result<()> {
         construct_server_shared::apns::ApnsClient::new(config.apns.clone())
             .context("Failed to initialize APNs client")?,
     );
+    let token_encryption = Arc::new(
+        DeviceTokenEncryption::from_hex(&config.apns.device_token_encryption_key)
+            .context("Failed to initialize device token encryption")?,
+    );
     if config.apns.enabled {
         info!("APNs client initialized and ENABLED");
     } else {
@@ -151,7 +156,8 @@ async fn main() -> Result<()> {
         queue,
         auth_manager,
         kafka_producer,
-        apns_client, // ✅ NEW: Add APNs client to context
+        apns_client,
+        token_encryption,
         config: config.clone(),
         key_management,
     });

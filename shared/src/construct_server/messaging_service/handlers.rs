@@ -111,45 +111,33 @@ async fn send_push_notification(
         rows.len()
     );
 
-    // ✅ Decrypt each token before sending
-    // TODO: Implement DeviceTokenEncryption::decrypt()
-    // For now, we'll skip push if encryption not implemented
-    tracing::warn!(
-        recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
-        "Device token decryption not yet implemented - push notifications disabled"
-    );
-
-    // NOTE: Temporarily disabled until encryption is implemented
-    // The schema is ready (device_token_encrypted), but we need to:
-    // 1. Implement DeviceTokenEncryption module
-    // 2. Decrypt tokens before sending to APNs
-    // 3. Re-enable this code
-
-    /* PLACEHOLDER for future implementation:
-
-    use crate::device_token_encryption::DeviceTokenEncryption;
-
+    // Decrypt each token and send push notification
     let mut send_errors = 0;
+    let mut send_success = 0;
+
     for row in &rows {
-        // Decrypt the token
-        let token = match DeviceTokenEncryption::decrypt(&row.device_token_encrypted) {
+        // Decrypt the token using token_encryption from context
+        let token = match context.token_encryption.decrypt(&row.device_token_encrypted) {
             Ok(t) => t,
             Err(e) => {
-                tracing::error!("Failed to decrypt device token: {}", e);
+                tracing::error!(
+                    recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
+                    error = %e,
+                    "Failed to decrypt device token"
+                );
                 send_errors += 1;
                 continue;
             }
         };
 
-        match context.apns_client
-            .send_silent_push(&token, None)
-            .await
-        {
+        // Send silent push to wake up the app
+        match context.apns_client.send_silent_push(&token, None).await {
             Ok(_) => {
                 tracing::debug!(
                     recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
                     "Silent push notification sent successfully"
                 );
+                send_success += 1;
             }
             Err(e) => {
                 send_errors += 1;
@@ -166,11 +154,17 @@ async fn send_push_notification(
         tracing::warn!(
             recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
             total_devices = rows.len(),
+            success = send_success,
             failed = send_errors,
             "Push notification partially failed"
         );
+    } else if send_success > 0 {
+        tracing::debug!(
+            recipient_hash = %log_safe_id(recipient_id, &context.config.logging.hash_salt),
+            total_devices = send_success,
+            "All push notifications sent successfully"
+        );
     }
-    */
 
     Ok(())
 }

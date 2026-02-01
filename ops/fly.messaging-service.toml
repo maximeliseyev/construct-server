@@ -91,7 +91,7 @@ primary_region = 'ams'
 
 # Secrets to set via: make secrets-messaging-service
 # Required secrets:
-# - DATABASE_URL (PostgreSQL - optional, for metadata)
+# - DATABASE_URL (PostgreSQL - for device tokens lookup) - REQUIRED
 # - REDIS_URL (for replay protection, rate limiting, long polling) - REQUIRED
 # - JWT_SECRET (for JWT verification) - REQUIRED (min 32 chars)
 # - JWT_ISSUER (for JWT verification) - Optional (default: "construct-server")
@@ -108,6 +108,13 @@ primary_region = 'ams'
 # - KAFKA_SASL_PASSWORD (if Kafka enabled)
 # - KAFKA_PRODUCER_COMPRESSION=snappy (if Kafka enabled)
 # - KAFKA_PRODUCER_ACKS=all (if Kafka enabled)
-# 
-# Note: APNS_DEVICE_TOKEN_ENCRYPTION_KEY is NOT required for Messaging Service
-# (only Notification Service needs it)
+#
+# APNs Push Notifications (REQUIRED for push to work):
+# - APNS_DEVICE_TOKEN_ENCRYPTION_KEY (64 hex chars) - REQUIRED to decrypt device tokens
+# - APNS_ENABLED=true - Enable push notifications
+# - APNS_ENVIRONMENT=production|development
+# - APNS_KEY_PATH (path to .p8 key file mounted in container)
+# - APNS_KEY_ID (10 chars from Apple Developer)
+# - APNS_TEAM_ID (from Apple Developer)
+# - APNS_BUNDLE_ID (iOS app bundle ID)
+# - APNS_TOPIC (usually same as BUNDLE_ID)
