@@ -65,7 +65,7 @@ rmp-serde = "1.3"
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl", "sasl"] }
 
 # APNs
-a2 = "0.10"
+apns-h2 = "0.11.0-alpha.1"
 
 # Federation and TLS
 native-tls = "0.2.14"

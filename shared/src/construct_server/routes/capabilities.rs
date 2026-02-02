@@ -26,7 +26,7 @@ use construct_error::AppError;
 use crypto_agility::{CryptoSuite, ProtocolVersion};
 
 /// GET /api/v1/users/:id/capabilities
-/// 
+///
 /// Returns the user's crypto capabilities for protocol negotiation.
 /// This is PUBLIC information (no authentication required) because
 /// clients need to know the capabilities before establishing encrypted sessions.

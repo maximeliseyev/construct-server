@@ -12,14 +12,29 @@ impl NegotiatedCapabilities {
     }
 }
 
-pub fn negotiate_protocol(a: &UserCapabilities, b: &UserCapabilities) -> Option<NegotiatedCapabilities> {
+pub fn negotiate_protocol(
+    a: &UserCapabilities,
+    b: &UserCapabilities,
+) -> Option<NegotiatedCapabilities> {
     let protocol_version = match (a.protocol_version, b.protocol_version) {
-        (ProtocolVersion::V1Classic, _) | (_, ProtocolVersion::V1Classic) => ProtocolVersion::V1Classic,
+        (ProtocolVersion::V1Classic, _) | (_, ProtocolVersion::V1Classic) => {
+            ProtocolVersion::V1Classic
+        }
         (ProtocolVersion::V2HybridPQ, ProtocolVersion::V2HybridPQ) => ProtocolVersion::V2HybridPQ,
     };
-    
-    let common: Vec<_> = a.crypto_suites.iter().filter(|&s| b.supports_suite(s)).copied().collect();
-    if common.is_empty() { return None; }
-    
-    Some(NegotiatedCapabilities { protocol_version, crypto_suites: common })
+
+    let common: Vec<_> = a
+        .crypto_suites
+        .iter()
+        .filter(|&s| b.supports_suite(s))
+        .copied()
+        .collect();
+    if common.is_empty() {
+        return None;
+    }
+
+    Some(NegotiatedCapabilities {
+        protocol_version,
+        crypto_suites: common,
+    })
 }

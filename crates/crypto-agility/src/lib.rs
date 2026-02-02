@@ -1,18 +1,18 @@
 //! Construct Crypto-Agility - Protocol version negotiation and crypto suite management
 
-mod protocol;
-mod suites;
 mod capabilities;
-mod negotiation;
 mod error;
 mod invites;
+mod negotiation;
+mod protocol;
+mod suites;
 
-pub use protocol::ProtocolVersion;
-pub use suites::CryptoSuite;
-pub use capabilities::{UserCapabilities, PQPrekeys};
-pub use negotiation::{negotiate_protocol, NegotiatedCapabilities};
+pub use capabilities::{PQPrekeys, UserCapabilities};
 pub use error::{CryptoAgilityError, Result};
 pub use invites::{InviteToken, InviteTokenRecord};
+pub use negotiation::{negotiate_protocol, NegotiatedCapabilities};
+pub use protocol::ProtocolVersion;
+pub use suites::CryptoSuite;
 
-pub use uuid::Uuid;
 pub use chrono::{DateTime, Utc};
+pub use uuid::Uuid;

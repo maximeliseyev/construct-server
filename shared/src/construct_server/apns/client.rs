@@ -1,8 +1,8 @@
-use a2::{
+use anyhow::{Context, Result};
+use apns_h2::{
     Client, ClientConfig, DefaultNotificationBuilder, Endpoint, NotificationBuilder,
     NotificationOptions, Priority,
 };
-use anyhow::{Context, Result};
 use hex;
 use std::fs::File;
 use std::io::BufReader;
@@ -44,9 +44,9 @@ impl ApnsClient {
         // Open .p8 key file
         let key_file = File::open(&self.config.key_path)
             .with_context(|| format!("Failed to open APNs key file: {}", self.config.key_path))?;
-        let key_reader = BufReader::new(key_file);
+        let mut key_reader = BufReader::new(key_file);
 
-        // Create client config
+        // Determine endpoint (production or sandbox)
         let endpoint = match self.config.environment {
             ApnsEnvironment::Production => Endpoint::Production,
             ApnsEnvironment::Development => Endpoint::Sandbox,
@@ -54,8 +54,9 @@ impl ApnsClient {
 
         let client_config = ClientConfig::new(endpoint);
 
+        // Create client using token-based authentication
         let client = Client::token(
-            key_reader,
+            &mut key_reader,
             &self.config.key_id,
             &self.config.team_id,
             client_config,
@@ -117,10 +118,10 @@ impl ApnsClient {
             options.apns_priority = Some(Priority::High);
         }
 
-        // Build and send notification
+        // Build notification
         let builder = DefaultNotificationBuilder::new()
-            .set_title("New Message")
-            .set_body("You have a new message")
+            .title("New Message")
+            .body("You have a new message")
             .build(device_token, options);
 
         // Send notification
@@ -133,20 +134,10 @@ impl ApnsClient {
                 error!("Failed to send APNs notification: {:?}", e);
 
                 // Check if error indicates invalid token
-                match &e {
-                    a2::Error::ResponseError(resp) if resp.code == 400 => {
-                        // SECURITY: Use hash instead of partial token
-                        use crate::apns::DeviceTokenEncryption;
-                        let token_hash_bytes = DeviceTokenEncryption::hash_token(device_token);
-                        let token_hash_hex = hex::encode(&token_hash_bytes);
-                        warn!(
-                            "Device token may be invalid or unregistered: device_token_hash={}",
-                            &token_hash_hex[..8]
-                        );
-                        // TODO: Remove device token from database
-                    }
-                    _ => {}
-                }
+                // Note: apns-h2 error handling - check ErrorReason for BadDeviceToken
+                warn!("APNs error (may indicate invalid token): {}", e);
+                // TODO: Parse error response and handle invalid tokens
+                // TODO: Check if e contains ErrorReason::BadDeviceToken
 
                 Err(e.into())
             }

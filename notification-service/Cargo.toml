@@ -33,4 +33,4 @@ zeroize = {workspace = true}
 prometheus = {workspace = true}
 
 # Notification specific
-a2 = "0.10"
+apns-h2 = "0.11.0-alpha.1"

@@ -17,12 +17,7 @@
 //
 // ============================================================================
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -50,13 +45,13 @@ pub struct GenerateInviteRequest {
 pub struct GenerateInviteResponse {
     /// Unique invite ID (jti)
     pub jti: Uuid,
-    
+
     /// Server FQDN for the invite
     pub server: String,
-    
+
     /// Unix timestamp when this invite expires
     pub expires_at: i64,
-    
+
     /// TTL in seconds
     pub ttl_seconds: i64,
 }
@@ -74,25 +69,25 @@ pub struct AcceptInviteRequest {
 pub struct AcceptInviteResponse {
     /// User ID that was added
     pub user_id: Uuid,
-    
+
     /// Server where the user is located
     pub server: String,
-    
+
     /// Success message
     pub message: String,
 }
 
 /// POST /api/v1/invites/generate
-/// 
+///
 /// Generate a new one-time invite token for contact sharing.
-/// 
+///
 /// The client will:
 /// 1. Receive jti and server from this endpoint
 /// 2. Generate ephemeral X25519 keypair
 /// 3. Sign the invite object with Identity Key
 /// 4. Encode as Base64/MessagePack
 /// 5. Display as QR or URL: konstruct.cc/add#{token}
-/// 
+///
 /// Security:
 /// - Requires JWT authentication
 /// - Stores jti in database for one-time use tracking
@@ -169,9 +164,9 @@ pub async fn generate_invite(
 }
 
 /// POST /api/v1/invites/accept
-/// 
+///
 /// Accept an invite token from a QR code or deep link.
-/// 
+///
 /// Validation flow:
 /// 1. Verify timestamp (reject if > TTL old)
 /// 2. Verify timestamp not in future (clock skew attack)
@@ -179,7 +174,7 @@ pub async fn generate_invite(
 /// 4. Verify Ed25519 signature
 /// 5. Check jti in database (atomic burn)
 /// 6. Add user to contacts
-/// 
+///
 /// For federated users, this will trigger an S2S request to the user's server
 /// to validate and burn the jti.
 pub async fn accept_invite(
@@ -209,9 +204,7 @@ pub async fn accept_invite(
             ts = invite.ts,
             "Invite token has future timestamp"
         );
-        return Err(AppError::Validation(
-            "Invalid invite timestamp".to_string(),
-        ));
+        return Err(AppError::Validation("Invalid invite timestamp".to_string()));
     }
 
     // 3. TODO: Fetch user's public Identity Key and verify signature

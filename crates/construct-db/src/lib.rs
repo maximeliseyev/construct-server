@@ -31,7 +31,9 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bcrypt::{hash, DEFAULT_COST};
 use chrono::{DateTime, Utc};
 use construct_crypto::{BundleData, UploadableKeyBundle};
-use crypto_agility::{CryptoSuite, ProtocolVersion, UserCapabilities, PQPrekeys, InviteTokenRecord};
+use crypto_agility::{
+    CryptoSuite, InviteTokenRecord, PQPrekeys, ProtocolVersion, UserCapabilities,
+};
 use serde_json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres, Transaction};
@@ -454,19 +456,22 @@ pub fn map_db_error(err: sqlx::Error) -> DbError {
 // ============================================================================
 
 /// Get user capabilities (protocol version and supported crypto suites)
-pub async fn get_user_capabilities(pool: &DbPool, user_id: &Uuid) -> Result<Option<UserCapabilities>> {
+pub async fn get_user_capabilities(
+    pool: &DbPool,
+    user_id: &Uuid,
+) -> Result<Option<UserCapabilities>> {
     #[derive(sqlx::FromRow)]
     struct Row {
         protocol_version: i32,
         crypto_suites: Option<serde_json::Value>,
     }
-    
+
     let row = sqlx::query_as::<_, Row>(
         r#"
         SELECT protocol_version, crypto_suites
         FROM users
         WHERE id = $1
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -479,14 +484,13 @@ pub async fn get_user_capabilities(pool: &DbPool, user_id: &Uuid) -> Result<Opti
                 2 => ProtocolVersion::V2HybridPQ,
                 v => anyhow::bail!("Unknown protocol version: {}", v),
             };
-            
+
             let crypto_suites: Vec<CryptoSuite> = if let Some(suites_json) = r.crypto_suites {
-                serde_json::from_value(suites_json)
-                    .context("Failed to parse crypto_suites JSON")?
+                serde_json::from_value(suites_json).context("Failed to parse crypto_suites JSON")?
             } else {
                 vec![CryptoSuite::ClassicX25519] // Default for old users
             };
-            
+
             Ok(Some(UserCapabilities {
                 user_id: *user_id,
                 protocol_version,
@@ -507,7 +511,7 @@ pub async fn update_user_protocol(
         ProtocolVersion::V1Classic => 1,
         ProtocolVersion::V2HybridPQ => 2,
     };
-    
+
     let crypto_suites = match protocol_version {
         ProtocolVersion::V1Classic => vec![CryptoSuite::ClassicX25519],
         ProtocolVersion::V2HybridPQ => vec![
@@ -515,23 +519,23 @@ pub async fn update_user_protocol(
             CryptoSuite::ClassicX25519,
         ],
     };
-    
+
     let crypto_suites_json = serde_json::to_value(&crypto_suites)?;
-    
+
     sqlx::query(
         r#"
         UPDATE users
         SET protocol_version = $1,
             crypto_suites = $2
         WHERE id = $3
-        "#
+        "#,
     )
     .bind(version_int)
     .bind(crypto_suites_json)
     .bind(user_id)
     .execute(pool)
     .await?;
-    
+
     Ok(())
 }
 
@@ -547,14 +551,14 @@ pub async fn get_pq_prekeys(pool: &DbPool, user_id: &Uuid) -> Result<Option<PQPr
         updated_at: DateTime<Utc>,
         expires_at: Option<DateTime<Utc>>,
     }
-    
+
     let row = sqlx::query_as::<_, Row>(
         r#"
         SELECT user_id, pq_identity_key, pq_kem_key, pq_signature,
                created_at, updated_at, expires_at
         FROM pq_prekeys
         WHERE user_id = $1
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -592,7 +596,7 @@ pub async fn upsert_pq_prekeys(
             pq_kem_key = EXCLUDED.pq_kem_key,
             pq_signature = EXCLUDED.pq_signature,
             updated_at = NOW()
-        "#
+        "#,
     )
     .bind(user_id)
     .bind(pq_identity_key)
@@ -600,7 +604,7 @@ pub async fn upsert_pq_prekeys(
     .bind(pq_signature)
     .execute(pool)
     .await?;
-    
+
     Ok(())
 }
 
@@ -625,13 +629,13 @@ pub async fn create_invite_token(
         created_at: DateTime<Utc>,
         used_at: Option<DateTime<Utc>>,
     }
-    
+
     let row = sqlx::query_as::<_, Row>(
         r#"
         INSERT INTO invite_tokens (jti, user_id, ephemeral_key, signature)
         VALUES ($1, $2, $3, $4)
         RETURNING jti, user_id, ephemeral_key, signature, created_at, used_at
-        "#
+        "#,
     )
     .bind(jti)
     .bind(user_id)
@@ -661,13 +665,13 @@ pub async fn get_invite_token(pool: &DbPool, jti: &Uuid) -> Result<Option<Invite
         created_at: DateTime<Utc>,
         used_at: Option<DateTime<Utc>>,
     }
-    
+
     let row = sqlx::query_as::<_, Row>(
         r#"
         SELECT jti, user_id, ephemeral_key, signature, created_at, used_at
         FROM invite_tokens
         WHERE jti = $1
-        "#
+        "#,
     )
     .bind(jti)
     .fetch_optional(pool)
@@ -694,7 +698,7 @@ pub async fn burn_invite_token(pool: &DbPool, jti: &Uuid) -> Result<bool> {
         UPDATE invite_tokens
         SET used_at = NOW()
         WHERE jti = $1 AND used_at IS NULL
-        "#
+        "#,
     )
     .bind(jti)
     .execute(pool)
@@ -711,7 +715,7 @@ pub async fn is_invite_token_valid(pool: &DbPool, jti: &Uuid) -> Result<bool> {
             SELECT 1 FROM invite_tokens
             WHERE jti = $1 AND used_at IS NULL
         )
-        "#
+        "#,
     )
     .bind(jti)
     .fetch_one(pool)
@@ -728,7 +732,7 @@ pub async fn cleanup_expired_invites(pool: &DbPool) -> Result<u64> {
         DELETE FROM invite_tokens
         WHERE created_at < NOW() - INTERVAL '5 minutes'
           AND used_at IS NULL
-        "#
+        "#,
     )
     .execute(pool)
     .await?;
