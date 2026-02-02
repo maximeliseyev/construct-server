@@ -38,7 +38,7 @@ impl<'a> RateLimiter<'a> {
         let count: u32 = script
             .key(&key)
             .arg(SECONDS_PER_HOUR)
-            .invoke_async(self.client)
+            .invoke_async(self.client.connection_mut())
             .await?;
 
         Ok(count)
@@ -53,11 +53,11 @@ impl<'a> RateLimiter<'a> {
         let key = format!("rate:ip:{}", normalized_ip);
 
         // Increment counter
-        let count: u32 = self.client.incr(&key, 1).await?;
+        let count: u32 = self.client.incr(&key).await? as u32;
 
         // Set TTL only on first increment (1 hour window)
         if count == 1 {
-            let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
+            let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_HOUR).await?;
         }
 
         Ok(count)
@@ -96,7 +96,7 @@ impl<'a> RateLimiter<'a> {
         let count: u32 = script
             .key(&key)
             .arg(ttl_seconds)
-            .invoke_async(self.client)
+            .invoke_async(self.client.connection_mut())
             .await?;
 
         Ok(count)
@@ -105,10 +105,10 @@ impl<'a> RateLimiter<'a> {
     pub(crate) async fn increment_key_update_count(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:key:{}", user_id);
 
-        let count: u32 = self.client.incr(&key, 1).await?;
+        let count: u32 = self.client.incr(&key).await? as u32;
 
         if count == 1 {
-            let _: () = self.client.expire(&key, SECONDS_PER_DAY).await?;
+            let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_DAY).await?;
         }
 
         Ok(count)
@@ -119,10 +119,10 @@ impl<'a> RateLimiter<'a> {
     pub(crate) async fn increment_password_change_count(&mut self, user_id: &str) -> Result<u32> {
         let key = format!("rate:pwd:{}", user_id);
 
-        let count: u32 = self.client.incr(&key, 1).await?;
+        let count: u32 = self.client.incr(&key).await? as u32;
 
         if count == 1 {
-            let _: () = self.client.expire(&key, SECONDS_PER_DAY).await?;
+            let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_DAY).await?;
         }
 
         Ok(count)
@@ -153,7 +153,7 @@ impl<'a> RateLimiter<'a> {
         let count: i64 = script
             .key(&full_key)
             .arg(ttl_seconds)
-            .invoke_async(self.client)
+            .invoke_async(self.client.connection_mut())
             .await?;
 
         Ok(count)
@@ -164,12 +164,12 @@ impl<'a> RateLimiter<'a> {
     pub(crate) async fn increment_failed_login_count(&mut self, username: &str) -> Result<u32> {
         let key = format!("rate:login:{}", username);
 
-        let count: u32 = self.client.incr(&key, 1).await?;
+        let count: u32 = self.client.incr(&key).await? as u32;
 
         // 15 minutes = 900 seconds
         const FAILED_LOGIN_WINDOW_SECS: i64 = 900;
         if count == 1 {
-            let _: () = self.client.expire(&key, FAILED_LOGIN_WINDOW_SECS).await?;
+            let _: bool = self.client.connection_mut().expire(&key, FAILED_LOGIN_WINDOW_SECS).await?;
         }
 
         Ok(count)
@@ -178,7 +178,7 @@ impl<'a> RateLimiter<'a> {
     /// Resets failed login counter after successful login
     pub(crate) async fn reset_failed_login_count(&mut self, username: &str) -> Result<()> {
         let key = format!("rate:login:{}", username);
-        let _: () = self.client.del(&key).await?;
+        let _: i64 = self.client.del(&key).await?;
         Ok(())
     }
 

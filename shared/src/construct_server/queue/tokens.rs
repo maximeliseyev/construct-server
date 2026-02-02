@@ -43,7 +43,7 @@ impl<'a> TokenManager<'a> {
     /// Revoke refresh token (soft logout)
     pub(crate) async fn revoke_refresh_token(&mut self, jti: &str) -> Result<()> {
         let key = format!("refresh_token:{}", jti);
-        let _: () = self.client.del(&key).await?;
+        let _: i64 = self.client.del(&key).await?;
         Ok(())
     }
 
@@ -55,14 +55,14 @@ impl<'a> TokenManager<'a> {
 
         // Note: KEYS can block Redis, but for token revocation it's acceptable
         // In high-scale production, maintain a reverse index: user_tokens:{user_id} -> Set{jti}
-        let keys: Vec<String> = self.client.keys(pattern).await?;
+        let keys: Vec<String> = self.client.connection_mut().keys(pattern).await?;
 
         let mut deleted_count = 0;
         for key in keys {
             // Check if this token belongs to the user
             let stored_user_id: Option<String> = self.client.get(&key).await?;
             if stored_user_id.as_deref() == Some(user_id) {
-                let _: () = self.client.del(&key).await?;
+                let _: i64 = self.client.del(&key).await?;
                 deleted_count += 1;
             }
         }

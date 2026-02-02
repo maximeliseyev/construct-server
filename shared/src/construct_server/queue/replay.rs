@@ -126,7 +126,7 @@ impl<'a> ReplayProtection<'a> {
             .key(&key)
             .arg(max_age_seconds)
             .arg(timestamp.to_string())
-            .invoke_async(self.client)
+            .invoke_async(self.client.connection_mut())
             .await?;
 
         if result == 0 {

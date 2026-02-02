@@ -56,7 +56,7 @@ impl<'a> CacheManager<'a> {
 
     pub(crate) async fn invalidate_key_bundle_cache(&mut self, user_id: &str) -> Result<()> {
         let key = format!("key_bundle:{}", user_id);
-        let _: () = self.client.del(&key).await?;
+        let _: i64 = self.client.del(&key).await?;
         tracing::debug!(user_id = %user_id, "Invalidated key bundle cache");
         Ok(())
     }

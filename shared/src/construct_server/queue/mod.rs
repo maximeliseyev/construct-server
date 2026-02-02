@@ -419,25 +419,31 @@ impl MessageQueue {
     #[allow(dead_code)]
     pub async fn track_connection(&mut self, user_id: &str, connection_id: &str) -> Result<u32> {
         use construct_config::SECONDS_PER_HOUR;
+        use redis::AsyncCommands;
+        
         let key = format!("connections:{}", user_id);
-        let _: () = self.client.sadd(&key, connection_id).await?;
-        let _: () = self.client.expire(&key, SECONDS_PER_HOUR).await?;
+        let _: i64 = self.client.connection_mut().sadd(&key, connection_id).await?;
+        let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_HOUR).await?;
 
-        let count: u32 = self.client.scard(&key).await?;
+        let count: u32 = self.client.connection_mut().scard(&key).await?;
         Ok(count)
     }
 
     #[allow(dead_code)]
     pub async fn untrack_connection(&mut self, user_id: &str, connection_id: &str) -> Result<()> {
+        use redis::AsyncCommands;
+        
         let key = format!("connections:{}", user_id);
-        let _: () = self.client.srem(&key, connection_id).await?;
+        let _: i64 = self.client.connection_mut().srem(&key, connection_id).await?;
         Ok(())
     }
 
     #[allow(dead_code)]
     pub async fn get_active_connections(&mut self, user_id: &str) -> Result<u32> {
+        use redis::AsyncCommands;
+        
         let key = format!("connections:{}", user_id);
-        let count: u32 = self.client.scard(&key).await?;
+        let count: u32 = self.client.connection_mut().scard(&key).await?;
         Ok(count)
     }
 
@@ -446,7 +452,11 @@ impl MessageQueue {
     // ============================================================================
 
     pub async fn ping(&mut self) -> Result<()> {
-        let _: () = redis::cmd("PING").query_async(&mut self.client).await?;
+        use redis::AsyncCommands;
+        
+        let _: () = redis::cmd("PING")
+            .query_async(self.client.connection_mut())
+            .await?;
         Ok(())
     }
 
