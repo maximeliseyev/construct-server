@@ -41,7 +41,7 @@ mod client;
 mod streams;
 
 pub use client::RedisClient;
-pub use streams::{StreamEntry, StreamReadOptions};
+pub use streams::{StreamEntry, StreamEntryBinary, StreamReadOptions};
 
 // Re-export commonly used types
 pub use redis::RedisError;

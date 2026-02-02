@@ -2,20 +2,22 @@
 // Replay Protection
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
+// Phase 4.6: Migrated to construct-redis
 
 use anyhow::Result;
 use construct_config::SECONDS_PER_DAY;
+use construct_redis::RedisClient;
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 
 pub(crate) struct ReplayProtection<'a> {
-    client: &'a mut redis::aio::ConnectionManager,
+    client: &'a mut RedisClient,
     msg_hash_prefix: String,
 }
 
 impl<'a> ReplayProtection<'a> {
     pub(crate) fn new(
-        client: &'a mut redis::aio::ConnectionManager,
+        client: &'a mut RedisClient,
         msg_hash_prefix: String,
     ) -> Self {
         Self {

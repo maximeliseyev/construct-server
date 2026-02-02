@@ -2,16 +2,18 @@
 // Token Management
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
+// Phase 4.6: Migrated to construct-redis
 
 use anyhow::Result;
+use construct_redis::RedisClient;
 use redis::AsyncCommands;
 
 pub(crate) struct TokenManager<'a> {
-    client: &'a mut redis::aio::ConnectionManager,
+    client: &'a mut RedisClient,
 }
 
 impl<'a> TokenManager<'a> {
-    pub(crate) fn new(client: &'a mut redis::aio::ConnectionManager) -> Self {
+    pub(crate) fn new(client: &'a mut RedisClient) -> Self {
         Self { client }
     }
 

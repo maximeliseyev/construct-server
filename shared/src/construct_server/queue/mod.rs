@@ -23,9 +23,8 @@ mod tokens;
 
 use anyhow::Result;
 use construct_config::{Config, SECONDS_PER_DAY};
+use construct_redis::RedisClient;
 use construct_types::ChatMessage;
-// Note: redis::aio::ConnectionManager is available via the "connection-manager" feature
-// It's used the same way in delivery_ack/storage.rs
 use redis::AsyncCommands;
 
 /// Message Queue - Redis-only Storage (No Database Persistence)
@@ -44,9 +43,7 @@ use redis::AsyncCommands;
 /// 4. After delivery    → Messages DELETED from Redis immediately
 /// 5. After TTL expires → Undelivered messages AUTO-DELETED by Redis
 pub struct MessageQueue {
-    // Note: redis::aio::ConnectionManager is available when "connection-manager" feature is enabled
-    // This is the same type used in delivery_ack/storage.rs
-    client: redis::aio::ConnectionManager,
+    client: RedisClient,
     /// TTL for queued messages in seconds (configured via message_ttl_days)
     /// After this period, undelivered messages are automatically deleted by Redis
     message_ttl_seconds: i64,
@@ -58,7 +55,7 @@ pub struct MessageQueue {
 
 impl MessageQueue {
     pub async fn new(config: &Config) -> Result<Self> {
-        tracing::debug!("Opening Redis client...");
+        tracing::debug!("Connecting to Redis via construct-redis...");
 
         // Parse Redis URL to check if TLS is required
         let is_tls = config.redis_url.starts_with("rediss://");
@@ -68,12 +65,8 @@ impl MessageQueue {
             tracing::info!("Redis TLS not enabled (redis://)");
         }
 
-        let client = redis::Client::open(config.redis_url.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to parse Redis URL: {}", e))?;
-
-        tracing::debug!("Getting Redis connection manager...");
-        let conn = client
-            .get_connection_manager()
+        // Use RedisClient from construct-redis
+        let client = RedisClient::connect(&config.redis_url)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {}", e))?;
 
@@ -84,7 +77,7 @@ impl MessageQueue {
             message_ttl_seconds
         );
         Ok(Self {
-            client: conn,
+            client,
             message_ttl_seconds,
             offline_queue_prefix: config.offline_queue_prefix.clone(),
             delivery_queue_prefix: config.delivery_queue_prefix.clone(),
@@ -103,8 +96,8 @@ impl MessageQueue {
     pub async fn enqueue_message(&mut self, user_id: &str, message: &ChatMessage) -> Result<()> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = rmp_serde::encode::to_vec_named(message)?;
-        let _: () = self.client.lpush(&key, message_bytes).await?;
-        let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
+        let _: i64 = self.client.lpush(&key, message_bytes).await?;
+        let _: bool = self.client.expire(&key, self.message_ttl_seconds).await?;
         tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message (DEPRECATED - use Kafka)");
         Ok(())
     }
@@ -116,8 +109,8 @@ impl MessageQueue {
     pub async fn enqueue_message_raw(&mut self, user_id: &str, message_json: &str) -> Result<()> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
         let message_bytes = message_json.as_bytes();
-        let _: () = self.client.lpush(&key, message_bytes).await?;
-        let _: () = self.client.expire(&key, self.message_ttl_seconds).await?;
+        let _: i64 = self.client.lpush(&key, message_bytes).await?;
+        let _: bool = self.client.expire(&key, self.message_ttl_seconds).await?;
         tracing::info!(user_id = %user_id, "Queued message v3 (DEPRECATED - use Kafka)");
         Ok(())
     }
@@ -131,12 +124,12 @@ impl MessageQueue {
     #[allow(dead_code)]
     pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
-        let messages: Vec<Vec<u8>> = self.client.lrange(&key, 0, -1).await?;
+        let messages: Vec<Vec<u8>> = self.client.connection_mut().lrange(&key, 0, -1).await?;
         let total_messages = messages.len();
         if total_messages == 0 {
             return Ok(Vec::new());
         }
-        let _: () = self.client.del(&key).await?;
+        let _: i64 = self.client.del(&key).await?;
         let mut result = Vec::new();
         for msg_bytes in messages {
             match rmp_serde::from_slice::<ChatMessage>(&msg_bytes) {
@@ -164,7 +157,7 @@ impl MessageQueue {
     #[allow(dead_code)]
     pub async fn has_messages(&mut self, user_id: &str) -> Result<bool> {
         let key = format!("{}{}", self.offline_queue_prefix, user_id);
-        let count: i32 = self.client.llen(&key).await?;
+        let count: i64 = self.client.llen(&key).await?;
         Ok(count > 0)
     }
 

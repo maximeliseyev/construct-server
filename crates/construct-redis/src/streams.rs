@@ -4,11 +4,19 @@ use crate::{RedisClient, Result};
 use redis::{streams::StreamReadReply, AsyncCommands, Value};
 use std::collections::HashMap;
 
-/// Entry in a Redis Stream
+/// Entry in a Redis Stream (string values)
 #[derive(Debug, Clone)]
 pub struct StreamEntry {
     pub id: String,
     pub fields: HashMap<String, String>,
+}
+
+/// Entry in a Redis Stream (binary values)
+/// Used for MessagePack and other binary serialization formats
+#[derive(Debug, Clone)]
+pub struct StreamEntryBinary {
+    pub id: String,
+    pub fields: HashMap<String, Vec<u8>>,
 }
 
 /// Options for XREAD command
@@ -45,7 +53,7 @@ impl RedisClient {
         self.connection_mut().xadd(stream_key, id, fields).await
     }
 
-    /// XREAD - Read from one or more streams
+    /// XREAD - Read from one or more streams (string values)
     ///
     /// `streams` is a list of (key, id) pairs
     pub async fn xread(
@@ -98,6 +106,69 @@ impl RedisClient {
                 }
 
                 entries.push(StreamEntry {
+                    id: stream_id.id,
+                    fields,
+                });
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// XREAD - Read from one or more streams (binary values)
+    ///
+    /// Returns raw bytes for each field value. Use this for MessagePack and other binary formats.
+    ///
+    /// `streams` is a list of (key, id) pairs
+    pub async fn xread_binary(
+        &mut self,
+        streams: &[(&str, &str)],
+        options: StreamReadOptions,
+    ) -> Result<Vec<StreamEntryBinary>> {
+        let mut cmd = redis::cmd("XREAD");
+
+        // Add options
+        if let Some(count) = options.count {
+            cmd.arg("COUNT").arg(count);
+        }
+        if let Some(block_ms) = options.block {
+            cmd.arg("BLOCK").arg(block_ms);
+        }
+
+        // Add STREAMS keyword
+        cmd.arg("STREAMS");
+
+        // Add stream keys
+        for (key, _) in streams {
+            cmd.arg(*key);
+        }
+
+        // Add IDs
+        for (_, id) in streams {
+            cmd.arg(*id);
+        }
+
+        // Execute
+        let reply: StreamReadReply = cmd.query_async(self.connection_mut()).await?;
+
+        // Convert to binary format
+        let mut entries = Vec::new();
+        for stream_key in reply.keys {
+            for stream_id in stream_key.ids {
+                let mut fields = HashMap::new();
+
+                // Parse field map - keep as bytes
+                for (key, value) in stream_id.map.iter() {
+                    let value_bytes = match value {
+                        Value::BulkString(bytes) => bytes.clone(),
+                        Value::SimpleString(s) => s.as_bytes().to_vec(),
+                        Value::Int(i) => i.to_string().into_bytes(),
+                        _ => continue, // Skip unsupported types
+                    };
+                    fields.insert(key.clone(), value_bytes);
+                }
+
+                entries.push(StreamEntryBinary {
                     id: stream_id.id,
                     fields,
                 });

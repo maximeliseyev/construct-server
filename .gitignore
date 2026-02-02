@@ -1,6 +1,7 @@
 # Rust
 Cargo.lock
 .cargo/
+!.cargo/audit.toml
 target/
 
 rpk

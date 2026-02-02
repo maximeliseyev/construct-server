@@ -2,21 +2,23 @@
 // Message Delivery Operations
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
+// Phase 4.6: Migrated to construct-redis for clean architecture
 
 use anyhow::{Context, Result};
 use construct_config::{Config, SECONDS_PER_DAY, SECONDS_PER_HOUR};
+use construct_redis::{RedisClient, StreamReadOptions};
 use redis::AsyncCommands;
 use std::collections::HashMap;
 
 pub(crate) struct DeliveryManager<'a> {
-    client: &'a mut redis::aio::ConnectionManager,
+    client: &'a mut RedisClient,
     config: &'a Config,
     delivery_queue_prefix: String,
 }
 
 impl<'a> DeliveryManager<'a> {
     pub(crate) fn new(
-        client: &'a mut redis::aio::ConnectionManager,
+        client: &'a mut RedisClient,
         config: &'a Config,
         delivery_queue_prefix: String,
     ) -> Self {
@@ -68,64 +70,54 @@ impl<'a> DeliveryManager<'a> {
     ) -> Result<Vec<(String, HashMap<String, Vec<u8>>)>> {
         let start_id = since_id.unwrap_or("0");
 
-        // XREAD COUNT count STREAMS stream_key start_id
-        type StreamResult = Vec<(String, Vec<(String, Vec<(String, Vec<u8>)>)>)>;
-        let result: redis::RedisResult<StreamResult> = redis::cmd("XREAD")
-            .arg("COUNT")
-            .arg(count as i64)
-            .arg("STREAMS")
-            .arg(stream_key)
-            .arg(start_id)
-            .query_async(self.client)
-            .await;
+        // Use construct-redis xread_binary for binary data (MessagePack)
+        let options = StreamReadOptions {
+            block: None,
+            count: Some(count as u64),
+        };
 
-        match result {
-            Ok(streams) => {
-                if streams.is_empty() {
-                    return Ok(vec![]);
-                }
-
-                // Parse result: [(stream_key, [(message_id, [(field, value), ...]), ...])]
-                let messages: Vec<(String, HashMap<String, Vec<u8>>)> = streams
-                    .into_iter()
-                    .flat_map(|(_, messages)| {
-                        messages.into_iter().map(|(id, fields)| {
-                            let field_map: HashMap<String, Vec<u8>> = fields.into_iter().collect();
-                            (id, field_map)
-                        })
-                    })
-                    .collect();
-
-                // After reading, delete messages from the stream if since_id was provided
-                // This means the client is acknowledging receipt up to this point
-                if since_id.is_some() && !messages.is_empty() {
-                    let message_ids_to_delete: Vec<String> =
-                        messages.iter().map(|(id, _)| id.clone()).collect();
-                    let _: () = redis::cmd("XDEL")
-                        .arg(stream_key)
-                        .arg(message_ids_to_delete) // XDEL takes a list of IDs
-                        .query_async(self.client)
-                        .await
-                        .context("Failed to delete messages from stream after reading")?;
-                    tracing::debug!(
-                        stream_key = %stream_key,
-                        deleted_count = messages.len(), // Use messages.len() as we're deleting all that were read
-                        "Deleted messages from Redis stream after client acknowledged"
-                    );
-                }
-                Ok(messages)
-            }
+        let entries = match self.client.xread_binary(&[(stream_key, start_id)], options).await {
+            Ok(entries) => entries,
             Err(e) => {
                 // Check if it's a "stream doesn't exist" error
                 let err_str = e.to_string();
                 if err_str.contains("no such key") || err_str.contains("WRONGTYPE") {
                     // Stream doesn't exist or is empty
-                    Ok(vec![])
+                    return Ok(vec![]);
                 } else {
-                    Err(anyhow::anyhow!("Failed to read stream: {}", e))
+                    return Err(anyhow::anyhow!("Failed to read stream: {}", e));
                 }
             }
+        };
+
+        if entries.is_empty() {
+            return Ok(vec![]);
         }
+
+        // Convert StreamEntryBinary to Vec<(String, HashMap<String, Vec<u8>>)>
+        let messages: Vec<(String, HashMap<String, Vec<u8>>)> = entries
+            .into_iter()
+            .map(|entry| (entry.id, entry.fields))
+            .collect();
+
+        // After reading, delete messages from the stream if since_id was provided
+        // This means the client is acknowledging receipt up to this point
+        if since_id.is_some() && !messages.is_empty() {
+            let message_ids: Vec<&str> = messages.iter().map(|(id, _)| id.as_str()).collect();
+            let deleted_count = self
+                .client
+                .xdel(stream_key, &message_ids)
+                .await
+                .context("Failed to delete messages from stream after reading")?;
+            
+            tracing::debug!(
+                stream_key = %stream_key,
+                deleted_count,
+                "Deleted messages from Redis stream after client acknowledged"
+            );
+        }
+
+        Ok(messages)
     }
 
     /// Parse stream message fields into KafkaMessageEnvelope
@@ -199,11 +191,8 @@ impl<'a> DeliveryManager<'a> {
         // Set with TTL matching session TTL from config
         let ttl_seconds = self.config.session_ttl_days * SECONDS_PER_DAY;
 
-        let _: () = redis::cmd("SETEX")
-            .arg(&key)
-            .arg(ttl_seconds)
-            .arg(server_instance_id)
-            .query_async(self.client)
+        self.client
+            .set_ex(&key, server_instance_id, ttl_seconds as u64)
             .await?;
 
         tracing::debug!(
@@ -221,7 +210,7 @@ impl<'a> DeliveryManager<'a> {
             "{}{}:server_instance_id",
             self.config.redis_key_prefixes.user, user_id
         );
-        let _: () = self.client.del(&key).await?;
+        self.client.del(&key).await?;
 
         tracing::debug!(
             user_id = %user_id,
@@ -288,7 +277,7 @@ impl<'a> DeliveryManager<'a> {
         let message_count: usize = script
             .key(&offline_queue_key)
             .key(&delivery_queue_key)
-            .invoke_async(self.client)
+            .invoke_async(self.client.connection_mut())
             .await?;
 
         if message_count > 0 {
@@ -318,6 +307,7 @@ impl<'a> DeliveryManager<'a> {
 
         let _: () = self
             .client
+            .connection_mut()
             .publish(online_channel, notification_str)
             .await?;
 
@@ -351,7 +341,7 @@ impl<'a> DeliveryManager<'a> {
             ",
         );
 
-        let messages: Vec<Vec<u8>> = script.key(&key).invoke_async(self.client).await?;
+        let messages: Vec<Vec<u8>> = script.key(&key).invoke_async(self.client.connection_mut()).await?;
 
         // Filter out the empty placeholder message left by `register_server_instance`
         let filtered_messages: Vec<Vec<u8>> =
@@ -381,7 +371,7 @@ impl<'a> DeliveryManager<'a> {
         // The heartbeat task will refresh this periodically
 
         // Check if key exists and its type
-        let key_type: Option<String> = self.client.key_type(queue_key).await?;
+        let key_type: Option<String> = self.client.connection_mut().key_type(queue_key).await?;
         tracing::debug!(queue_key = %queue_key, key_type = ?key_type, "Checked key type");
 
         match key_type.as_deref() {
@@ -392,7 +382,7 @@ impl<'a> DeliveryManager<'a> {
             // Key doesn't exist (redis 'TYPE' returns 'none'), create it with a placeholder.
             Some("none") | None => {
                 tracing::debug!(queue_key = %queue_key, "Key does not exist, creating it");
-                self.client.rpush::<_, _, ()>(queue_key, b"").await?;
+                self.client.connection_mut().rpush::<_, _, ()>(queue_key, b"").await?;
             }
             // Key exists but has the wrong type, so delete and recreate it.
             Some(other_type) => {
@@ -401,13 +391,13 @@ impl<'a> DeliveryManager<'a> {
                     key_type = %other_type,
                     "Delivery queue key has wrong type, deleting and recreating as list"
                 );
-                self.client.del::<_, ()>(queue_key).await?;
-                self.client.rpush::<_, _, ()>(queue_key, b"").await?;
+                self.client.connection_mut().del::<_, ()>(queue_key).await?;
+                self.client.connection_mut().rpush::<_, _, ()>(queue_key, b"").await?;
             }
         }
 
         // Set/renew TTL
-        self.client.expire::<_, ()>(queue_key, ttl_seconds).await?;
+        self.client.connection_mut().expire::<_, ()>(queue_key, ttl_seconds).await?;
         tracing::debug!(queue_key = %queue_key, ttl = ttl_seconds, "Set TTL for key");
 
         Ok(())
@@ -429,6 +419,7 @@ impl<'a> DeliveryManager<'a> {
         const DELIVERED_DIRECT_TTL: i64 = SECONDS_PER_HOUR; // 1 hour TTL
 
         self.client
+            .connection_mut()
             .set_ex::<_, _, ()>(&key, "1", DELIVERED_DIRECT_TTL as u64)
             .await?;
 

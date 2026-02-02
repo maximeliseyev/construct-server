@@ -11,7 +11,7 @@ pub(crate) struct SessionManager<'a> {
 }
 
 impl<'a> SessionManager<'a> {
-    pub(crate) fn new(client: &'a mut redis::aio::ConnectionManager) -> Self {
+    pub(crate) fn new(client: &'a mut RedisClient) -> Self {
         Self { client }
     }
 
@@ -22,13 +22,12 @@ impl<'a> SessionManager<'a> {
         ttl_seconds: i64,
     ) -> Result<()> {
         let session_key = format!("session:{}", jti);
-        let _: () = self
-            .client
+        self.client
             .set_ex(&session_key, user_id, ttl_seconds as u64)
             .await?;
         let user_sessions_key = format!("user_sessions:{}", user_id);
-        let _: () = self.client.sadd(&user_sessions_key, jti).await?;
-        let _: () = self.client.expire(&user_sessions_key, ttl_seconds).await?;
+        let _: () = self.client.connection_mut().sadd(&user_sessions_key, jti).await?;
+        let _: () = self.client.connection_mut().expire(&user_sessions_key, ttl_seconds).await?;
         tracing::info!(user_id = %user_id, session_jti = %jti, "Created session");
         Ok(())
     }
@@ -42,8 +41,8 @@ impl<'a> SessionManager<'a> {
     pub(crate) async fn revoke_session(&mut self, jti: &str, user_id: &str) -> Result<()> {
         let session_key = format!("session:{}", jti);
         let user_sessions_key = format!("user_sessions:{}", user_id);
-        let _: () = self.client.del(&session_key).await?;
-        let _: () = self.client.srem(&user_sessions_key, jti).await?;
+        let _: i64 = self.client.del(&session_key).await?;
+        let _: () = self.client.connection_mut().srem(&user_sessions_key, jti).await?;
         tracing::info!(user_id = %user_id, session_jti = %jti, "Revoked session");
         Ok(())
     }
@@ -51,13 +50,13 @@ impl<'a> SessionManager<'a> {
     #[allow(dead_code)]
     pub(crate) async fn revoke_all_sessions(&mut self, user_id: &str) -> Result<()> {
         let user_sessions_key = format!("user_sessions:{}", user_id);
-        let jtis: Vec<String> = self.client.smembers(&user_sessions_key).await?;
+        let jtis: Vec<String> = self.client.connection_mut().smembers(&user_sessions_key).await?;
         for jti in &jtis {
             let session_key = format!("session:{}", jti);
-            let _: () = self.client.del(&session_key).await?;
+            let _: i64 = self.client.del(&session_key).await?;
         }
         if !jtis.is_empty() {
-            let _: () = self.client.del(&user_sessions_key).await?;
+            let _: i64 = self.client.del(&user_sessions_key).await?;
         }
         tracing::info!(user_id = %user_id, count = jtis.len(), "Revoked all sessions");
         Ok(())

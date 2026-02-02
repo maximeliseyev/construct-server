@@ -2,17 +2,19 @@
 // Rate Limiting
 // ============================================================================
 // Phase 2.8: Extracted from queue.rs for better organization
+// Phase 4.6: Migrated to construct-redis
 
 use anyhow::Result;
 use construct_config::{SECONDS_PER_DAY, SECONDS_PER_HOUR};
+use construct_redis::RedisClient;
 use redis::AsyncCommands;
 
 pub(crate) struct RateLimiter<'a> {
-    client: &'a mut redis::aio::ConnectionManager,
+    client: &'a mut RedisClient,
 }
 
 impl<'a> RateLimiter<'a> {
-    pub(crate) fn new(client: &'a mut redis::aio::ConnectionManager) -> Self {
+    pub(crate) fn new(client: &'a mut RedisClient) -> Self {
         Self { client }
     }
 
