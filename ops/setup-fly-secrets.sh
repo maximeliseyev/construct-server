@@ -46,30 +46,82 @@ echo "Service: $SERVICE"
 echo ""
 
 # ============================================================================
-# Validate required JWT keys (RS256 only)
+# Validate and load JWT keys (RS256 only)
+# ============================================================================
+# IMPORTANT: If JWT_PUBLIC_KEY or JWT_PRIVATE_KEY look like file paths,
+# we MUST read the actual PEM content from the file before setting secrets.
+# Otherwise Fly.io will receive the PATH string, and the container won't have the file!
 # ============================================================================
 
 if [ -z "$JWT_PUBLIC_KEY" ]; then
   echo "Error: JWT_PUBLIC_KEY is required but not set in .env"
   echo ""
   echo "Generate RSA keypair with:"
-  echo "  openssl genrsa -out private.pem 4096"
-  echo "  openssl rsa -in private.pem -pubout -out public.pem"
+  echo "  openssl genrsa -out prkeys/jwt_private_key.pem 4096"
+  echo "  openssl rsa -in prkeys/jwt_private_key.pem -pubout -out prkeys/jwt_public_key.pem"
   echo ""
   echo "Then set in .env:"
-  echo '  JWT_PRIVATE_KEY="$(cat private.pem)"'
-  echo '  JWT_PUBLIC_KEY="$(cat public.pem)"'
+  echo '  JWT_PRIVATE_KEY="$(cat prkeys/jwt_private_key.pem)"'
+  echo '  JWT_PUBLIC_KEY="$(cat prkeys/jwt_public_key.pem)"'
+  echo ""
+  echo "Or use paths (script will read files automatically):"
+  echo '  JWT_PRIVATE_KEY=prkeys/jwt_private_key.pem'
+  echo '  JWT_PUBLIC_KEY=prkeys/jwt_public_key.pem'
+  exit 1
+fi
+
+# Auto-detect and load JWT keys from files if they look like paths
+# This prevents accidentally setting Fly.io secrets to file paths instead of PEM content
+if [[ "$JWT_PUBLIC_KEY" == *"/"* ]] || [[ "$JWT_PUBLIC_KEY" == *".pem"* ]]; then
+  echo "🔍 Detected JWT_PUBLIC_KEY as file path: $JWT_PUBLIC_KEY"
+  if [ -f "$JWT_PUBLIC_KEY" ]; then
+    echo "✅ Reading JWT public key from file..."
+    JWT_PUBLIC_KEY=$(cat "$JWT_PUBLIC_KEY")
+  else
+    echo "❌ Error: JWT_PUBLIC_KEY file not found: $JWT_PUBLIC_KEY"
+    exit 1
+  fi
+fi
+
+if [ -n "$JWT_PRIVATE_KEY" ]; then
+  if [[ "$JWT_PRIVATE_KEY" == *"/"* ]] || [[ "$JWT_PRIVATE_KEY" == *".pem"* ]]; then
+    echo "🔍 Detected JWT_PRIVATE_KEY as file path: $JWT_PRIVATE_KEY"
+    if [ -f "$JWT_PRIVATE_KEY" ]; then
+      echo "✅ Reading JWT private key from file..."
+      JWT_PRIVATE_KEY=$(cat "$JWT_PRIVATE_KEY")
+    else
+      echo "❌ Error: JWT_PRIVATE_KEY file not found: $JWT_PRIVATE_KEY"
+      exit 1
+    fi
+  fi
+fi
+
+# Validate that JWT keys are actual PEM content, not paths
+if [[ "$JWT_PUBLIC_KEY" != *"-----BEGIN"* ]]; then
+  echo "❌ Error: JWT_PUBLIC_KEY doesn't look like PEM content!"
+  echo "   Value starts with: ${JWT_PUBLIC_KEY:0:50}..."
+  echo ""
+  echo "   Make sure .env contains either:"
+  echo "   1. Path to file: JWT_PUBLIC_KEY=prkeys/jwt_public_key.pem"
+  echo "   2. PEM content: JWT_PUBLIC_KEY=\"\$(cat prkeys/jwt_public_key.pem)\""
   exit 1
 fi
 
 # Warn if auth-service is being set up without private key
 if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "auth-service" ]; then
   if [ -z "$JWT_PRIVATE_KEY" ]; then
-    echo "Warning: JWT_PRIVATE_KEY not set - auth-service won't be able to create tokens!"
-    echo "Set JWT_PRIVATE_KEY in .env for auth-service to work properly."
+    echo "⚠️  Warning: JWT_PRIVATE_KEY not set - auth-service won't be able to create tokens!"
+    echo "   Set JWT_PRIVATE_KEY in .env for auth-service to work properly."
     echo ""
+  elif [[ "$JWT_PRIVATE_KEY" != *"-----BEGIN"* ]]; then
+    echo "❌ Error: JWT_PRIVATE_KEY doesn't look like PEM content!"
+    echo "   Value starts with: ${JWT_PRIVATE_KEY:0:50}..."
+    exit 1
   fi
 fi
+
+echo "✅ JWT keys validated - ready to set secrets"
+echo ""
 
 # ============================================================================
 # Service-specific secret setup

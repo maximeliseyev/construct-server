@@ -189,6 +189,7 @@ mod tests {
             sasl_mechanism: None,
             sasl_username: None,
             sasl_password: None,
+            ssl_ca_location: None,
             producer_compression: "snappy".to_string(),
             producer_acks: "all".to_string(),
             producer_linger_ms: 10,

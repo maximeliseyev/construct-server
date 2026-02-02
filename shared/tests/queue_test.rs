@@ -67,6 +67,7 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             sasl_mechanism: None,
             sasl_username: None,
             sasl_password: None,
+            ssl_ca_location: None,
             producer_compression: "none".to_string(),
             producer_acks: "1".to_string(),
             producer_linger_ms: 0,

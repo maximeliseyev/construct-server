@@ -22,6 +22,8 @@ pub struct KafkaConfig {
     pub sasl_username: Option<String>,
     /// SASL password
     pub sasl_password: Option<String>,
+    /// Path to CA certificate file (for self-signed certificates)
+    pub ssl_ca_location: Option<String>,
     // producer-specific settings
     pub producer_compression: String, // "zstd" | "snappy" | "gzip" | "lz4" | "none"
     pub producer_acks: String,        // "all" | "1" | "-1" | "0"
@@ -54,6 +56,7 @@ impl KafkaConfig {
             sasl_mechanism: std::env::var("KAFKA_SASL_MECHANISM").ok(),
             sasl_username: std::env::var("KAFKA_SASL_USERNAME").ok(),
             sasl_password: std::env::var("KAFKA_SASL_PASSWORD").ok(),
+            ssl_ca_location: std::env::var("KAFKA_SSL_CA_LOCATION").ok(),
             // producer-specific settings
             producer_compression: std::env::var("KAFKA_PRODUCER_COMPRESSION")
                 .unwrap_or_else(|_| "snappy".to_string()),

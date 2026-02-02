@@ -1,39 +1,4 @@
 services:
-  # Main application server
-  construct-server:
-    build:
-      context: ..
-      dockerfile: ops/Dockerfile
-    container_name: construct-server
-    command: ["construct-server"]
-    ports:
-      - "8080:8080"
-      - "3000:3000"  # Health check port
-    environment:
-      DATABASE_URL: "postgresql://construct:construct_dev_password@postgres:5432/construct"
-      REDIS_URL: "redis://redis:6379"
-      RUST_LOG: "info"
-    env_file: .env.local
-    depends_on:
-      - postgres
-      - redis
-    restart: unless-stopped
-
-  # Delivery Worker (processes offline message delivery)
-  delivery-worker:
-    build:
-      context: ..
-      dockerfile: ops/Dockerfile
-    container_name: delivery-worker
-    command: ["delivery-worker"]
-    environment:
-      REDIS_URL: "redis://redis:6379"
-      RUST_LOG: "info"
-    env_file: .env.local
-    depends_on:
-      - redis
-    restart: unless-stopped
-
   # PostgreSQL database
   postgres:
     image: postgres:16
@@ -46,7 +11,15 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../shared/migrations:/docker-entrypoint-initdb.d/migrations:ro
     restart: unless-stopped
+    networks:
+      - construct-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U construct"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Redis (for message queues and pub/sub)
   redis:
@@ -58,7 +31,19 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    networks:
+      - construct-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
   redis_data:
+
+networks:
+  construct-network:
+    name: construct-network
+    driver: bridge

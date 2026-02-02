@@ -32,6 +32,12 @@ pub fn create_client_config(config: &KafkaConfig) -> Result<ClientConfig> {
 
     if config.ssl_enabled {
         info!("Enabling SSL/TLS for Kafka connection");
+
+        // Configure CA certificate for self-signed certs
+        if let Some(ca_location) = &config.ssl_ca_location {
+            info!(ca_location = %ca_location, "Configuring custom CA certificate");
+            client_config.set("ssl.ca.location", ca_location);
+        }
     }
 
     // Configure SASL if a mechanism is provided

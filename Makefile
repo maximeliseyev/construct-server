@@ -25,6 +25,10 @@ help:
 	@echo "  make dev             Start local stack (db + redis + kafka)"
 	@echo "  make dev-down        Stop local stack"
 	@echo "  make dev-logs        View local stack logs"
+	@echo "  make dev-services    Start all microservices locally (Docker)"
+	@echo "  make dev-services-down   Stop all microservices"
+	@echo "  make dev-services-logs   View microservices logs"
+	@echo "  make dev-rebuild     Rebuild and restart services"
 	@echo "  make build           Build all binaries (release)"
 	@echo "  make test            Run all tests"
 	@echo "  make check           Run clippy + fmt check"
@@ -44,6 +48,11 @@ help:
 	@echo "  make secrets         Setup secrets for all services"
 	@echo "  make secrets-<name>  Setup secrets for specific service"
 	@echo "                       (gateway, auth, user, msg, notif, media, worker)"
+	@echo "  make validate-secrets-<name>  Validate secrets for specific service"
+	@echo ""
+	@echo "✅ Pre-deployment Validation:"
+	@echo "  make pre-deploy-check-<name>  Run all pre-deploy checks for service"
+	@echo "                                (compilation + secrets validation)"
 	@echo ""
 	@echo "📊 Monitoring:"
 	@echo "  make status          Show status of all services"
@@ -83,6 +92,7 @@ APP_WORKER = construct-delivery-worker
 # Docker Compose files
 COMPOSE = docker-compose -f ops/docker-compose.yml
 COMPOSE_KAFKA = docker-compose -f ops/docker-compose.kafka.yml
+COMPOSE_DEV = docker-compose -f ops/docker-compose.dev.yml
 
 # Colors for output
 COLOR_RESET = \033[0m
@@ -95,30 +105,89 @@ COLOR_ERROR = \033[0;31m
 # Development
 # ============================================================================
 
-.PHONY: dev dev-down dev-logs build test check fmt clean
+.PHONY: dev dev-down dev-logs dev-services dev-services-down dev-services-logs dev-rebuild build test check fmt clean
 
+# Start infrastructure (PostgreSQL + Redis + Kafka)
 dev:
-	@echo "$(COLOR_INFO)🐳 Starting local development stack...$(COLOR_RESET)"
+	@echo "$(COLOR_INFO)🐳 Starting local development infrastructure...$(COLOR_RESET)"
+	@if [ ! -f .env.local ]; then \
+		echo "$(COLOR_WARNING)⚠️  .env.local not found, creating from example...$(COLOR_RESET)"; \
+		cp .env.local.example .env.local; \
+		echo "$(COLOR_INFO)💡 Edit .env.local to customize your local environment$(COLOR_RESET)"; \
+	fi
 	@$(COMPOSE) up -d postgres redis
 	@$(COMPOSE_KAFKA) up -d kafka
-	@echo "$(COLOR_SUCCESS)✅ Stack started. Services:$(COLOR_RESET)"
-	@echo "   PostgreSQL: localhost:5432"
+	@echo ""
+	@echo "$(COLOR_SUCCESS)✅ Infrastructure started:$(COLOR_RESET)"
+	@echo "   PostgreSQL: localhost:5432 (user: construct, db: construct)"
 	@echo "   Redis: localhost:6379"
 	@echo "   Kafka: localhost:9092"
+	@echo "   Kafka UI: http://localhost:8080"
 	@echo ""
 	@echo "$(COLOR_INFO)💡 Next steps:$(COLOR_RESET)"
-	@echo "   make dev-logs    # View logs"
-	@echo "   make db-migrate  # Run migrations"
+	@echo "   make db-migrate          # Apply database migrations"
+	@echo "   make dev-services        # Start all microservices"
+	@echo "   make dev-services-logs   # View service logs"
 
+# Stop infrastructure
 dev-down:
-	@echo "$(COLOR_INFO)🛑 Stopping local stack...$(COLOR_RESET)"
+	@echo "$(COLOR_INFO)🛑 Stopping local infrastructure...$(COLOR_RESET)"
 	@$(COMPOSE) down
 	@$(COMPOSE_KAFKA) down
-	@echo "$(COLOR_SUCCESS)✅ Stack stopped$(COLOR_RESET)"
+	@echo "$(COLOR_SUCCESS)✅ Infrastructure stopped$(COLOR_RESET)"
 
+# View infrastructure logs
 dev-logs:
-	@echo "$(COLOR_INFO)📋 Tailing logs from local stack...$(COLOR_RESET)"
+	@echo "$(COLOR_INFO)📋 Tailing logs from infrastructure...$(COLOR_RESET)"
 	@$(COMPOSE) logs -f
+
+# Start all microservices in Docker
+dev-services:
+	@echo "$(COLOR_INFO)🚀 Starting all microservices locally...$(COLOR_RESET)"
+	@if [ ! -f .env.local ]; then \
+		echo "$(COLOR_ERROR)❌ .env.local not found!$(COLOR_RESET)"; \
+		echo "   Create it: cp .env.local.example .env.local"; \
+		exit 1; \
+	fi
+	@echo "$(COLOR_INFO)🔨 Building Docker images...$(COLOR_RESET)"
+	@$(COMPOSE_DEV) build
+	@echo "$(COLOR_INFO)🚀 Starting services...$(COLOR_RESET)"
+	@$(COMPOSE_DEV) up -d
+	@echo ""
+	@echo "$(COLOR_SUCCESS)✅ All services started:$(COLOR_RESET)"
+	@echo "   API Gateway:       http://localhost:8000 (health: 8001)"
+	@echo "   Auth Service:      http://localhost:8010 (health: 8011)"
+	@echo "   User Service:      http://localhost:8020 (health: 8021)"
+	@echo "   Messaging Service: http://localhost:8030 (health: 8031)"
+	@echo "   Notification Svc:  http://localhost:8040 (health: 8041)"
+	@echo "   Media Service:     http://localhost:8050 (health: 8051)"
+	@echo "   Delivery Worker:   (background process)"
+	@echo ""
+	@echo "$(COLOR_INFO)💡 Useful commands:$(COLOR_RESET)"
+	@echo "   make dev-services-logs   # View logs"
+	@echo "   make dev-services-down   # Stop services"
+	@echo "   make dev-rebuild         # Rebuild after code changes"
+
+# Stop all microservices
+dev-services-down:
+	@echo "$(COLOR_INFO)🛑 Stopping all microservices...$(COLOR_RESET)"
+	@$(COMPOSE_DEV) down
+	@echo "$(COLOR_SUCCESS)✅ Services stopped$(COLOR_RESET)"
+
+# View microservices logs
+dev-services-logs:
+	@echo "$(COLOR_INFO)📋 Tailing logs from all microservices...$(COLOR_RESET)"
+	@$(COMPOSE_DEV) logs -f
+
+# Rebuild and restart services after code changes
+dev-rebuild:
+	@echo "$(COLOR_INFO)🔄 Rebuilding and restarting services...$(COLOR_RESET)"
+	@$(COMPOSE_DEV) build
+	@$(COMPOSE_DEV) up -d
+	@echo "$(COLOR_SUCCESS)✅ Services rebuilt and restarted$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_INFO)💡 View logs:$(COLOR_RESET)"
+	@echo "   make dev-services-logs"
 
 build:
 	@echo "$(COLOR_INFO)🔨 Building all binaries (release mode)...$(COLOR_RESET)"
@@ -151,7 +220,7 @@ clean:
 
 .PHONY: deploy deploy-gateway deploy-auth deploy-user deploy-msg deploy-notif deploy-media deploy-worker check-deploy
 
-# Check compilation before deploying
+# Check compilation before deploying (legacy - kept for backward compatibility)
 check-deploy:
 	@if [ -z "$$SKIP_CHECK" ]; then \
 		echo "$(COLOR_INFO)🔍 Checking code compilation...$(COLOR_RESET)"; \
@@ -160,30 +229,81 @@ check-deploy:
 		echo "$(COLOR_SUCCESS)✓ Code compiles successfully$(COLOR_RESET)"; \
 	fi
 
+# ============================================================================
+# Pre-deployment Validation (new - comprehensive checks)
+# ============================================================================
+
+.PHONY: pre-deploy-check-gateway pre-deploy-check-auth pre-deploy-check-user pre-deploy-check-msg pre-deploy-check-notif pre-deploy-check-media pre-deploy-check-worker
+.PHONY: validate-secrets-gateway validate-secrets-auth validate-secrets-user validate-secrets-msg validate-secrets-notif validate-secrets-media validate-secrets-worker
+
+# Pre-deployment checks (compilation + secrets)
+pre-deploy-check-gateway:
+	@bash scripts/pre-deploy-check.sh api-gateway
+
+pre-deploy-check-auth:
+	@bash scripts/pre-deploy-check.sh auth-service
+
+pre-deploy-check-user:
+	@bash scripts/pre-deploy-check.sh user-service
+
+pre-deploy-check-msg:
+	@bash scripts/pre-deploy-check.sh messaging-service
+
+pre-deploy-check-notif:
+	@bash scripts/pre-deploy-check.sh notification-service
+
+pre-deploy-check-media:
+	@bash scripts/pre-deploy-check.sh media-service
+
+pre-deploy-check-worker:
+	@bash scripts/pre-deploy-check.sh worker
+
+# Secrets validation only (without compilation check)
+validate-secrets-gateway:
+	@bash scripts/validate-service-secrets.sh api-gateway
+
+validate-secrets-auth:
+	@bash scripts/validate-service-secrets.sh auth-service
+
+validate-secrets-user:
+	@bash scripts/validate-service-secrets.sh user-service
+
+validate-secrets-msg:
+	@bash scripts/validate-service-secrets.sh messaging-service
+
+validate-secrets-notif:
+	@bash scripts/validate-service-secrets.sh notification-service
+
+validate-secrets-media:
+	@bash scripts/validate-service-secrets.sh media-service
+
+validate-secrets-worker:
+	@bash scripts/validate-service-secrets.sh worker
+
 # Deploy all microservices
-deploy: check-deploy
+deploy:
 	@echo "$(COLOR_INFO)🚀 Deploying all microservices...$(COLOR_RESET)"
 	@echo ""
 	@echo "1/7 Deploying API Gateway..."
-	@SKIP_CHECK=1 $(MAKE) deploy-gateway
+	@$(MAKE) deploy-gateway
 	@echo ""
 	@echo "2/7 Deploying Auth Service..."
-	@SKIP_CHECK=1 $(MAKE) deploy-auth
+	@$(MAKE) deploy-auth
 	@echo ""
 	@echo "3/7 Deploying User Service..."
-	@SKIP_CHECK=1 $(MAKE) deploy-user
+	@$(MAKE) deploy-user
 	@echo ""
 	@echo "4/7 Deploying Messaging Service (Phase 4.5: END_SESSION support)..."
-	@SKIP_CHECK=1 $(MAKE) deploy-msg
+	@$(MAKE) deploy-msg
 	@echo ""
 	@echo "5/7 Deploying Notification Service..."
-	@SKIP_CHECK=1 $(MAKE) deploy-notif
+	@$(MAKE) deploy-notif
 	@echo ""
 	@echo "6/7 Deploying Media Service..."
-	@SKIP_CHECK=1 $(MAKE) deploy-media
+	@$(MAKE) deploy-media
 	@echo ""
 	@echo "7/7 Deploying Delivery Worker..."
-	@SKIP_CHECK=1 $(MAKE) deploy-worker
+	@$(MAKE) deploy-worker
 	@echo ""
 	@echo "$(COLOR_SUCCESS)✅ All microservices deployed!$(COLOR_RESET)"
 	@echo ""
@@ -191,44 +311,44 @@ deploy: check-deploy
 	@echo "   make status      # Check deployment status"
 	@echo "   make logs-msg    # View messaging service logs"
 
-# Deploy individual services
-deploy-gateway: check-deploy
+# Deploy individual services (with comprehensive pre-deploy checks)
+deploy-gateway: pre-deploy-check-gateway
 	@echo "$(COLOR_INFO)🚀 Deploying API Gateway...$(COLOR_RESET)"
 	@fly apps create $(APP_GATEWAY) 2>/dev/null || true
 	@fly deploy --config ops/fly.api-gateway.toml --dockerfile ops/Dockerfile --app $(APP_GATEWAY)
 	@echo "$(COLOR_SUCCESS)✅ Gateway deployed$(COLOR_RESET)"
 
-deploy-auth: check-deploy
+deploy-auth: pre-deploy-check-auth
 	@echo "$(COLOR_INFO)🚀 Deploying Auth Service...$(COLOR_RESET)"
 	@fly apps create $(APP_AUTH) 2>/dev/null || true
 	@fly deploy --config ops/fly.auth-service.toml --dockerfile ops/Dockerfile --app $(APP_AUTH)
 	@echo "$(COLOR_SUCCESS)✅ Auth Service deployed$(COLOR_RESET)"
 
-deploy-user: check-deploy
+deploy-user: pre-deploy-check-user
 	@echo "$(COLOR_INFO)🚀 Deploying User Service...$(COLOR_RESET)"
 	@fly apps create $(APP_USER) 2>/dev/null || true
 	@fly deploy --config ops/fly.user-service.toml --dockerfile ops/Dockerfile --app $(APP_USER)
 	@echo "$(COLOR_SUCCESS)✅ User Service deployed$(COLOR_RESET)"
 
-deploy-msg: check-deploy
+deploy-msg: pre-deploy-check-msg
 	@echo "$(COLOR_INFO)🚀 Deploying Messaging Service (Phase 4.5: /api/v1/control)...$(COLOR_RESET)"
 	@fly apps create $(APP_MSG) 2>/dev/null || true
 	@fly deploy --config ops/fly.messaging-service.toml --dockerfile ops/Dockerfile --app $(APP_MSG)
 	@echo "$(COLOR_SUCCESS)✅ Messaging Service deployed$(COLOR_RESET)"
 
-deploy-notif: check-deploy
+deploy-notif: pre-deploy-check-notif
 	@echo "$(COLOR_INFO)🚀 Deploying Notification Service...$(COLOR_RESET)"
 	@fly apps create $(APP_NOTIF) 2>/dev/null || true
 	@fly deploy --config ops/fly.notification-service.toml --dockerfile ops/Dockerfile --app $(APP_NOTIF)
 	@echo "$(COLOR_SUCCESS)✅ Notification Service deployed$(COLOR_RESET)"
 
-deploy-media: check-deploy
+deploy-media: pre-deploy-check-media
 	@echo "$(COLOR_INFO)🚀 Deploying Media Service...$(COLOR_RESET)"
 	@fly apps create $(APP_MEDIA) 2>/dev/null || true
 	@fly deploy --config ops/fly.media.toml --dockerfile ops/Dockerfile --app $(APP_MEDIA)
 	@echo "$(COLOR_SUCCESS)✅ Media Service deployed$(COLOR_RESET)"
 
-deploy-worker: check-deploy
+deploy-worker: pre-deploy-check-worker
 	@echo "$(COLOR_INFO)🚀 Deploying Delivery Worker...$(COLOR_RESET)"
 	@fly apps create $(APP_WORKER) 2>/dev/null || true
 	@fly deploy --config ops/fly.worker.toml --dockerfile ops/Dockerfile --app $(APP_WORKER)
