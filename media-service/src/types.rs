@@ -22,6 +22,7 @@ pub struct ErrorResponse {
 
 /// Health check response
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,

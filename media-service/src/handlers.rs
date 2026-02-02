@@ -4,7 +4,7 @@
 
 use super::types::*;
 use super::utils::*;
-use crate::bin::media_service::config::MediaConfig;
+use crate::config::MediaConfig;
 use anyhow::Result;
 use axum::{
     Json,

@@ -31,8 +31,8 @@ use axum::{
     Router,
     routing::{delete, get, post},
 };
-use construct_server_shared::bin::media_service::{
-    cleanup, config::MediaConfig, handlers::AppState,
+use media_service::{
+    cleanup, config::MediaConfig, handlers::{self, AppState},
 };
 use std::sync::Arc;
 use tokio::spawn;
@@ -76,22 +76,10 @@ async fn main() -> Result<()> {
 
     // Create router
     let app = Router::new()
-        .route(
-            "/upload",
-            post(construct_server_shared::bin::media_service::handlers::upload_media),
-        )
-        .route(
-            "/health",
-            get(construct_server_shared::bin::media_service::handlers::health_check),
-        )
-        .route(
-            "/:media_id",
-            get(construct_server_shared::bin::media_service::handlers::download_media),
-        )
-        .route(
-            "/:media_id",
-            delete(construct_server_shared::bin::media_service::handlers::delete_media),
-        )
+        .route("/upload", post(handlers::upload_media))
+        .route("/health", get(handlers::health_check))
+        .route("/:media_id", get(handlers::download_media))
+        .route("/:media_id", delete(handlers::delete_media))
         .with_state(state);
 
     // Start server

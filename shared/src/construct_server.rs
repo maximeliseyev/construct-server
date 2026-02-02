@@ -38,9 +38,6 @@ pub mod server_registry;
 pub mod user_service;
 pub mod utils;
 
-// Binary-specific modules (services that run as separate processes)
-pub mod bin;
-
 // Re-export delivery_worker modules for use in bin/delivery_worker.rs
 pub mod delivery_worker;
 
