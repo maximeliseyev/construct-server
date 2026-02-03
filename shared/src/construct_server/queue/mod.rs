@@ -21,6 +21,9 @@ mod replay;
 mod sessions;
 mod tokens;
 
+#[cfg(test)]
+mod tests;
+
 use anyhow::Result;
 use construct_config::{Config, SECONDS_PER_DAY};
 use construct_redis::RedisClient;
@@ -600,3 +603,5 @@ impl MessageQueue {
         .await
     }
 }
+
+

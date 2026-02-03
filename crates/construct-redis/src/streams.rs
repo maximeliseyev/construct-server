@@ -259,4 +259,117 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    #[ignore] // Requires Redis
+    async fn test_binary_stream_operations() -> Result<()> {
+        use redis::AsyncCommands;
+
+        let mut client = RedisClient::connect("redis://localhost:6379").await?;
+
+        let stream_key = "test_binary_stream";
+
+        // Add binary data using low-level xadd (need to use connection_mut for binary)
+        let binary_data = vec![0x01, 0x02, 0x03, 0xDE, 0xAD, 0xBE, 0xEF];
+        let id1: String = client
+            .connection_mut()
+            .xadd(stream_key, "*", &[("data", binary_data.as_slice())])
+            .await?;
+        assert!(!id1.is_empty());
+
+        // Read as binary
+        let entries = client
+            .xread_binary(&[(stream_key, "0")], StreamReadOptions::default())
+            .await?;
+        
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].fields.get("data"), Some(&binary_data));
+
+        // Clean up
+        client.del(stream_key).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires Redis
+    async fn test_binary_messagepack() -> Result<()> {
+        use redis::AsyncCommands;
+        use rmp_serde;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        struct TestMessage {
+            user_id: String,
+            content: String,
+            timestamp: u64,
+        }
+
+        let mut client = RedisClient::connect("redis://localhost:6379").await?;
+        let stream_key = "test_msgpack_stream";
+
+        // Serialize with MessagePack
+        let msg = TestMessage {
+            user_id: "user123".to_string(),
+            content: "Hello, World!".to_string(),
+            timestamp: 1234567890,
+        };
+        let packed = rmp_serde::to_vec(&msg).expect("MessagePack serialize failed");
+
+        // Add to stream using connection_mut for binary data
+        let id: String = client
+            .connection_mut()
+            .xadd(stream_key, "*", &[("message", packed.as_slice())])
+            .await?;
+        assert!(!id.is_empty());
+
+        // Read as binary
+        let entries = client
+            .xread_binary(&[(stream_key, "0")], StreamReadOptions::default())
+            .await?;
+
+        assert_eq!(entries.len(), 1);
+        let received_data = entries[0].fields.get("message").expect("No message field");
+
+        // Deserialize
+        let received_msg: TestMessage = rmp_serde::from_slice(received_data)
+            .expect("MessagePack deserialize failed");
+
+        assert_eq!(received_msg, msg);
+
+        // Clean up
+        client.del(stream_key).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires Redis
+    async fn test_stream_blocking_read() -> Result<()> {
+        let mut client = RedisClient::connect("redis://localhost:6379").await?;
+        let stream_key = "test_blocking_stream";
+
+        // Add entry
+        client
+            .xadd(stream_key, "*", &[("field", "value")])
+            .await?;
+
+        // Blocking read with timeout
+        let entries = client
+            .xread(
+                &[(stream_key, "0")],
+                StreamReadOptions {
+                    block: Some(1000), // 1 second
+                    count: Some(10),
+                },
+            )
+            .await?;
+
+        assert_eq!(entries.len(), 1);
+
+        // Clean up
+        client.del(stream_key).await?;
+
+        Ok(())
+    }
 }
