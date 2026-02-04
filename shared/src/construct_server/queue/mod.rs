@@ -27,8 +27,6 @@ mod tests;
 use anyhow::Result;
 use construct_config::{Config, SECONDS_PER_DAY};
 use construct_redis::RedisClient;
-use construct_types::ChatMessage;
-use redis::AsyncCommands;
 
 /// Message Queue - Redis-only Storage (No Database Persistence)
 ///
@@ -92,70 +90,9 @@ impl MessageQueue {
     // Deprecated Methods (Phase 5+: Use Kafka instead)
     // ============================================================================
 
-    /// @deprecated Phase 5+: Use Kafka for message persistence instead of Redis queues
-    /// This method is kept for backward compatibility with legacy flows
-    #[deprecated(since = "0.5.0", note = "Use Kafka for message persistence (Phase 5+)")]
-    #[allow(dead_code)]
-    pub async fn enqueue_message(&mut self, user_id: &str, message: &ChatMessage) -> Result<()> {
-        let key = format!("{}{}", self.offline_queue_prefix, user_id);
-        let message_bytes = rmp_serde::encode::to_vec_named(message)?;
-        let _: i64 = self.client.lpush(&key, message_bytes).await?;
-        let _: bool = self.client.expire(&key, self.message_ttl_seconds).await?;
-        tracing::info!(user_id = %user_id, message_id = %message.id, "Queued message (DEPRECATED - use Kafka)");
-        Ok(())
-    }
-
-    /// @deprecated Phase 5+: Use Kafka for message persistence instead of Redis queues
-    /// This method is kept for backward compatibility with legacy flows
-    #[deprecated(since = "0.5.0", note = "Use Kafka for message persistence (Phase 5+)")]
-    #[allow(dead_code)]
-    pub async fn enqueue_message_raw(&mut self, user_id: &str, message_json: &str) -> Result<()> {
-        let key = format!("{}{}", self.offline_queue_prefix, user_id);
-        let message_bytes = message_json.as_bytes();
-        let _: i64 = self.client.lpush(&key, message_bytes).await?;
-        let _: bool = self.client.expire(&key, self.message_ttl_seconds).await?;
-        tracing::info!(user_id = %user_id, "Queued message v3 (DEPRECATED - use Kafka)");
-        Ok(())
-    }
-
-    /// @deprecated Phase 5+: Use Kafka consumer for message delivery
-    /// This method is kept for backward compatibility with legacy flows
-    #[deprecated(
-        since = "0.5.0",
-        note = "Use Kafka consumer for message delivery (Phase 5+)"
-    )]
-    #[allow(dead_code)]
-    pub async fn dequeue_messages(&mut self, user_id: &str) -> Result<Vec<ChatMessage>> {
-        let key = format!("{}{}", self.offline_queue_prefix, user_id);
-        let messages: Vec<Vec<u8>> = self.client.connection_mut().lrange(&key, 0, -1).await?;
-        let total_messages = messages.len();
-        if total_messages == 0 {
-            return Ok(Vec::new());
-        }
-        let _: i64 = self.client.del(&key).await?;
-        let mut result = Vec::new();
-        for msg_bytes in messages {
-            match rmp_serde::from_slice::<ChatMessage>(&msg_bytes) {
-                Ok(msg) => result.push(msg),
-                Err(e) => tracing::error!(
-                    "Failed to parse message from queue for user {}: {}",
-                    user_id,
-                    e
-                ),
-            }
-        }
-        let parsed_messages = result.len();
-        let dropped_messages = total_messages - parsed_messages;
-        tracing::info!(
-            operation = "dequeue_messages",
-            user_id = %user_id,
-            total_messages,
-            parsed_messages,
-            dropped_messages,
-            "Dequeued messages (DEPRECATED - use Kafka)"
-        );
-        Ok(result)
-    }
+    // REMOVED: enqueue_message, enqueue_message_raw, dequeue_messages
+    // These deprecated methods were never used after Kafka migration (Phase 4.5)
+    // All message delivery now goes through Kafka → delivery-worker → Redis Streams
 
     #[allow(dead_code)]
     pub async fn has_messages(&mut self, user_id: &str) -> Result<bool> {
@@ -423,10 +360,18 @@ impl MessageQueue {
     pub async fn track_connection(&mut self, user_id: &str, connection_id: &str) -> Result<u32> {
         use construct_config::SECONDS_PER_HOUR;
         use redis::AsyncCommands;
-        
+
         let key = format!("connections:{}", user_id);
-        let _: i64 = self.client.connection_mut().sadd(&key, connection_id).await?;
-        let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_HOUR).await?;
+        let _: i64 = self
+            .client
+            .connection_mut()
+            .sadd(&key, connection_id)
+            .await?;
+        let _: bool = self
+            .client
+            .connection_mut()
+            .expire(&key, SECONDS_PER_HOUR)
+            .await?;
 
         let count: u32 = self.client.connection_mut().scard(&key).await?;
         Ok(count)
@@ -435,16 +380,20 @@ impl MessageQueue {
     #[allow(dead_code)]
     pub async fn untrack_connection(&mut self, user_id: &str, connection_id: &str) -> Result<()> {
         use redis::AsyncCommands;
-        
+
         let key = format!("connections:{}", user_id);
-        let _: i64 = self.client.connection_mut().srem(&key, connection_id).await?;
+        let _: i64 = self
+            .client
+            .connection_mut()
+            .srem(&key, connection_id)
+            .await?;
         Ok(())
     }
 
     #[allow(dead_code)]
     pub async fn get_active_connections(&mut self, user_id: &str) -> Result<u32> {
         use redis::AsyncCommands;
-        
+
         let key = format!("connections:{}", user_id);
         let count: u32 = self.client.connection_mut().scard(&key).await?;
         Ok(count)
@@ -456,7 +405,7 @@ impl MessageQueue {
 
     pub async fn ping(&mut self) -> Result<()> {
         use redis::AsyncCommands;
-        
+
         let _: () = redis::cmd("PING")
             .query_async(self.client.connection_mut())
             .await?;
@@ -603,5 +552,3 @@ impl MessageQueue {
         .await
     }
 }
-
-

@@ -28,8 +28,16 @@ impl<'a> SessionManager<'a> {
             .set_ex(&session_key, user_id, ttl_seconds as u64)
             .await?;
         let user_sessions_key = format!("user_sessions:{}", user_id);
-        let _: () = self.client.connection_mut().sadd(&user_sessions_key, jti).await?;
-        let _: () = self.client.connection_mut().expire(&user_sessions_key, ttl_seconds).await?;
+        let _: () = self
+            .client
+            .connection_mut()
+            .sadd(&user_sessions_key, jti)
+            .await?;
+        let _: () = self
+            .client
+            .connection_mut()
+            .expire(&user_sessions_key, ttl_seconds)
+            .await?;
         tracing::info!(user_id = %user_id, session_jti = %jti, "Created session");
         Ok(())
     }
@@ -44,7 +52,11 @@ impl<'a> SessionManager<'a> {
         let session_key = format!("session:{}", jti);
         let user_sessions_key = format!("user_sessions:{}", user_id);
         let _: i64 = self.client.del(&session_key).await?;
-        let _: () = self.client.connection_mut().srem(&user_sessions_key, jti).await?;
+        let _: () = self
+            .client
+            .connection_mut()
+            .srem(&user_sessions_key, jti)
+            .await?;
         tracing::info!(user_id = %user_id, session_jti = %jti, "Revoked session");
         Ok(())
     }
@@ -52,7 +64,11 @@ impl<'a> SessionManager<'a> {
     #[allow(dead_code)]
     pub(crate) async fn revoke_all_sessions(&mut self, user_id: &str) -> Result<()> {
         let user_sessions_key = format!("user_sessions:{}", user_id);
-        let jtis: Vec<String> = self.client.connection_mut().smembers(&user_sessions_key).await?;
+        let jtis: Vec<String> = self
+            .client
+            .connection_mut()
+            .smembers(&user_sessions_key)
+            .await?;
         for jti in &jtis {
             let session_key = format!("session:{}", jti);
             let _: i64 = self.client.del(&session_key).await?;

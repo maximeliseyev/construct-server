@@ -62,7 +62,12 @@ pub async fn upload_keys(
             .await
             .ok()
             .flatten()
-            .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+            .map(|user| {
+                log_safe_id(
+                    &user.username.as_deref().unwrap_or("unknown"),
+                    &app_context.config.logging.hash_salt,
+                )
+            });
 
         AuditLogger::log_key_rotation(
             user_id_hash.clone(),
@@ -103,7 +108,12 @@ pub async fn upload_keys(
             .await
             .ok()
             .flatten()
-            .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+            .map(|user| {
+                log_safe_id(
+                    &user.username.as_deref().unwrap_or("unknown"),
+                    &app_context.config.logging.hash_salt,
+                )
+            });
 
         AuditLogger::log_key_rotation(
             user_id_hash.clone(),
@@ -186,7 +196,12 @@ pub async fn upload_keys(
                     .await
                     .ok()
                     .flatten()
-                    .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+                    .map(|user| {
+                        log_safe_id(
+                            &user.username.as_deref().unwrap_or("unknown"),
+                            &app_context.config.logging.hash_salt,
+                        )
+                    });
 
                 AuditLogger::log_key_rotation(
                     user_id_hash.clone(),
@@ -221,7 +236,12 @@ pub async fn upload_keys(
                 .await
                 .ok()
                 .flatten()
-                .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+                .map(|user| {
+                    log_safe_id(
+                        &user.username.as_deref().unwrap_or("unknown"),
+                        &app_context.config.logging.hash_salt,
+                    )
+                });
 
             AuditLogger::log_key_rotation(
                 user_id_hash.clone(),
@@ -279,7 +299,12 @@ pub async fn upload_keys(
                     .await
                     .ok()
                     .flatten()
-                    .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+                    .map(|user| {
+                        log_safe_id(
+                            &user.username.as_deref().unwrap_or("unknown"),
+                            &app_context.config.logging.hash_salt,
+                        )
+                    });
 
                 AuditLogger::log_key_rotation(
                     user_id_hash.clone(),
@@ -314,7 +339,12 @@ pub async fn upload_keys(
         .await
         .ok()
         .flatten()
-        .map(|user| log_safe_id(&user.username, &app_context.config.logging.hash_salt));
+        .map(|user| {
+            log_safe_id(
+                &user.username.as_deref().unwrap_or("unknown"),
+                &app_context.config.logging.hash_salt,
+            )
+        });
 
     // Store in database
     let store_result = db::store_key_bundle(&app_context.db_pool, &user_id, &bundle).await;

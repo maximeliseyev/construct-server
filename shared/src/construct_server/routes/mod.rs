@@ -21,6 +21,7 @@ pub mod account; // Made public for user-service
 pub mod auth; // Made public for auth-service
 mod capabilities; // Phase 5: Crypto-agility capabilities endpoint
 pub mod csrf; // Made public for gateway middleware
+pub mod devices; // Device-based passwordless authentication
 pub mod extractors; // Made public for auth-service, user-service, messaging-service, and notification-service
 mod federation;
 mod health;

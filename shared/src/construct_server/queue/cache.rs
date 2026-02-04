@@ -8,7 +8,6 @@ use anyhow::Result;
 use construct_config::SECONDS_PER_HOUR;
 use construct_crypto::UploadableKeyBundle;
 use construct_redis::RedisClient;
-use redis::AsyncCommands;
 
 pub(crate) struct CacheManager<'a> {
     client: &'a mut RedisClient,

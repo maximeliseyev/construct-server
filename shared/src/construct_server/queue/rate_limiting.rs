@@ -57,7 +57,11 @@ impl<'a> RateLimiter<'a> {
 
         // Set TTL only on first increment (1 hour window)
         if count == 1 {
-            let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_HOUR).await?;
+            let _: bool = self
+                .client
+                .connection_mut()
+                .expire(&key, SECONDS_PER_HOUR)
+                .await?;
         }
 
         Ok(count)
@@ -108,7 +112,11 @@ impl<'a> RateLimiter<'a> {
         let count: u32 = self.client.incr(&key).await? as u32;
 
         if count == 1 {
-            let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_DAY).await?;
+            let _: bool = self
+                .client
+                .connection_mut()
+                .expire(&key, SECONDS_PER_DAY)
+                .await?;
         }
 
         Ok(count)
@@ -122,7 +130,11 @@ impl<'a> RateLimiter<'a> {
         let count: u32 = self.client.incr(&key).await? as u32;
 
         if count == 1 {
-            let _: bool = self.client.connection_mut().expire(&key, SECONDS_PER_DAY).await?;
+            let _: bool = self
+                .client
+                .connection_mut()
+                .expire(&key, SECONDS_PER_DAY)
+                .await?;
         }
 
         Ok(count)
@@ -169,7 +181,11 @@ impl<'a> RateLimiter<'a> {
         // 15 minutes = 900 seconds
         const FAILED_LOGIN_WINDOW_SECS: i64 = 900;
         if count == 1 {
-            let _: bool = self.client.connection_mut().expire(&key, FAILED_LOGIN_WINDOW_SECS).await?;
+            let _: bool = self
+                .client
+                .connection_mut()
+                .expire(&key, FAILED_LOGIN_WINDOW_SECS)
+                .await?;
         }
 
         Ok(count)

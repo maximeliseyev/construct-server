@@ -70,6 +70,12 @@ pub enum AppError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+
+    #[error("Rate limit exceeded: {0}")]
+    TooManyRequests(String),
+
     #[cfg(feature = "serialization")]
     #[error("UUID parse error: {0}")]
     Uuid(#[from] uuid::Error),
@@ -104,6 +110,8 @@ impl AppError {
             AppError::Jwt(_) => StatusCode::UNAUTHORIZED,
             AppError::Csrf(_) => StatusCode::FORBIDDEN,
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
+            AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             #[cfg(feature = "serialization")]
             AppError::Uuid(_) => StatusCode::BAD_REQUEST,
             #[cfg(feature = "http")]
@@ -126,6 +134,7 @@ impl AppError {
             AppError::Jwt(_) => "Invalid or expired token".to_string(),
             AppError::Csrf(_) => "CSRF validation failed".to_string(),
             AppError::Validation(msg) => format!("Validation error: {}", msg),
+            AppError::NotFound(msg) => format!("Not found: {}", msg),
             #[cfg(feature = "database")]
             AppError::Database(_) => "Database error".to_string(),
             #[cfg(feature = "redis")]
@@ -149,6 +158,8 @@ impl AppError {
             AppError::Jwt(_) => "JWT_ERROR",
             AppError::Csrf(_) => "CSRF_ERROR",
             AppError::Validation(_) => "VALIDATION_ERROR",
+            AppError::NotFound(_) => "NOT_FOUND",
+            AppError::TooManyRequests(_) => "RATE_LIMIT_EXCEEDED",
             #[cfg(feature = "database")]
             AppError::Database(_) => "DATABASE_ERROR",
             #[cfg(feature = "redis")]

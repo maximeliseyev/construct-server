@@ -54,7 +54,7 @@ pub async fn get_account(
     let user_id = user.0;
 
     // Fetch user from database
-    let user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
+    let user_record = db::get_legacy_user_by_id(&app_context.db_pool, &user_id)
         .await
         .map_err(|e| {
             tracing::error!(
@@ -121,7 +121,7 @@ pub async fn update_account(
     let user_id = user.0;
 
     // Fetch current user
-    let user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
+    let user_record = db::get_legacy_user_by_id(&app_context.db_pool, &user_id)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to fetch user");
@@ -140,7 +140,7 @@ pub async fn update_account(
 
         // Check if username is already taken
         if let Ok(Some(existing_user)) =
-            db::get_user_by_username(&app_context.db_pool, new_username).await
+            db::get_legacy_user_by_username(&app_context.db_pool, new_username).await
             && existing_user.id != user_id
         {
             return Err(AppError::Validation(
@@ -255,7 +255,7 @@ pub async fn delete_account(
     }
 
     // 2. Verify password
-    let user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
+    let user_record = db::get_legacy_user_by_id(&app_context.db_pool, &user_id)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to fetch user");

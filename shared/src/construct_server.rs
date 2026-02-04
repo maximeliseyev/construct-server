@@ -32,7 +32,9 @@ pub mod message_gateway;
 pub mod messaging_service;
 pub mod metrics;
 pub mod notification_service;
+pub mod pow; // Proof of Work for device registration
 pub mod queue;
+pub mod rate_limit; // ← NEW: Rate limiting & warmup sandbox
 pub mod routes;
 pub mod server_registry;
 pub mod user_service;

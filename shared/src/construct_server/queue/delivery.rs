@@ -76,7 +76,11 @@ impl<'a> DeliveryManager<'a> {
             count: Some(count as u64),
         };
 
-        let entries = match self.client.xread_binary(&[(stream_key, start_id)], options).await {
+        let entries = match self
+            .client
+            .xread_binary(&[(stream_key, start_id)], options)
+            .await
+        {
             Ok(entries) => entries,
             Err(e) => {
                 // Check if it's a "stream doesn't exist" error
@@ -109,7 +113,7 @@ impl<'a> DeliveryManager<'a> {
                 .xdel(stream_key, &message_ids)
                 .await
                 .context("Failed to delete messages from stream after reading")?;
-            
+
             tracing::debug!(
                 stream_key = %stream_key,
                 deleted_count,
@@ -341,7 +345,10 @@ impl<'a> DeliveryManager<'a> {
             ",
         );
 
-        let messages: Vec<Vec<u8>> = script.key(&key).invoke_async(self.client.connection_mut()).await?;
+        let messages: Vec<Vec<u8>> = script
+            .key(&key)
+            .invoke_async(self.client.connection_mut())
+            .await?;
 
         // Filter out the empty placeholder message left by `register_server_instance`
         let filtered_messages: Vec<Vec<u8>> =
@@ -382,7 +389,10 @@ impl<'a> DeliveryManager<'a> {
             // Key doesn't exist (redis 'TYPE' returns 'none'), create it with a placeholder.
             Some("none") | None => {
                 tracing::debug!(queue_key = %queue_key, "Key does not exist, creating it");
-                self.client.connection_mut().rpush::<_, _, ()>(queue_key, b"").await?;
+                self.client
+                    .connection_mut()
+                    .rpush::<_, _, ()>(queue_key, b"")
+                    .await?;
             }
             // Key exists but has the wrong type, so delete and recreate it.
             Some(other_type) => {
@@ -392,12 +402,18 @@ impl<'a> DeliveryManager<'a> {
                     "Delivery queue key has wrong type, deleting and recreating as list"
                 );
                 self.client.connection_mut().del::<_, ()>(queue_key).await?;
-                self.client.connection_mut().rpush::<_, _, ()>(queue_key, b"").await?;
+                self.client
+                    .connection_mut()
+                    .rpush::<_, _, ()>(queue_key, b"")
+                    .await?;
             }
         }
 
         // Set/renew TTL
-        self.client.connection_mut().expire::<_, ()>(queue_key, ttl_seconds).await?;
+        self.client
+            .connection_mut()
+            .expire::<_, ()>(queue_key, ttl_seconds)
+            .await?;
         tracing::debug!(queue_key = %queue_key, ttl = ttl_seconds, "Set TTL for key");
 
         Ok(())

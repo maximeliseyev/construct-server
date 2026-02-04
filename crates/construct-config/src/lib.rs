@@ -44,8 +44,8 @@ pub struct Config {
     pub database_url: String,
     pub redis_url: String,
 
-    /// DEPRECATED: JWT_SECRET is no longer used. RS256 is now required.
-    /// Kept for backward compatibility but ignored.
+    /// Legacy JWT secret - kept for backward compatibility with old tests
+    /// Production uses RS256 (jwt_private_key/jwt_public_key)
     #[allow(dead_code)]
     pub jwt_secret: String,
 

@@ -9,7 +9,7 @@ mod tests {
             status: "healthy".to_string(),
             version: "1.0.0".to_string(),
         };
-        
+
         let json = serde_json::to_string(&health).unwrap();
         // Should be camelCase, but fields don't have underscores so it's same
         assert!(json.contains(r#""status""#));
@@ -23,7 +23,7 @@ mod tests {
             media_id: "test123".to_string(),
             expires_at: 1234567890,
         };
-        
+
         let json = serde_json::to_string(&upload).unwrap();
         // Should be mediaId (camelCase), not media_id (snake_case)
         assert!(json.contains(r#""mediaId""#));

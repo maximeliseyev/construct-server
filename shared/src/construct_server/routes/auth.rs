@@ -312,8 +312,12 @@ pub async fn register(
     }
 
     // Create user
-    let user = match db::create_user(&app_context.db_pool, &request.username, &request.password)
-        .await
+    let user = match db::create_legacy_user(
+        &app_context.db_pool,
+        &request.username,
+        &request.password,
+    )
+    .await
     {
         Ok(user) => user,
         Err(e) => {
@@ -515,7 +519,8 @@ pub async fn login(
     }
 
     // Get user by username
-    let user = match db::get_user_by_username(&app_context.db_pool, &request.username).await {
+    let user = match db::get_legacy_user_by_username(&app_context.db_pool, &request.username).await
+    {
         Ok(Some(user)) => user,
         Ok(None) => {
             // AUDIT: Log failed login (user not found)

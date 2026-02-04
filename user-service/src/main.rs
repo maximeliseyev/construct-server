@@ -64,13 +64,13 @@ async fn main() -> Result<()> {
     );
     info!("Connected to database");
 
-    // Apply database migrations
-    info!("Applying database migrations...");
-    sqlx::migrate!("../shared/migrations")
-        .run(&*db_pool)
-        .await
-        .context("Failed to apply database migrations")?;
-    info!("Database migrations applied successfully");
+    // Apply database migrations (skipped - migrations already applied manually)
+    // info!("Applying database migrations...");
+    // sqlx::migrate!("../shared/migrations")
+    //     .run(&*db_pool)
+    //     .await
+    //     .context("Failed to apply database migrations")?;
+    info!("Skipping database migrations (already applied)");
 
     // Initialize Redis
     info!("Connecting to Redis...");
@@ -102,6 +102,17 @@ async fn main() -> Result<()> {
         .route("/health", get(health_check))
         .route("/health/ready", get(health_check))
         .route("/health/live", get(health_check))
+        // PoW challenge endpoint (public)
+        .route(
+            "/api/v1/register/challenge",
+            get(handlers::get_pow_challenge),
+        )
+        // Device registration (passwordless auth)
+        .route("/api/v1/register/v2", post(handlers::register_device_v2))
+        .route(
+            "/api/v1/users/:device_id/profile",
+            get(handlers::get_device_profile),
+        )
         // Account management endpoints
         .route("/api/v1/account", get(handlers::get_account))
         .route("/api/v1/account", put(handlers::update_account))

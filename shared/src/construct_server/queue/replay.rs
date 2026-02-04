@@ -7,7 +7,6 @@
 use anyhow::Result;
 use construct_config::SECONDS_PER_DAY;
 use construct_redis::RedisClient;
-use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 
 pub(crate) struct ReplayProtection<'a> {
@@ -16,10 +15,7 @@ pub(crate) struct ReplayProtection<'a> {
 }
 
 impl<'a> ReplayProtection<'a> {
-    pub(crate) fn new(
-        client: &'a mut RedisClient,
-        msg_hash_prefix: String,
-    ) -> Self {
+    pub(crate) fn new(client: &'a mut RedisClient, msg_hash_prefix: String) -> Self {
         Self {
             client,
             msg_hash_prefix,

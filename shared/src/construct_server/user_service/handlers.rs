@@ -18,6 +18,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::routes::account;
+use crate::routes::devices;
 use crate::routes::extractors::AuthenticatedUser;
 use crate::routes::keys;
 use crate::user_service::UserServiceContext;
@@ -85,4 +86,29 @@ pub async fn upload_keys(
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
     keys::upload_keys(State(app_context), user, headers, Json(bundle)).await
+}
+
+// Device registration handlers
+pub async fn register_device_v2(
+    State(context): State<Arc<UserServiceContext>>,
+    Json(request): Json<devices::RegisterDeviceRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    devices::register_device_v2(State(app_context), Json(request)).await
+}
+
+pub async fn get_device_profile(
+    State(context): State<Arc<UserServiceContext>>,
+    Path(device_id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    devices::get_device_profile(State(app_context), Path(device_id)).await
+}
+
+// PoW challenge handler
+pub async fn get_pow_challenge(
+    State(context): State<Arc<UserServiceContext>>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    devices::get_pow_challenge(State(app_context)).await
 }

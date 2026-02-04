@@ -32,7 +32,9 @@ use axum::{
     routing::{delete, get, post},
 };
 use media_service::{
-    cleanup, config::MediaConfig, handlers::{self, AppState},
+    cleanup,
+    config::MediaConfig,
+    handlers::{self, AppState},
 };
 use std::sync::Arc;
 use tokio::spawn;

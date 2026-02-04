@@ -281,7 +281,7 @@ mod tests {
         let entries = client
             .xread_binary(&[(stream_key, "0")], StreamReadOptions::default())
             .await?;
-        
+
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].fields.get("data"), Some(&binary_data));
 
@@ -332,8 +332,8 @@ mod tests {
         let received_data = entries[0].fields.get("message").expect("No message field");
 
         // Deserialize
-        let received_msg: TestMessage = rmp_serde::from_slice(received_data)
-            .expect("MessagePack deserialize failed");
+        let received_msg: TestMessage =
+            rmp_serde::from_slice(received_data).expect("MessagePack deserialize failed");
 
         assert_eq!(received_msg, msg);
 
@@ -350,9 +350,7 @@ mod tests {
         let stream_key = "test_blocking_stream";
 
         // Add entry
-        client
-            .xadd(stream_key, "*", &[("field", "value")])
-            .await?;
+        client.xadd(stream_key, "*", &[("field", "value")]).await?;
 
         // Blocking read with timeout
         let entries = client
