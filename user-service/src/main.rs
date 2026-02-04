@@ -64,13 +64,13 @@ async fn main() -> Result<()> {
     );
     info!("Connected to database");
 
-    // Apply database migrations (skipped - migrations already applied manually)
-    // info!("Applying database migrations...");
-    // sqlx::migrate!("../shared/migrations")
-    //     .run(&*db_pool)
-    //     .await
-    //     .context("Failed to apply database migrations")?;
-    info!("Skipping database migrations (already applied)");
+    // Apply database migrations
+    info!("Applying database migrations...");
+    sqlx::migrate!("../shared/migrations")
+        .run(&*db_pool)
+        .await
+        .context("Failed to apply database migrations")?;
+    info!("Database migrations applied successfully");
 
     // Initialize Redis
     info!("Connecting to Redis...");
