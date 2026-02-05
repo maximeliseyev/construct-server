@@ -102,13 +102,13 @@ async fn main() -> Result<()> {
         .route("/health", get(health_check))
         .route("/health/ready", get(health_check))
         .route("/health/live", get(health_check))
-        // PoW challenge endpoint (public)
+        // Authentication endpoints (passwordless)
+        .route("/api/v1/auth/challenge", get(handlers::get_pow_challenge))
         .route(
-            "/api/v1/register/challenge",
-            get(handlers::get_pow_challenge),
+            "/api/v1/auth/register-device",
+            post(handlers::register_device_v2),
         )
-        // Device registration (passwordless auth)
-        .route("/api/v1/register/v2", post(handlers::register_device_v2))
+        .route("/api/v1/auth/device", post(handlers::authenticate_device))
         .route(
             "/api/v1/users/:device_id/profile",
             get(handlers::get_device_profile),

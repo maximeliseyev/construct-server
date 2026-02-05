@@ -3,14 +3,15 @@
 // ============================================================================
 //
 // Endpoints:
-// - POST /api/v1/register/v2 - Register new device (passwordless)
+// - POST /api/v1/auth/register-device - Register new device (passwordless)
+// - POST /api/v1/auth/device - Authenticate existing device
 // - GET /api/v1/users/:device_id/profile - Get device profile (public)
-// - PATCH /api/v1/users/me/profile - Update own profile
 //
 // Security:
-// - PoW validation (TODO: add later to prevent bots)
-// - Rate limiting per IP
+// - Argon2id PoW validation (anti-spam)
+// - Rate limiting per IP (5 challenges/hour)
 // - Unique device_id enforcement
+// - Ed25519 signature verification
 //
 // ============================================================================
 
@@ -56,27 +57,20 @@ fn default_suite_id() -> String {
     "Curve25519+Ed25519".to_string()
 }
 
-/// Request to register a new device
+/// Request to register a new device (privacy-focused)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterDeviceRequest {
-    /// Username (display name, NOT unique)
-    pub username: String,
+    /// Username (optional, for search/discovery)
+    /// None or empty string = maximum privacy (QR/invite only)
+    /// Some(username) = searchable via @username
+    pub username: Option<String>,
 
     /// Device ID (client-computed: SHA256(identity_public)[0..16])
     pub device_id: String,
 
     /// Public keys for authentication and E2EE
     pub public_keys: DevicePublicKeys,
-
-    /// Platform info (optional)
-    pub platform: Option<String>,
-
-    /// Device name (optional, e.g., "iPhone 15 Pro")
-    pub device_name: Option<String>,
-
-    /// Display name (optional, full name)
-    pub display_name: Option<String>,
 
     /// Proof of Work solution
     pub pow_solution: PowSolution,
@@ -100,11 +94,21 @@ pub struct PowSolution {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterDeviceResponse {
-    pub success: bool,
-    pub device_id: String,
-    pub server: String,
-    pub federated_id: String, // device_id@server
-    pub registered_at: String,
+    /// User ID (UUID, same for all user's devices)
+    #[serde(rename = "userId")]
+    pub user_id: String,
+
+    /// Access token (JWT, 1 hour TTL)
+    #[serde(rename = "accessToken")]
+    pub access_token: String,
+
+    /// Refresh token (JWT, 30 days TTL)
+    #[serde(rename = "refreshToken")]
+    pub refresh_token: String,
+
+    /// Token expiration time in seconds
+    #[serde(rename = "expiresIn")]
+    pub expires_in: u64,
 }
 
 /// Public profile response
@@ -150,7 +154,7 @@ pub async fn register_device_v2(
 
     tracing::info!(
         device_id = %request.device_id,
-        username = %request.username,
+        username = ?request.username,
         client_ip = %client_ip,
         "Device registration attempt"
     );
@@ -174,21 +178,19 @@ pub async fn register_device_v2(
         ));
     }
 
-    // 2. Validate username (3-20 chars, alphanumeric + underscore)
-    if request.username.len() < 3 || request.username.len() > 20 {
-        return Err(AppError::Validation(
-            "username must be 3-20 characters".to_string(),
-        ));
-    }
+    // 2. Validate username (optional, but if provided must be 3-20 chars, alphanumeric + underscore)
+    if let Some(ref username) = request.username {
+        if username.len() < 3 || username.len() > 20 {
+            return Err(AppError::Validation(
+                "username must be 3-20 characters".to_string(),
+            ));
+        }
 
-    if !request
-        .username
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
-    {
-        return Err(AppError::Validation(
-            "username can only contain letters, numbers, and underscores".to_string(),
-        ));
+        if !username.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(AppError::Validation(
+                "username can only contain letters, numbers, and underscores".to_string(),
+            ));
+        }
     }
 
     // 3. Decode and validate public keys
@@ -286,26 +288,27 @@ pub async fn register_device_v2(
     // 7. Create user + device atomically
     let server_hostname = "localhost:8080".to_string(); // TODO: Add server_hostname to Config
 
+    // Convert suite_id to crypto_suites JSONB format
+    let crypto_suites = format!(r#"["{}"]"#, request.public_keys.suite_id);
+
     let device_data = CreateDeviceData {
         device_id: request.device_id.clone(),
         server_hostname: server_hostname.clone(),
         verifying_key,
         identity_public,
         signed_prekey_public,
-        suite_id: request.public_keys.suite_id.clone(),
-        platform: request.platform,
-        device_name: request.device_name,
+        crypto_suites,
     };
 
-    // Convert username to Option<&str> for database
-    // Empty string becomes None (maximum privacy)
-    let username_opt = if request.username.is_empty() {
-        None
-    } else {
-        Some(request.username.as_str())
-    };
+    // Convert username: Option<String> to Option<&str> for database
+    // None or empty string = maximum privacy (no username)
+    let username_opt = request
+        .username
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.as_str());
 
-    let (user, device) =
+    let (user, _device) =
         db::create_user_with_first_device(&app_context.db_pool, username_opt, device_data)
             .await
             .map_err(|e| {
@@ -315,22 +318,167 @@ pub async fn register_device_v2(
 
     tracing::info!(
         user_id = %user.id,
-        device_id = %device.device_id,
+        device_id = %request.device_id,
         username = ?user.username,
         "User + device registered successfully (passwordless)"
     );
 
-    // 8. Return success response
-    let federated_id = format!("{}@{}", device.device_id, server_hostname);
+    // 8. Generate JWT tokens
+    let (access_token, _, exp_timestamp) = app_context
+        .auth_manager
+        .create_token(&user.id)
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to create access token");
+            AppError::Unknown(e)
+        })?;
 
+    let (refresh_token, _, _) = app_context
+        .auth_manager
+        .create_refresh_token(&user.id)
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to create refresh token");
+            AppError::Unknown(e)
+        })?;
+
+    let now = chrono::Utc::now().timestamp();
+    let expires_in = (exp_timestamp - now) as u64;
+
+    // 9. Return success response with JWT tokens
     Ok((
         StatusCode::CREATED,
         Json(RegisterDeviceResponse {
-            success: true,
-            device_id: device.device_id,
-            server: server_hostname,
-            federated_id,
-            registered_at: device.registered_at.to_rfc3339(),
+            user_id: user.id.to_string(),
+            access_token,
+            refresh_token,
+            expires_in,
+        }),
+    ))
+}
+
+// ============================================================================
+// Device Authentication Endpoint
+// ============================================================================
+
+/// POST /api/v1/auth/device
+///
+/// Authenticate existing device using Ed25519 signature.
+///
+/// Request:
+/// ```json
+/// {
+///   "device_id": "2a68bbf6425855903b7ba45aa570f91a",
+///   "timestamp": 1738700000,
+///   "signature": "base64_ed25519_signature"
+/// }
+/// ```
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthenticateDeviceRequest {
+    pub device_id: String,
+    pub timestamp: i64,
+    pub signature: String, // base64-encoded Ed25519 signature
+}
+
+pub async fn authenticate_device(
+    State(app_context): State<Arc<AppContext>>,
+    Json(request): Json<AuthenticateDeviceRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    // 1. Validate timestamp (±5 minutes window)
+    let now = chrono::Utc::now().timestamp();
+    let time_diff = (now - request.timestamp).abs();
+    if time_diff > 300 {
+        return Err(AppError::validation(
+            "Timestamp expired (must be within ±5 minutes)",
+        ));
+    }
+
+    // 2. Find device in database
+    let device = db::get_device_by_id(&app_context.db_pool, &request.device_id)
+        .await
+        .map_err(|e| AppError::internal(format!("Database error: {}", e)))?
+        .ok_or_else(|| AppError::auth("Device not found"))?;
+
+    // 3. Verify device is active
+    if !device.is_active {
+        return Err(AppError::auth("Device is inactive"));
+    }
+
+    // 4. Verify Ed25519 signature
+    // Message format: "{device_id}{timestamp}"
+    let message = format!("{}{}", request.device_id, request.timestamp);
+    let message_bytes = message.as_bytes();
+
+    // Decode signature from base64
+    let signature_bytes = BASE64
+        .decode(&request.signature)
+        .map_err(|_| AppError::validation("Invalid signature encoding"))?;
+
+    if signature_bytes.len() != 64 {
+        return Err(AppError::validation(
+            "Invalid signature length (expected 64 bytes)",
+        ));
+    }
+
+    // Verify with verifying_key from database
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let verifying_key = VerifyingKey::from_bytes(
+        device
+            .verifying_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::internal("Invalid verifying_key format"))?,
+    )
+    .map_err(|_| AppError::internal("Invalid verifying_key"))?;
+
+    let signature = Signature::from_bytes(
+        &signature_bytes
+            .try_into()
+            .map_err(|_| AppError::validation("Invalid signature"))?,
+    );
+
+    verifying_key
+        .verify(message_bytes, &signature)
+        .map_err(|_| AppError::auth("Invalid signature"))?;
+
+    // 5. Get user_id from device
+    let user_id = device
+        .user_id
+        .ok_or_else(|| AppError::internal("Device has no user_id"))?;
+
+    // 6. Generate JWT tokens
+    let (access_token, _, exp_timestamp) = app_context
+        .auth_manager
+        .create_token(&user_id)
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to create access token");
+            AppError::Unknown(e)
+        })?;
+
+    let (refresh_token, _, _) = app_context
+        .auth_manager
+        .create_refresh_token(&user_id)
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to create refresh token");
+            AppError::Unknown(e)
+        })?;
+
+    let expires_in = (exp_timestamp - now) as u64;
+
+    tracing::info!(
+        device_id = %request.device_id,
+        user_id = %user_id,
+        "Device authenticated successfully"
+    );
+
+    // 7. Return JWT tokens
+    Ok((
+        StatusCode::OK,
+        Json(RegisterDeviceResponse {
+            user_id: user_id.to_string(),
+            access_token,
+            refresh_token,
+            expires_in,
         }),
     ))
 }
@@ -360,6 +508,15 @@ pub async fn get_device_profile(
 
     let server_hostname = "localhost:8080".to_string();
 
+    // Extract first suite from crypto_suites JSONB array
+    let suite_id = device
+        .crypto_suites
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .unwrap_or("Curve25519+Ed25519")
+        .to_string();
+
     // Return public profile
     Ok(Json(DeviceProfileResponse {
         device_id: device.device_id,
@@ -369,7 +526,7 @@ pub async fn get_device_profile(
             verifying_key: BASE64.encode(&device.verifying_key),
             identity_public: BASE64.encode(&device.identity_public),
             signed_prekey_public: BASE64.encode(&device.signed_prekey_public),
-            suite_id: device.suite_id,
+            suite_id,
         },
     }))
 }

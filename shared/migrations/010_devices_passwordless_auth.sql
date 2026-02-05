@@ -5,8 +5,7 @@
 -- Purpose: Implement passwordless authentication where each device is an identity
 -- 
 -- Key Concepts:
--- - device_id = PRIMARY identifier (not username)
--- - username = display handle (NOT unique, can change)
+-- - device_id = PRIMARY identifier
 -- - Each device has its own Ed25519 signing key
 -- - Multi-device support built-in
 --
@@ -93,10 +92,6 @@ CREATE TABLE IF NOT EXISTS devices (
 -- INDEXES
 -- ============================================================================
 
--- Search by username (NOT unique index!)
-CREATE INDEX IF NOT EXISTS idx_devices_username 
-ON devices(username);
-
 -- Federation lookups
 CREATE INDEX IF NOT EXISTS idx_devices_server 
 ON devices(server_hostname);
@@ -157,7 +152,6 @@ WHERE NOT used;
 
 COMMENT ON TABLE devices IS 'Device-based identity for passwordless authentication';
 COMMENT ON COLUMN devices.device_id IS 'Primary identifier: SHA256(identity_public)[0..16]';
-COMMENT ON COLUMN devices.username IS 'Display handle (NOT unique, can be duplicate)';
 COMMENT ON COLUMN devices.verifying_key IS 'Ed25519 public key for request signature verification';
 COMMENT ON COLUMN devices.user_id IS 'Optional link to users table (for password→device migration)';
 

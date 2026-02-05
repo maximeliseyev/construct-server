@@ -140,28 +140,6 @@ CREATE TRIGGER users_username_not_reserved
     FOR EACH ROW
     EXECUTE FUNCTION check_username_not_reserved();
 
--- ============================================================================
--- CONSTRAINTS & TRIGGERS
--- ============================================================================
-
--- Prevent setting reserved usernames
-CREATE OR REPLACE FUNCTION check_username_not_reserved()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.username IS NOT NULL AND EXISTS (
-        SELECT 1 FROM reserved_usernames WHERE username = NEW.username
-    ) THEN
-        RAISE EXCEPTION 'Username % is reserved', NEW.username;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER users_username_not_reserved
-    BEFORE INSERT OR UPDATE OF username ON users
-    FOR EACH ROW
-    EXECUTE FUNCTION check_username_not_reserved();
-
 -- Prevent changing recovery_public_key once set (can only set once)
 CREATE OR REPLACE FUNCTION check_recovery_key_immutable()
 RETURNS TRIGGER AS $$

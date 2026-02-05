@@ -334,27 +334,18 @@ pub async fn get_key_bundle(
 // Device-Based Authentication (Passwordless)
 // ============================================================================
 
-/// Device record from database
+/// Device record from database (Privacy-First Design)
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Device {
     pub device_id: String,
     pub server_hostname: String,
     pub user_id: Option<Uuid>,
-    pub username: String,
-    pub display_name: Option<String>,
-    pub avatar_url: Option<String>,
-    pub bio: Option<String>,
     pub verifying_key: Vec<u8>,
     pub identity_public: Vec<u8>,
     pub signed_prekey_public: Vec<u8>,
-    pub suite_id: String,
-    pub registered_at: DateTime<Utc>,
-    pub last_active_at: Option<DateTime<Utc>>,
-    pub key_updated_at: Option<DateTime<Utc>>,
-    pub key_update_reason: Option<String>,
+    pub crypto_suites: serde_json::Value, // JSONB array
+    pub registered_at: DateTime<Utc>,     // Needed for warmup logic
     pub is_active: bool,
-    pub platform: Option<String>,
-    pub device_name: Option<String>,
 }
 
 /// Data for creating a new device
@@ -365,9 +356,7 @@ pub struct CreateDeviceData {
     pub verifying_key: Vec<u8>,
     pub identity_public: Vec<u8>,
     pub signed_prekey_public: Vec<u8>,
-    pub suite_id: String,
-    pub platform: Option<String>,
-    pub device_name: Option<String>,
+    pub crypto_suites: String, // JSONB string like '["Curve25519+Ed25519"]'
 }
 
 /// Create a new device (device registration)
@@ -393,14 +382,10 @@ pub async fn create_device(
             verifying_key,
             identity_public,
             signed_prekey_public,
-            suite_id,
-            platform,
-            device_name,
-            protocol_version,
             crypto_suites,
             registered_at,
             is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, '["0x01"]'::jsonb, NOW(), TRUE)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), TRUE)
         RETURNING *
         "#,
     )
@@ -410,9 +395,7 @@ pub async fn create_device(
     .bind(&data.verifying_key)
     .bind(&data.identity_public)
     .bind(&data.signed_prekey_public)
-    .bind(&data.suite_id)
-    .bind(&data.platform)
-    .bind(&data.device_name)
+    .bind(&data.crypto_suites)
     .fetch_one(pool)
     .await
     .context("Failed to create device")?;
@@ -491,14 +474,10 @@ pub async fn create_user_with_first_device(
             verifying_key,
             identity_public,
             signed_prekey_public,
-            suite_id,
-            platform,
-            device_name,
-            protocol_version,
             crypto_suites,
             registered_at,
             is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, '["0x01"]'::jsonb, NOW(), TRUE)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), TRUE)
         RETURNING *
         "#,
     )
@@ -508,9 +487,7 @@ pub async fn create_user_with_first_device(
     .bind(&device_data.verifying_key)
     .bind(&device_data.identity_public)
     .bind(&device_data.signed_prekey_public)
-    .bind(&device_data.suite_id)
-    .bind(&device_data.platform)
-    .bind(&device_data.device_name)
+    .bind(&device_data.crypto_suites)
     .fetch_one(&mut *tx)
     .await
     .context("Failed to create device")?;

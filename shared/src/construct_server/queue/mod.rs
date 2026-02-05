@@ -47,6 +47,7 @@ pub struct MessageQueue {
     client: RedisClient,
     /// TTL for queued messages in seconds (configured via message_ttl_days)
     /// After this period, undelivered messages are automatically deleted by Redis
+    #[allow(dead_code)]
     message_ttl_seconds: i64,
     offline_queue_prefix: String,
     delivery_queue_prefix: String,
@@ -404,8 +405,6 @@ impl MessageQueue {
     // ============================================================================
 
     pub async fn ping(&mut self) -> Result<()> {
-        use redis::AsyncCommands;
-
         let _: () = redis::cmd("PING")
             .query_async(self.client.connection_mut())
             .await?;

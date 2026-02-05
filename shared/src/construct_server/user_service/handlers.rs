@@ -112,3 +112,12 @@ pub async fn get_pow_challenge(
     let app_context = Arc::new(context.to_app_context());
     devices::get_pow_challenge(State(app_context)).await
 }
+
+/// Wrapper for authenticate_device handler
+pub async fn authenticate_device(
+    State(context): State<Arc<UserServiceContext>>,
+    Json(request): Json<devices::AuthenticateDeviceRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    devices::authenticate_device(State(app_context), Json(request)).await
+}

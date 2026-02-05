@@ -9,10 +9,8 @@
 /// - Account age-based limits (warmup vs established)
 /// - No metadata stored in users table (privacy first)
 use anyhow::{Context, Result};
-use chrono::Utc;
 use redis::AsyncCommands;
 use sqlx::PgPool;
-use std::time::Duration;
 use uuid::Uuid;
 
 use construct_error::AppError;
