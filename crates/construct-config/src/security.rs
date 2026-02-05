@@ -45,6 +45,12 @@ pub struct SecurityConfig {
     /// Bearer token for /metrics endpoint (optional, for Prometheus scraping)
     /// If empty, only IP whitelist is used (if enabled)
     pub metrics_bearer_token: Option<String>,
+    /// Maximum PoW challenges per IP per hour (anti-spam for registration)
+    /// Set to 0 to disable rate limiting (for testing)
+    pub max_pow_challenges_per_hour: u32,
+    /// Maximum device registrations per IP per hour (anti-spam)
+    /// Set to 0 to disable rate limiting (for testing)
+    pub max_registrations_per_hour: u32,
 }
 
 impl SecurityConfig {
@@ -143,6 +149,16 @@ impl SecurityConfig {
             metrics_bearer_token: std::env::var("METRICS_BEARER_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            // PoW challenge rate limiting (anti-spam for registration)
+            max_pow_challenges_per_hour: std::env::var("MAX_POW_CHALLENGES_PER_HOUR")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5), // 5 challenges/hour by default (can set to 0 to disable)
+            // Device registration rate limiting (anti-spam)
+            max_registrations_per_hour: std::env::var("MAX_REGISTRATIONS_PER_HOUR")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3), // 3 registrations/hour by default (can set to 0 to disable)
         }
     }
 }

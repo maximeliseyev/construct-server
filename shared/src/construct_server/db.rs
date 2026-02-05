@@ -618,6 +618,27 @@ pub async fn count_challenges_by_ip(pool: &DbPool, ip: &str, minutes: i32) -> Re
     .bind(ip)
     .bind(minutes)
     .fetch_one(pool)
+    .await?;
+
+    Ok(count)
+}
+
+/// Count device registrations by IP within time window (anti-spam)
+pub async fn count_registrations_by_ip(pool: &DbPool, ip: &str, minutes: i32) -> Result<i64> {
+    // Since we don't store IP in devices table, we use pow_challenges that were marked as used
+    // This is a proxy: if a challenge was used, it means registration succeeded
+    let count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM pow_challenges
+        WHERE requester_ip = $1::inet
+        AND used = true
+        AND created_at > NOW() - INTERVAL '1 minute' * $2
+        "#,
+    )
+    .bind(ip)
+    .bind(minutes)
+    .fetch_one(pool)
     .await
     .context("Failed to count challenges by IP")?;
 

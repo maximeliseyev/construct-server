@@ -235,8 +235,11 @@ pub async fn csrf_protection(
 fn is_public_endpoint(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/auth/register"
-            | "/api/v1/auth/login"
+        // Passwordless authentication endpoints (public)
+        "/api/v1/auth/challenge"
+            | "/api/v1/auth/register-device"
+            | "/api/v1/auth/device"
+            // Health check endpoints
             | "/health"
             | "/health/ready"
             | "/health/live"

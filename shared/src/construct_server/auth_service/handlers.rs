@@ -1,21 +1,52 @@
 // ============================================================================
-// Auth Service Handlers - Phase 2.6.2
+// Auth Service Handlers - Passwordless Authentication
 // ============================================================================
 //
 // Wrapper handlers that convert AuthServiceContext to AppContext
-// for use with existing auth route handlers.
+// for use with existing device-based authentication handlers.
 //
-// This is a temporary solution until handlers are refactored to use traits.
+// This service handles ONLY passwordless device-based authentication:
+// - PoW challenge generation
+// - Device registration (with Ed25519 keys)
+// - Device authentication (Ed25519 signature verification)
+// - JWT token management (refresh, logout)
 //
 // ============================================================================
 
-use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{Json, extract::State, response::IntoResponse};
 use std::sync::Arc;
 
 use crate::auth_service::AuthServiceContext;
 use crate::routes::auth;
+use crate::routes::devices;
 use crate::routes::extractors::AuthenticatedUser;
 use construct_error::AppError;
+
+/// Wrapper for get_pow_challenge handler
+pub async fn get_pow_challenge(
+    State(context): State<Arc<AuthServiceContext>>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    devices::get_pow_challenge(State(app_context)).await
+}
+
+/// Wrapper for register_device handler
+pub async fn register_device(
+    State(context): State<Arc<AuthServiceContext>>,
+    Json(request): Json<devices::RegisterDeviceRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    devices::register_device_v2(State(app_context), Json(request)).await
+}
+
+/// Wrapper for authenticate_device handler
+pub async fn authenticate_device(
+    State(context): State<Arc<AuthServiceContext>>,
+    Json(request): Json<devices::AuthenticateDeviceRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    devices::authenticate_device(State(app_context), Json(request)).await
+}
 
 /// Wrapper for refresh_token handler
 pub async fn refresh_token(
@@ -34,24 +65,4 @@ pub async fn logout(
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
     auth::logout(State(app_context), user, Json(request)).await
-}
-
-/// Wrapper for register handler
-pub async fn register(
-    State(context): State<Arc<AuthServiceContext>>,
-    headers: HeaderMap,
-    Json(request): Json<auth::RegisterRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let app_context = Arc::new(context.to_app_context());
-    auth::register(State(app_context), headers, Json(request)).await
-}
-
-/// Wrapper for login handler
-pub async fn login(
-    State(context): State<Arc<AuthServiceContext>>,
-    headers: HeaderMap,
-    Json(request): Json<auth::LoginRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let app_context = Arc::new(context.to_app_context());
-    auth::login(State(app_context), headers, Json(request)).await
 }

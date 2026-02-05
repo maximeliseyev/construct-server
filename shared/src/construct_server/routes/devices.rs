@@ -144,8 +144,8 @@ pub struct UpdateProfileRequest {
 /// - Validates device_id format (16 hex chars)
 /// - Checks device_id uniqueness
 /// - Validates public keys (base64, correct lengths)
-/// - TODO: PoW validation to prevent bots
-/// - Rate limiting: 1 registration per IP per 10 minutes
+/// - PoW validation (Argon2id with 8 leading zeros)
+/// - Rate limiting: Configurable via MAX_REGISTRATIONS_PER_HOUR (default: 3)
 pub async fn register_device_v2(
     State(app_context): State<Arc<AppContext>>,
     Json(request): Json<RegisterDeviceRequest>,
@@ -159,10 +159,25 @@ pub async fn register_device_v2(
         "Device registration attempt"
     );
 
-    // 1. Validate device_id format (16 lowercase hex characters)
-    if request.device_id.len() != 16 {
+    // 0. Check rate limiting (configurable, 0 = disabled)
+    let max_registrations = app_context.config.security.max_registrations_per_hour;
+    
+    if max_registrations > 0 {
+        let count = crate::db::count_registrations_by_ip(&app_context.db_pool, &client_ip, 60)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to check rate limit: {}", e)))?;
+
+        if count >= max_registrations as i64 {
+            return Err(AppError::Validation(
+                format!("Rate limit exceeded: max {} registrations per hour", max_registrations),
+            ));
+        }
+    }
+
+    // 1. Validate device_id format (32 lowercase hex characters = 16 bytes)
+    if request.device_id.len() != 32 {
         return Err(AppError::Validation(
-            "device_id must be exactly 16 characters".to_string(),
+            "device_id must be exactly 32 characters (16 bytes hex)".to_string(),
         ));
     }
 
@@ -214,10 +229,10 @@ pub async fn register_device_v2(
             AppError::Validation("signed_prekey_public must be valid base64".to_string())
         })?;
 
-    // 4. Verify device_id matches identity_public (SHA256 first 16 bytes)
+    // 4. Verify device_id matches identity_public (SHA256 first 16 bytes = 32 hex chars)
     let computed_device_id = {
         let hash = Sha256::digest(&identity_public);
-        hex::encode(&hash[0..8]) // First 8 bytes = 16 hex chars
+        hex::encode(&hash[0..16]) // First 16 bytes = 32 hex chars
     };
 
     if computed_device_id != request.device_id {
@@ -556,21 +571,25 @@ pub struct ChallengeResponse {
 ///
 /// Generate a PoW challenge for registration
 ///
-/// Rate limiting: 5 challenges per hour per IP
+/// Rate limiting: Configurable via MAX_POW_CHALLENGES_PER_HOUR (default: 5)
 pub async fn get_pow_challenge(
     State(app_context): State<Arc<AppContext>>,
 ) -> Result<Json<ChallengeResponse>, AppError> {
     let client_ip = "127.0.0.1".to_string(); // TODO: Extract from headers
 
-    // 1. Check rate limiting (5 challenges per hour)
-    let count = crate::db::count_challenges_by_ip(&app_context.db_pool, &client_ip, 60)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to check rate limit: {}", e)))?;
+    // 1. Check rate limiting (configurable, 0 = disabled)
+    let max_challenges = app_context.config.security.max_pow_challenges_per_hour;
+    
+    if max_challenges > 0 {
+        let count = crate::db::count_challenges_by_ip(&app_context.db_pool, &client_ip, 60)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to check rate limit: {}", e)))?;
 
-    if count >= 5 {
-        return Err(AppError::Validation(
-            "Rate limit exceeded: max 5 challenges per hour".to_string(),
-        ));
+        if count >= max_challenges as i64 {
+            return Err(AppError::Validation(
+                format!("Rate limit exceeded: max {} challenges per hour", max_challenges),
+            ));
+        }
     }
 
     // 2. Determine difficulty (normal = 8, could be dynamic)
