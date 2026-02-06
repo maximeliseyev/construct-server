@@ -35,18 +35,18 @@ CREATE TABLE IF NOT EXISTS used_invites (
 -- INDEXES
 -- ============================================================================
 
--- Cleanup index (for cron job)
-CREATE INDEX IF NOT EXISTS idx_used_invites_cleanup 
-ON used_invites(expires_at) 
-WHERE expires_at < NOW();
+-- Cleanup index (for cron job DELETE WHERE expires_at < NOW())
+-- Regular B-tree index on expires_at - no partial index needed
+CREATE INDEX IF NOT EXISTS idx_used_invites_expires_at
+ON used_invites(expires_at);
 
 -- User lookup (who created this invite?)
-CREATE INDEX IF NOT EXISTS idx_used_invites_user_id 
+CREATE INDEX IF NOT EXISTS idx_used_invites_user_id
 ON used_invites(user_id);
 
 -- Device lookup (v2 invites)
-CREATE INDEX IF NOT EXISTS idx_used_invites_device_id 
-ON used_invites(device_id) 
+CREATE INDEX IF NOT EXISTS idx_used_invites_device_id
+ON used_invites(device_id)
 WHERE device_id IS NOT NULL;
 
 -- ============================================================================
