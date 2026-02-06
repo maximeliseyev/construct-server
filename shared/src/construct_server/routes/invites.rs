@@ -26,7 +26,7 @@ use crate::context::AppContext;
 use crate::routes::extractors::AuthenticatedUser;
 use construct_db;
 use construct_error::AppError;
-use crypto_agility::InviteToken;
+use crypto_agility::{InviteToken, InviteValidationError};
 
 /// Request to generate a new invite token
 #[derive(Debug, Deserialize)]
@@ -68,6 +68,10 @@ pub struct AcceptInviteRequest {
 pub struct AcceptInviteResponse {
     /// User ID that was added
     pub user_id: Uuid,
+
+    /// Device ID (v2 only, None for v1 invites)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 
     /// Server where the user is located
     pub server: String,
@@ -181,44 +185,59 @@ pub async fn accept_invite(
     user: AuthenticatedUser,
     Json(request): Json<AcceptInviteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let inviter_user_id = user.0; // User who is accepting the invite
+    let accepter_user_id = user.0; // User who is accepting the invite
     let invite = request.invite;
 
-    // 1. Check timestamp freshness (default 5 min TTL)
-    if invite.is_expired(300) {
+    // 1. Validate invite structure and expiry (TTL: 300 seconds = 5 minutes)
+    if let Err(e) = invite.validate_with_expiry(300) {
         tracing::warn!(
             jti = %invite.jti,
-            ts = invite.ts,
-            "Invite token expired"
+            version = invite.v,
+            device_id = ?invite.device_id,
+            error = %e,
+            "Invite validation failed"
         );
-        return Err(AppError::Validation(
-            "Invite has expired. Please ask for a new QR code.".to_string(),
-        ));
+        return Err(match e {
+            InviteValidationError::Expired => AppError::Validation(
+                "Invite has expired. Please ask for a new QR code.".to_string(),
+            ),
+            InviteValidationError::FutureTimestamp => {
+                AppError::Validation("Invalid invite timestamp".to_string())
+            }
+            InviteValidationError::MissingDeviceID => AppError::Validation(
+                "Invalid v2 invite: missing device ID".to_string(),
+            ),
+            InviteValidationError::InvalidDeviceID => AppError::Validation(
+                "Invalid device ID format".to_string(),
+            ),
+            _ => AppError::Validation(format!("Invalid invite: {}", e)),
+        });
     }
 
-    // 2. Check for future timestamps (clock skew attack)
-    if invite.is_future() {
-        tracing::warn!(
-            jti = %invite.jti,
-            ts = invite.ts,
-            "Invite token has future timestamp"
-        );
-        return Err(AppError::Validation("Invalid invite timestamp".to_string()));
-    }
+    // Log invite version for monitoring
+    tracing::info!(
+        jti = %invite.jti,
+        version = invite.v,
+        device_id = ?invite.device_id,
+        "Processing invite"
+    );
 
-    // 3. TODO: Fetch user's public Identity Key and verify signature
+    // 2. TODO: Fetch user's public Identity Key and verify signature
     // This requires integration with key_bundle storage
-    // For now, we'll skip signature verification (INSECURE - to be fixed)
+    // For v2 invites, use device_id to fetch keys
+    // For v1 invites, use uuid (backwards compat)
     tracing::warn!("SECURITY: Signature verification not yet implemented");
 
-    // 4. Atomic burn: Check and mark invite as used
+    // 3. Atomic burn: Check and mark invite as used
     match construct_db::burn_invite_token(&app_context.db_pool, &invite.jti).await {
         Ok(true) => {
             // Success - invite was valid and now burned
             tracing::info!(
                 jti = %invite.jti,
+                version = invite.v,
                 user_id = %invite.uuid,
-                accepter = %inviter_user_id,
+                device_id = ?invite.device_id,
+                accepter = %accepter_user_id,
                 "Invite accepted and burned"
             );
 
@@ -229,6 +248,7 @@ pub async fn accept_invite(
                 StatusCode::OK,
                 Json(AcceptInviteResponse {
                     user_id: invite.uuid,
+                    device_id: invite.device_id.clone(),
                     server: invite.server.clone(),
                     message: format!("Contact {} added successfully", invite.uuid),
                 }),

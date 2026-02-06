@@ -9,7 +9,7 @@ mod suites;
 
 pub use capabilities::{PQPrekeys, UserCapabilities};
 pub use error::{CryptoAgilityError, Result};
-pub use invites::{InviteToken, InviteTokenRecord};
+pub use invites::{InviteToken, InviteTokenRecord, InviteValidationError};
 pub use negotiation::{negotiate_protocol, NegotiatedCapabilities};
 pub use protocol::ProtocolVersion;
 pub use suites::CryptoSuite;

@@ -31,6 +31,7 @@ pub mod key_management;
 pub mod message_gateway;
 pub mod messaging_service;
 pub mod metrics;
+pub mod models; // Invite objects and other data models
 pub mod notification_service;
 pub mod pow; // Proof of Work for device registration
 pub mod queue;

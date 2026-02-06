@@ -647,6 +647,7 @@ pub async fn create_invite_token(
     Ok(InviteTokenRecord {
         jti: row.jti,
         user_id: row.user_id,
+        device_id: None, // v1 invites don't have device_id
         ephemeral_key: row.ephemeral_key,
         signature: row.signature,
         created_at: row.created_at,
@@ -681,6 +682,7 @@ pub async fn get_invite_token(pool: &DbPool, jti: &Uuid) -> Result<Option<Invite
         Some(r) => Ok(Some(InviteTokenRecord {
             jti: r.jti,
             user_id: r.user_id,
+            device_id: None, // v1 invites don't have device_id
             ephemeral_key: r.ephemeral_key,
             signature: r.signature,
             created_at: r.created_at,

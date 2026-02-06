@@ -373,6 +373,18 @@ pub async fn create_device(
     data: CreateDeviceData,
     user_id: Option<Uuid>,
 ) -> Result<Device> {
+    insert_device_impl(pool, data, user_id).await
+}
+
+/// Internal implementation for inserting a device (supports transactions)
+async fn insert_device_impl<'a, E>(
+    executor: E,
+    data: CreateDeviceData,
+    user_id: Option<Uuid>,
+) -> Result<Device>
+where
+    E: sqlx::Executor<'a, Database = sqlx::Postgres>,
+{
     let device = sqlx::query_as::<_, Device>(
         r#"
         INSERT INTO devices (
@@ -386,7 +398,9 @@ pub async fn create_device(
             registered_at,
             is_active
         ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), TRUE)
-        RETURNING *
+        RETURNING device_id, server_hostname, user_id, verifying_key, 
+                  identity_public, signed_prekey_public, crypto_suites, 
+                  registered_at, is_active
         "#,
     )
     .bind(&data.device_id)
@@ -396,16 +410,29 @@ pub async fn create_device(
     .bind(&data.identity_public)
     .bind(&data.signed_prekey_public)
     .bind(&data.crypto_suites)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
-    .context("Failed to create device")?;
+    .map_err(|e| {
+        tracing::error!(
+            error = %e,
+            device_id = %data.device_id,
+            user_id = ?user_id,
+            crypto_suites = %data.crypto_suites,
+            "Failed to create device in database"
+        );
+        anyhow::anyhow!("Failed to create device: {}", e)
+    })?;
 
     Ok(device)
 }
 
 /// Get device by device_id
 pub async fn get_device_by_id(pool: &DbPool, device_id: &str) -> Result<Option<Device>> {
-    let device = sqlx::query_as::<_, Device>("SELECT * FROM devices WHERE device_id = $1")
+    let device = sqlx::query_as::<_, Device>(
+        "SELECT device_id, server_hostname, user_id, verifying_key, identity_public, 
+                signed_prekey_public, crypto_suites, registered_at, is_active 
+         FROM devices WHERE device_id = $1"
+    )
         .bind(device_id)
         .fetch_optional(pool)
         .await
@@ -417,7 +444,9 @@ pub async fn get_device_by_id(pool: &DbPool, device_id: &str) -> Result<Option<D
 /// Get all devices for a user
 pub async fn get_devices_by_user_id(pool: &DbPool, user_id: &Uuid) -> Result<Vec<Device>> {
     let devices = sqlx::query_as::<_, Device>(
-        "SELECT * FROM devices WHERE user_id = $1 AND is_active = TRUE ORDER BY registered_at DESC",
+        "SELECT device_id, server_hostname, user_id, verifying_key, identity_public, 
+                signed_prekey_public, crypto_suites, registered_at, is_active 
+         FROM devices WHERE user_id = $1 AND is_active = TRUE ORDER BY registered_at DESC",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -450,47 +479,50 @@ pub async fn create_user_with_first_device(
     // Start transaction
     let mut tx = pool.begin().await.context("Failed to begin transaction")?;
 
-    // 1. Create user with primary_device_id
+    // 1. Create user WITHOUT primary_device_id (to avoid FK constraint violation)
     let user = sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (id, username, primary_device_id)
-        VALUES (gen_random_uuid(), $1, $2)
+        VALUES (gen_random_uuid(), $1, NULL)
         RETURNING id, username, recovery_public_key, last_recovery_at, primary_device_id
         "#,
     )
     .bind(username)
-    .bind(&device_data.device_id)
     .fetch_one(&mut *tx)
     .await
-    .context("Failed to create user")?;
+    .map_err(|e| {
+        tracing::error!(
+            error = %e,
+            username = ?username,
+            "Failed to create user in database"
+        );
+        anyhow::anyhow!("Failed to create user: {}", e)
+    })?;
 
-    // 2. Create device linked to user
-    let device = sqlx::query_as::<_, Device>(
+    // 2. Create device linked to user using shared implementation
+    let device = insert_device_impl(&mut *tx, device_data, Some(user.id)).await?;
+
+    // 3. Update user's primary_device_id (now that device exists)
+    sqlx::query(
         r#"
-        INSERT INTO devices (
-            device_id,
-            server_hostname,
-            user_id,
-            verifying_key,
-            identity_public,
-            signed_prekey_public,
-            crypto_suites,
-            registered_at,
-            is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), TRUE)
-        RETURNING *
+        UPDATE users 
+        SET primary_device_id = $1 
+        WHERE id = $2
         "#,
     )
-    .bind(&device_data.device_id)
-    .bind(&device_data.server_hostname)
+    .bind(&device.device_id)
     .bind(user.id)
-    .bind(&device_data.verifying_key)
-    .bind(&device_data.identity_public)
-    .bind(&device_data.signed_prekey_public)
-    .bind(&device_data.crypto_suites)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await
-    .context("Failed to create device")?;
+    .map_err(|e| {
+        tracing::error!(
+            error = %e,
+            user_id = %user.id,
+            device_id = %device.device_id,
+            "Failed to set primary_device_id"
+        );
+        anyhow::anyhow!("Failed to set primary_device_id: {}", e)
+    })?;
 
     // Commit transaction
     tx.commit().await.context("Failed to commit transaction")?;
@@ -502,7 +534,11 @@ pub async fn create_user_with_first_device(
         "Created user with first device"
     );
 
-    Ok((user, device))
+    // Return user with updated primary_device_id
+    let mut user_with_device_id = user;
+    user_with_device_id.primary_device_id = Some(device.device_id.clone());
+
+    Ok((user_with_device_id, device))
 }
 
 /// Check if device_id already exists
