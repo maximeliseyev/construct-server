@@ -161,16 +161,17 @@ pub async fn register_device_v2(
 
     // 0. Check rate limiting (configurable, 0 = disabled)
     let max_registrations = app_context.config.security.max_registrations_per_hour;
-    
+
     if max_registrations > 0 {
         let count = crate::db::count_registrations_by_ip(&app_context.db_pool, &client_ip, 60)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to check rate limit: {}", e)))?;
 
         if count >= max_registrations as i64 {
-            return Err(AppError::Validation(
-                format!("Rate limit exceeded: max {} registrations per hour", max_registrations),
-            ));
+            return Err(AppError::Validation(format!(
+                "Rate limit exceeded: max {} registrations per hour",
+                max_registrations
+            )));
         }
     }
 
@@ -205,7 +206,10 @@ pub async fn register_device_v2(
             ));
         }
 
-        if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        if !username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
             return Err(AppError::Validation(
                 "username can only contain letters, numbers, and underscores".to_string(),
             ));
@@ -327,8 +331,8 @@ pub async fn register_device_v2(
         .map(|s| s.as_str());
 
     // Check if username already exists (before attempting DB insert)
-    if let Some(username) = username_opt {
-        if let Ok(Some(_existing_user)) =
+    if let Some(username) = username_opt
+        && let Ok(Some(_existing_user)) =
             db::get_user_by_username(&app_context.db_pool, username).await
         {
             tracing::warn!(
@@ -341,7 +345,6 @@ pub async fn register_device_v2(
                 username
             )));
         }
-    }
 
     let (user, _device) =
         db::create_user_with_first_device(&app_context.db_pool, username_opt, device_data)
@@ -599,16 +602,17 @@ pub async fn get_pow_challenge(
 
     // 1. Check rate limiting (configurable, 0 = disabled)
     let max_challenges = app_context.config.security.max_pow_challenges_per_hour;
-    
+
     if max_challenges > 0 {
         let count = crate::db::count_challenges_by_ip(&app_context.db_pool, &client_ip, 60)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to check rate limit: {}", e)))?;
 
         if count >= max_challenges as i64 {
-            return Err(AppError::Validation(
-                format!("Rate limit exceeded: max {} challenges per hour", max_challenges),
-            ));
+            return Err(AppError::Validation(format!(
+                "Rate limit exceeded: max {} challenges per hour",
+                max_challenges
+            )));
         }
     }
 

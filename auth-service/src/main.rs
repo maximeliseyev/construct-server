@@ -202,7 +202,10 @@ async fn main() -> Result<()> {
         .route("/public-key", get(get_public_key))
         // Passwordless authentication endpoints
         .route("/api/v1/auth/challenge", get(handlers::get_pow_challenge))
-        .route("/api/v1/auth/register-device", post(handlers::register_device))
+        .route(
+            "/api/v1/auth/register-device",
+            post(handlers::register_device),
+        )
         .route("/api/v1/auth/device", post(handlers::authenticate_device))
         // Token management endpoints
         .route("/api/v1/auth/refresh", post(handlers::refresh_token))

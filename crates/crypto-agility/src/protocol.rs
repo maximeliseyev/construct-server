@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ProtocolVersion {
     #[serde(rename = "v1")]
+    #[default]
     V1Classic = 1,
     #[serde(rename = "v2")]
     V2HybridPQ = 2,
@@ -24,8 +26,3 @@ impl ProtocolVersion {
     }
 }
 
-impl Default for ProtocolVersion {
-    fn default() -> Self {
-        Self::V1Classic
-    }
-}

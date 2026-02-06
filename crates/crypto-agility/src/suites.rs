@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum CryptoSuite {
+    #[default]
     ClassicX25519 = 0x01,
     HybridKyber1024X25519 = 0x10,
 }
@@ -23,11 +25,6 @@ impl CryptoSuite {
     }
 }
 
-impl Default for CryptoSuite {
-    fn default() -> Self {
-        Self::ClassicX25519
-    }
-}
 
 impl Serialize for CryptoSuite {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>

@@ -16,7 +16,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -34,10 +34,10 @@ use uuid::Uuid;
 
 /// Response size buckets in bytes (after JSON serialization)
 const RESPONSE_BUCKETS: [usize; 4] = [
-    4 * 1024,    // 4 KB - empty or few small messages
-    16 * 1024,   // 16 KB - typical response
-    64 * 1024,   // 64 KB - many messages
-    256 * 1024,  // 256 KB - maximum batch
+    4 * 1024,   // 4 KB - empty or few small messages
+    16 * 1024,  // 16 KB - typical response
+    64 * 1024,  // 64 KB - many messages
+    256 * 1024, // 256 KB - maximum batch
 ];
 
 /// Overhead for the _pad field in JSON: `,"_pad":"..."` = ~12 bytes + base64 content
@@ -45,7 +45,7 @@ const PAD_FIELD_OVERHEAD: usize = 12;
 
 use crate::context::AppContext;
 use crate::kafka::types::KafkaMessageEnvelope;
-use crate::rate_limit::{is_user_in_warmup, RateLimitAction};
+use crate::rate_limit::{RateLimitAction, is_user_in_warmup};
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id};
 use construct_crypto::{EncryptedMessage, ServerCryptoValidator};
@@ -417,9 +417,7 @@ impl GetMessagesResponse {
         };
 
         // Calculate current size without padding
-        let current_size = serde_json::to_vec(&response)
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let current_size = serde_json::to_vec(&response).map(|v| v.len()).unwrap_or(0);
 
         // Find target bucket
         let target_bucket = RESPONSE_BUCKETS
@@ -601,7 +599,7 @@ pub async fn get_messages(
 
                     MessageResponse {
                         id: envelope.message_id,
-                        stream_id: stream_id, // Internal use, skip in serialization
+                        stream_id, // Internal use, skip in serialization
                         // ✅ SPEC: Use "from"/"to" as per specification
                         from: envelope.sender_id,
                         to: envelope.recipient_id,
@@ -613,7 +611,7 @@ pub async fn get_messages(
                         // ✅ SPEC: Use "content" field name
                         content: envelope.encrypted_payload,
                         timestamp: envelope.timestamp as u64,
-                        suite_id: envelope.suite_id as u16,
+                        suite_id: envelope.suite_id,
                         nonce: None, // Nonce is not stored in envelope
                         delivery_status: Some("delivered".to_string()), // Messages from stream are delivered
                     }
@@ -746,7 +744,7 @@ pub async fn get_messages(
 
                     MessageResponse {
                         id: envelope.message_id,
-                        stream_id: stream_id, // Internal use, skip in serialization
+                        stream_id, // Internal use, skip in serialization
                         // ✅ SPEC: Use "from"/"to" as per specification
                         from: envelope.sender_id,
                         to: envelope.recipient_id,
@@ -758,7 +756,7 @@ pub async fn get_messages(
                         // ✅ SPEC: Use "content" field name
                         content: envelope.encrypted_payload,
                         timestamp: envelope.timestamp as u64,
-                        suite_id: envelope.suite_id as u16,
+                        suite_id: envelope.suite_id,
                         nonce: None,
                         delivery_status: Some("delivered".to_string()),
                     }

@@ -8,7 +8,7 @@
 // Related: INVITE_V2_MIGRATION.md
 // ============================================================================
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -100,7 +100,10 @@ impl InviteObject {
                     if device_id.len() != 32 {
                         return Err(InviteValidationError::InvalidDeviceID);
                     }
-                    if !device_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+                    if !device_id
+                        .chars()
+                        .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+                    {
                         return Err(InviteValidationError::InvalidDeviceID);
                     }
                 }
@@ -217,11 +220,9 @@ mod tests {
             uuid: "650e8400-e29b-41d4-a716-446655440001".to_string(),
             device_id: Some("4e1f9dbe209c1bedb33ee32dda5a28f0".to_string()),
             server: "konstruct.cc".to_string(),
-            eph_key: base64::engine::general_purpose::STANDARD
-                .encode(&[0u8; 32]),
+            eph_key: base64::engine::general_purpose::STANDARD.encode(&[0u8; 32]),
             ts: chrono::Utc::now().timestamp(),
-            sig: base64::engine::general_purpose::STANDARD
-                .encode(&[0u8; 64]),
+            sig: base64::engine::general_purpose::STANDARD.encode(&[0u8; 64]),
         };
 
         assert!(invite.validate().is_ok());
@@ -235,11 +236,9 @@ mod tests {
             uuid: "650e8400-e29b-41d4-a716-446655440001".to_string(),
             device_id: None, // Missing!
             server: "konstruct.cc".to_string(),
-            eph_key: base64::engine::general_purpose::STANDARD
-                .encode(&[0u8; 32]),
+            eph_key: base64::engine::general_purpose::STANDARD.encode(&[0u8; 32]),
             ts: chrono::Utc::now().timestamp(),
-            sig: base64::engine::general_purpose::STANDARD
-                .encode(&[0u8; 64]),
+            sig: base64::engine::general_purpose::STANDARD.encode(&[0u8; 64]),
         };
 
         assert!(matches!(
@@ -256,11 +255,9 @@ mod tests {
             uuid: "650e8400-e29b-41d4-a716-446655440001".to_string(),
             device_id: Some("tooshort".to_string()), // Wrong length!
             server: "konstruct.cc".to_string(),
-            eph_key: base64::engine::general_purpose::STANDARD
-                .encode(&[0u8; 32]),
+            eph_key: base64::engine::general_purpose::STANDARD.encode(&[0u8; 32]),
             ts: chrono::Utc::now().timestamp(),
-            sig: base64::engine::general_purpose::STANDARD
-                .encode(&[0u8; 64]),
+            sig: base64::engine::general_purpose::STANDARD.encode(&[0u8; 64]),
         };
 
         assert!(matches!(

@@ -21,6 +21,7 @@ pub struct StreamEntryBinary {
 
 /// Options for XREAD command
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct StreamReadOptions {
     /// Block for N milliseconds (None = no blocking)
     pub block: Option<u64>,
@@ -28,14 +29,6 @@ pub struct StreamReadOptions {
     pub count: Option<u64>,
 }
 
-impl Default for StreamReadOptions {
-    fn default() -> Self {
-        Self {
-            block: None,
-            count: None,
-        }
-    }
-}
 
 impl RedisClient {
     // ============================================================================

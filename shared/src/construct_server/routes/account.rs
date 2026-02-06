@@ -561,7 +561,10 @@ pub async fn check_username_availability(
         ));
     }
 
-    if !normalized.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !normalized
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
         return Ok((
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({
@@ -577,7 +580,7 @@ pub async fn check_username_availability(
 
     // 5. Check database for existing username
     let available = match db::get_user_by_username(&app_context.db_pool, &normalized).await {
-        Ok(None) => true,  // Username not found = available
+        Ok(None) => true,     // Username not found = available
         Ok(Some(_)) => false, // Username exists = not available
         Err(e) => {
             tracing::error!(error = %e, "Database error checking username");

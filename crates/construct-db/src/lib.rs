@@ -34,7 +34,6 @@ use construct_crypto::{BundleData, UploadableKeyBundle};
 use crypto_agility::{
     CryptoSuite, InviteTokenRecord, PQPrekeys, ProtocolVersion, UserCapabilities,
 };
-use serde_json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres, Transaction};
 use uuid::Uuid;

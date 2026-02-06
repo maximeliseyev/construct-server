@@ -159,7 +159,10 @@ impl InviteToken {
                     if device_id.len() != 32 {
                         return Err(InviteValidationError::InvalidDeviceID);
                     }
-                    if !device_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+                    if !device_id
+                        .chars()
+                        .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+                    {
                         return Err(InviteValidationError::InvalidDeviceID);
                     }
                 }

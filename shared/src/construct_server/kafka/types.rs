@@ -332,7 +332,7 @@ impl KafkaMessageEnvelope {
             group_id: None,
             encrypted_payload: msg.ciphertext.clone(),
             content_hash,
-            suite_id: msg.suite_id as u16,
+            suite_id: msg.suite_id,
             origin_server: None,
             federated: false,
             server_signature: None,

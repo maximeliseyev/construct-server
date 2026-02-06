@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::context::AppContext;
 use crate::db::{self as local_db, DbPool};
-use crate::rate_limit::{is_user_in_warmup, RateLimitAction};
+use crate::rate_limit::{RateLimitAction, is_user_in_warmup};
 use crate::routes::extractors::AuthenticatedUser;
 use construct_db;
 use construct_error::AppError;
@@ -129,9 +129,9 @@ pub async fn verify_invite_signature(
     })?;
 
     // 3. Decode signature from Base64
-    let signature_bytes = BASE64.decode(&invite.sig).map_err(|e| {
-        InviteSignatureError::InvalidSignature(format!("Invalid base64: {}", e))
-    })?;
+    let signature_bytes = BASE64
+        .decode(&invite.sig)
+        .map_err(|e| InviteSignatureError::InvalidSignature(format!("Invalid base64: {}", e)))?;
 
     if signature_bytes.len() != 64 {
         return Err(InviteSignatureError::InvalidSignature(format!(
@@ -250,7 +250,12 @@ pub async fn generate_invite(
     {
         let mut queue = app_context.queue.lock().await;
         if let Err(e) = queue
-            .check_warmup_rate_limit(&user_id.to_string(), action.as_str(), max_count, window_seconds)
+            .check_warmup_rate_limit(
+                &user_id.to_string(),
+                action.as_str(),
+                max_count,
+                window_seconds,
+            )
             .await
         {
             tracing::warn!(
@@ -268,7 +273,7 @@ pub async fn generate_invite(
 
     // Validate TTL
     let ttl_seconds = request.ttl_seconds.unwrap_or(300); // Default 5 minutes
-    if ttl_seconds < 60 || ttl_seconds > 3600 {
+    if !(60..=3600).contains(&ttl_seconds) {
         return Err(AppError::Validation(
             "TTL must be between 60 and 3600 seconds".to_string(),
         ));
@@ -368,12 +373,12 @@ pub async fn accept_invite(
             InviteValidationError::FutureTimestamp => {
                 AppError::Validation("Invalid invite timestamp".to_string())
             }
-            InviteValidationError::MissingDeviceID => AppError::Validation(
-                "Invalid v2 invite: missing device ID".to_string(),
-            ),
-            InviteValidationError::InvalidDeviceID => AppError::Validation(
-                "Invalid device ID format".to_string(),
-            ),
+            InviteValidationError::MissingDeviceID => {
+                AppError::Validation("Invalid v2 invite: missing device ID".to_string())
+            }
+            InviteValidationError::InvalidDeviceID => {
+                AppError::Validation("Invalid device ID format".to_string())
+            }
             _ => AppError::Validation(format!("Invalid invite: {}", e)),
         });
     }

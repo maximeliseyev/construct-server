@@ -64,7 +64,7 @@ pub async fn upload_keys(
             .flatten()
             .map(|user| {
                 log_safe_id(
-                    &user.username.as_deref().unwrap_or("unknown"),
+                    user.username.as_deref().unwrap_or("unknown"),
                     &app_context.config.logging.hash_salt,
                 )
             });
@@ -110,7 +110,7 @@ pub async fn upload_keys(
             .flatten()
             .map(|user| {
                 log_safe_id(
-                    &user.username.as_deref().unwrap_or("unknown"),
+                    user.username.as_deref().unwrap_or("unknown"),
                     &app_context.config.logging.hash_salt,
                 )
             });
@@ -198,7 +198,7 @@ pub async fn upload_keys(
                     .flatten()
                     .map(|user| {
                         log_safe_id(
-                            &user.username.as_deref().unwrap_or("unknown"),
+                            user.username.as_deref().unwrap_or("unknown"),
                             &app_context.config.logging.hash_salt,
                         )
                     });
@@ -238,7 +238,7 @@ pub async fn upload_keys(
                 .flatten()
                 .map(|user| {
                     log_safe_id(
-                        &user.username.as_deref().unwrap_or("unknown"),
+                        user.username.as_deref().unwrap_or("unknown"),
                         &app_context.config.logging.hash_salt,
                     )
                 });
@@ -301,7 +301,7 @@ pub async fn upload_keys(
                     .flatten()
                     .map(|user| {
                         log_safe_id(
-                            &user.username.as_deref().unwrap_or("unknown"),
+                            user.username.as_deref().unwrap_or("unknown"),
                             &app_context.config.logging.hash_salt,
                         )
                     });
@@ -341,7 +341,7 @@ pub async fn upload_keys(
         .flatten()
         .map(|user| {
             log_safe_id(
-                &user.username.as_deref().unwrap_or("unknown"),
+                user.username.as_deref().unwrap_or("unknown"),
                 &app_context.config.logging.hash_salt,
             )
         });
@@ -384,7 +384,7 @@ pub async fn upload_keys(
     }
 
     // Return error if storage failed
-    store_result.map_err(|e| AppError::Unknown(e))?;
+    store_result.map_err(AppError::Unknown)?;
 
     // Invalidate cache
     let mut queue = app_context.queue.lock().await;

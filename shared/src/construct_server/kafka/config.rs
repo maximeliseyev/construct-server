@@ -57,12 +57,10 @@ pub fn create_client_config(config: &KafkaConfig) -> Result<ClientConfig> {
         } else {
             client_config.set("security.protocol", "sasl_plaintext"); // SASL без SSL
         }
+    } else if config.ssl_enabled {
+        client_config.set("security.protocol", "ssl"); // Только SSL, без SASL
     } else {
-        if config.ssl_enabled {
-            client_config.set("security.protocol", "ssl"); // Только SSL, без SASL
-        } else {
-            client_config.set("security.protocol", "plaintext"); // Без SSL и SASL
-        }
+        client_config.set("security.protocol", "plaintext"); // Без SSL и SASL
     }
 
     Ok(client_config)

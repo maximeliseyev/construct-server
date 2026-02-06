@@ -387,7 +387,10 @@ async fn get_key_bundle_from_device(
         .unwrap_or_else(|_| vec!["Curve25519+Ed25519".to_string()]);
 
     // Determine suite_id from first suite
-    let suite_id: u16 = if suites.iter().any(|s| s.contains("Kyber") || s.contains("PQ")) {
+    let suite_id: u16 = if suites
+        .iter()
+        .any(|s| s.contains("Kyber") || s.contains("PQ"))
+    {
         2 // PQ_HYBRID_KYBER
     } else {
         1 // CLASSIC_X25519
@@ -399,7 +402,7 @@ async fn get_key_bundle_from_device(
         identity_key: BASE64.encode(&d.identity_public),
         signed_prekey: BASE64.encode(&d.signed_prekey_public),
         signed_prekey_signature: BASE64.encode(vec![0u8; 64]), // Placeholder - device doesn't store this separately
-        one_time_prekeys: vec![], // Not used for initial key exchange
+        one_time_prekeys: vec![],                              // Not used for initial key exchange
     };
 
     // Construct BundleData
@@ -410,8 +413,8 @@ async fn get_key_bundle_from_device(
     };
 
     // Serialize bundle_data to JSON bytes
-    let bundle_data_bytes = serde_json::to_vec(&bundle_data)
-        .context("Failed to serialize bundle_data")?;
+    let bundle_data_bytes =
+        serde_json::to_vec(&bundle_data).context("Failed to serialize bundle_data")?;
 
     // For device-based auth, we use verifying_key as master_identity_key
     // and create a placeholder signature (client will verify via device auth instead)
@@ -529,12 +532,12 @@ pub async fn get_device_by_id(pool: &DbPool, device_id: &str) -> Result<Option<D
     let device = sqlx::query_as::<_, Device>(
         "SELECT device_id, server_hostname, user_id, verifying_key, identity_public, 
                 signed_prekey_public, crypto_suites, registered_at, is_active 
-         FROM devices WHERE device_id = $1"
+         FROM devices WHERE device_id = $1",
     )
-        .bind(device_id)
-        .fetch_optional(pool)
-        .await
-        .context("Failed to fetch device")?;
+    .bind(device_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to fetch device")?;
 
     Ok(device)
 }
