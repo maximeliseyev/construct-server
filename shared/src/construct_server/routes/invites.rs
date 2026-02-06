@@ -18,15 +18,146 @@
 // ============================================================================
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::context::AppContext;
+use crate::db::{self as local_db, DbPool};
 use crate::routes::extractors::AuthenticatedUser;
 use construct_db;
 use construct_error::AppError;
 use crypto_agility::{InviteToken, InviteValidationError};
+
+// ============================================================================
+// Invite Signature Verification
+// ============================================================================
+
+/// Errors that can occur during invite signature verification
+#[derive(Debug)]
+pub enum InviteSignatureError {
+    /// Device not found for the given device_id (v2) or user_id (v1)
+    DeviceNotFound,
+    /// Invalid verifying key format
+    InvalidVerifyingKey(String),
+    /// Invalid signature format
+    InvalidSignature(String),
+    /// Signature verification failed
+    VerificationFailed,
+    /// Database error
+    DatabaseError(String),
+}
+
+impl std::fmt::Display for InviteSignatureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DeviceNotFound => write!(f, "Device not found"),
+            Self::InvalidVerifyingKey(msg) => write!(f, "Invalid verifying key: {}", msg),
+            Self::InvalidSignature(msg) => write!(f, "Invalid signature: {}", msg),
+            Self::VerificationFailed => write!(f, "Signature verification failed"),
+            Self::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for InviteSignatureError {}
+
+/// Verify Ed25519 signature of an invite token
+///
+/// For v2 invites: fetches device by device_id
+/// For v1 invites: fetches user's primary device by user_id
+///
+/// # Arguments
+/// * `pool` - Database connection pool
+/// * `invite` - The invite token to verify
+///
+/// # Returns
+/// * `Ok(())` if signature is valid
+/// * `Err(InviteSignatureError)` if verification fails
+pub async fn verify_invite_signature(
+    pool: &DbPool,
+    invite: &InviteToken,
+) -> Result<(), InviteSignatureError> {
+    // 1. Fetch verifying key based on invite version
+    let verifying_key_bytes = if invite.v == 2 {
+        // v2: Use device_id to fetch device
+        let device_id = invite
+            .device_id
+            .as_ref()
+            .ok_or(InviteSignatureError::InvalidSignature(
+                "v2 invite missing device_id".to_string(),
+            ))?;
+
+        let device = local_db::get_device_by_id(pool, device_id)
+            .await
+            .map_err(|e| InviteSignatureError::DatabaseError(e.to_string()))?
+            .ok_or(InviteSignatureError::DeviceNotFound)?;
+
+        device.verifying_key
+    } else {
+        // v1: Use user_id to fetch user's primary device
+        let devices = local_db::get_devices_by_user_id(pool, &invite.uuid)
+            .await
+            .map_err(|e| InviteSignatureError::DatabaseError(e.to_string()))?;
+
+        // Get the first active device (primary)
+        let device = devices
+            .into_iter()
+            .next()
+            .ok_or(InviteSignatureError::DeviceNotFound)?;
+
+        device.verifying_key
+    };
+
+    // 2. Parse verifying key (32 bytes Ed25519 public key)
+    if verifying_key_bytes.len() != 32 {
+        return Err(InviteSignatureError::InvalidVerifyingKey(format!(
+            "Expected 32 bytes, got {}",
+            verifying_key_bytes.len()
+        )));
+    }
+
+    let key_array: [u8; 32] = verifying_key_bytes.try_into().map_err(|_| {
+        InviteSignatureError::InvalidVerifyingKey("Failed to convert to array".to_string())
+    })?;
+
+    let verifying_key = VerifyingKey::from_bytes(&key_array).map_err(|e| {
+        InviteSignatureError::InvalidVerifyingKey(format!("Invalid Ed25519 key: {}", e))
+    })?;
+
+    // 3. Decode signature from Base64
+    let signature_bytes = BASE64.decode(&invite.sig).map_err(|e| {
+        InviteSignatureError::InvalidSignature(format!("Invalid base64: {}", e))
+    })?;
+
+    if signature_bytes.len() != 64 {
+        return Err(InviteSignatureError::InvalidSignature(format!(
+            "Expected 64 bytes, got {}",
+            signature_bytes.len()
+        )));
+    }
+
+    let sig_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
+        InviteSignatureError::InvalidSignature("Failed to convert to array".to_string())
+    })?;
+
+    let signature = Signature::from_bytes(&sig_array);
+
+    // 4. Build canonical string and verify
+    let canonical = invite.canonical_string();
+
+    verifying_key
+        .verify(canonical.as_bytes(), &signature)
+        .map_err(|_| InviteSignatureError::VerificationFailed)?;
+
+    Ok(())
+}
+
+// ============================================================================
+// Request/Response Types
+// ============================================================================
 
 /// Request to generate a new invite token
 #[derive(Debug, Deserialize)]
@@ -222,11 +353,33 @@ pub async fn accept_invite(
         "Processing invite"
     );
 
-    // 2. TODO: Fetch user's public Identity Key and verify signature
-    // This requires integration with key_bundle storage
-    // For v2 invites, use device_id to fetch keys
-    // For v1 invites, use uuid (backwards compat)
-    tracing::warn!("SECURITY: Signature verification not yet implemented");
+    // 2. Verify Ed25519 signature
+    // For v2: fetch device by device_id
+    // For v1: fetch user's primary device by user_id
+    if let Err(e) = verify_invite_signature(&app_context.db_pool, &invite).await {
+        tracing::warn!(
+            jti = %invite.jti,
+            version = invite.v,
+            device_id = ?invite.device_id,
+            error = %e,
+            "Invite signature verification failed"
+        );
+        return Err(match e {
+            InviteSignatureError::DeviceNotFound => AppError::Validation(
+                "Could not find device to verify signature. The inviter may have removed their device.".to_string(),
+            ),
+            InviteSignatureError::VerificationFailed => AppError::Validation(
+                "Invalid invite signature. This invite may have been tampered with.".to_string(),
+            ),
+            _ => AppError::Validation(format!("Signature verification failed: {}", e)),
+        });
+    }
+
+    tracing::info!(
+        jti = %invite.jti,
+        version = invite.v,
+        "Invite signature verified successfully"
+    );
 
     // 3. Atomic burn: Check and mark invite as used
     match construct_db::burn_invite_token(&app_context.db_pool, &invite.jti).await {

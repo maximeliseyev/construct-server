@@ -73,6 +73,9 @@ pub enum AppError {
     #[error("Resource not found: {0}")]
     NotFound(String),
 
+    #[error("Resource conflict: {0}")]
+    Conflict(String),
+
     #[error("Rate limit exceeded: {0}")]
     TooManyRequests(String),
 
@@ -111,6 +114,7 @@ impl AppError {
             AppError::Csrf(_) => StatusCode::FORBIDDEN,
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             #[cfg(feature = "serialization")]
             AppError::Uuid(_) => StatusCode::BAD_REQUEST,
@@ -135,6 +139,7 @@ impl AppError {
             AppError::Csrf(_) => "CSRF validation failed".to_string(),
             AppError::Validation(msg) => format!("Validation error: {}", msg),
             AppError::NotFound(msg) => format!("Not found: {}", msg),
+            AppError::Conflict(msg) => format!("Conflict: {}", msg),
             #[cfg(feature = "database")]
             AppError::Database(_) => "Database error".to_string(),
             #[cfg(feature = "redis")]
@@ -159,6 +164,7 @@ impl AppError {
             AppError::Csrf(_) => "CSRF_ERROR",
             AppError::Validation(_) => "VALIDATION_ERROR",
             AppError::NotFound(_) => "NOT_FOUND",
+            AppError::Conflict(_) => "CONFLICT",
             AppError::TooManyRequests(_) => "RATE_LIMIT_EXCEEDED",
             #[cfg(feature = "database")]
             AppError::Database(_) => "DATABASE_ERROR",
@@ -264,6 +270,11 @@ impl AppError {
     /// Create a validation error
     pub fn validation(msg: impl Into<String>) -> Self {
         AppError::Validation(msg.into())
+    }
+
+    /// Create a conflict error (409)
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        AppError::Conflict(msg.into())
     }
 
     /// Create an internal server error

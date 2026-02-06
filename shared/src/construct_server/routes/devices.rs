@@ -323,6 +323,23 @@ pub async fn register_device_v2(
         .filter(|s| !s.is_empty())
         .map(|s| s.as_str());
 
+    // Check if username already exists (before attempting DB insert)
+    if let Some(username) = username_opt {
+        if let Ok(Some(_existing_user)) =
+            db::get_user_by_username(&app_context.db_pool, username).await
+        {
+            tracing::warn!(
+                username = username,
+                device_id = %request.device_id,
+                "Registration failed: username already taken"
+            );
+            return Err(AppError::Conflict(format!(
+                "Username '{}' is already taken",
+                username
+            )));
+        }
+    }
+
     let (user, _device) =
         db::create_user_with_first_device(&app_context.db_pool, username_opt, device_data)
             .await
