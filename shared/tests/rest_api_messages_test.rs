@@ -46,10 +46,15 @@ fn create_test_message(recipient_id: &str, suite_id: u16) -> EncryptedMessage {
     // Create a dummy ciphertext (base64-encoded random bytes)
     // In real scenario, this would be properly encrypted
     let dummy_ciphertext = BASE64.encode(b"dummy_encrypted_message_content_for_testing");
+    // Dummy ephemeral public key (32 bytes for X25519)
+    let dummy_ephemeral_key = BASE64.encode(&[0u8; 32]);
 
     EncryptedMessage {
         recipient_id: recipient_id.to_string(),
         suite_id: suite_id, // SuiteId is a type alias for u16
+        ephemeral_public_key: dummy_ephemeral_key,
+        message_number: 0,
+        previous_chain_length: 0,
         ciphertext: dummy_ciphertext,
         nonce: None,
         timestamp: None,

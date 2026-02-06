@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::context::AppContext;
 use crate::kafka::types::KafkaMessageEnvelope;
+use crate::rate_limit::{is_user_in_warmup, RateLimitAction};
 use crate::routes::extractors::AuthenticatedUser;
 use crate::utils::{extract_client_ip, log_safe_id};
 use construct_crypto::{EncryptedMessage, ServerCryptoValidator};
@@ -53,6 +54,37 @@ pub async fn send_message(
             return Err(AppError::Auth(format!(
                 "Your account is temporarily blocked: {}",
                 reason
+            )));
+        }
+
+        // SECURITY: Check warmup-aware rate limits for new accounts (<48h)
+        // This prevents spam from newly created accounts
+        let in_warmup = is_user_in_warmup(&app_context.db_pool, sender_id)
+            .await
+            .unwrap_or(true); // Default to warmup (cautious)
+
+        let action = RateLimitAction::SendMessageNew; // Use stricter limit for warmup
+        let (max_count, window_seconds) = if in_warmup {
+            action.warmup_limits() // 20 per hour for warmup
+        } else {
+            action.established_limits().unwrap_or((1000, 3600)) // 1000 per hour for established
+        };
+
+        if let Err(e) = queue
+            .check_warmup_rate_limit(&sender_id_str, action.as_str(), max_count, window_seconds)
+            .await
+        {
+            drop(queue);
+            tracing::warn!(
+                sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
+                in_warmup = in_warmup,
+                max_count = max_count,
+                error = %e,
+                "Warmup rate limit exceeded for messages"
+            );
+            return Err(AppError::TooManyRequests(format!(
+                "Rate limit exceeded: {}",
+                e
             )));
         }
 

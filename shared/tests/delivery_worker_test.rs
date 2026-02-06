@@ -77,6 +77,8 @@ async fn create_test_state() -> WorkerState {
             metrics_auth_enabled: false,
             metrics_ip_whitelist: vec![],
             metrics_bearer_token: None,
+            max_pow_challenges_per_hour: 5,
+            max_registrations_per_hour: 3,
         },
         kafka: construct_config::KafkaConfig {
             enabled: false,
@@ -114,7 +116,7 @@ async fn create_test_state() -> WorkerState {
             base_domain: "test.local".to_string(),
             enabled: false,
             signing_key_seed: None,
-            mtls: construct_server_shared::federation::MtlsConfig {
+            mtls: construct_config::MtlsConfig {
                 required: false,
                 client_cert_path: None,
                 client_key_path: None,

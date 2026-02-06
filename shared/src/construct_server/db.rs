@@ -296,10 +296,15 @@ struct KeyBundleWithUsername {
 
 /// Retrieves a key bundle in the crypto-agile format along with username
 /// Returns (bundle, username) tuple
+///
+/// This function supports both:
+/// 1. Legacy key_bundles table (for old users who uploaded keys)
+/// 2. New devices table (for passwordless auth users)
 pub async fn get_key_bundle(
     pool: &DbPool,
     user_id: &Uuid,
 ) -> Result<Option<(UploadableKeyBundle, String)>> {
+    // First, try the legacy key_bundles table
     let record = sqlx::query_as::<_, KeyBundleWithUsername>(
         r#"
         SELECT
@@ -316,18 +321,111 @@ pub async fn get_key_bundle(
     .fetch_optional(pool)
     .await?;
 
-    Ok(record.map(|r| {
-        (
+    if let Some(r) = record {
+        return Ok(Some((
             UploadableKeyBundle {
                 master_identity_key: BASE64.encode(r.master_identity_key),
                 bundle_data: BASE64.encode(r.bundle_data),
                 signature: BASE64.encode(r.signature),
-                nonce: None, // Nonce is not stored in DB (only used for replay protection)
-                timestamp: None, // Timestamp is not stored in DB (only used for replay protection)
+                nonce: None,
+                timestamp: None,
             },
             r.username,
-        )
-    }))
+        )));
+    }
+
+    // Fallback: Try to construct key bundle from devices table (passwordless auth users)
+    get_key_bundle_from_device(pool, user_id).await
+}
+
+/// Device key bundle record from database
+#[derive(sqlx::FromRow)]
+struct DeviceKeyBundle {
+    pub verifying_key: Vec<u8>,
+    pub identity_public: Vec<u8>,
+    pub signed_prekey_public: Vec<u8>,
+    pub crypto_suites: serde_json::Value,
+    pub username: Option<String>,
+}
+
+/// Retrieves a key bundle from the devices table for passwordless auth users
+/// Uses the user's primary device (or first active device) to construct the bundle
+async fn get_key_bundle_from_device(
+    pool: &DbPool,
+    user_id: &Uuid,
+) -> Result<Option<(UploadableKeyBundle, String)>> {
+    use construct_crypto::{BundleData, SuiteKeyMaterial};
+
+    // Get the user's primary device or first active device
+    let device = sqlx::query_as::<_, DeviceKeyBundle>(
+        r#"
+        SELECT
+            d.verifying_key,
+            d.identity_public,
+            d.signed_prekey_public,
+            d.crypto_suites,
+            u.username
+        FROM devices d
+        JOIN users u ON d.user_id = u.id
+        WHERE d.user_id = $1 AND d.is_active = true
+        ORDER BY
+            CASE WHEN d.device_id = u.primary_device_id THEN 0 ELSE 1 END,
+            d.registered_at ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(d) = device else {
+        return Ok(None);
+    };
+
+    // Parse crypto_suites to determine suite_id
+    let suites: Vec<String> = serde_json::from_value(d.crypto_suites.clone())
+        .unwrap_or_else(|_| vec!["Curve25519+Ed25519".to_string()]);
+
+    // Determine suite_id from first suite
+    let suite_id: u16 = if suites.iter().any(|s| s.contains("Kyber") || s.contains("PQ")) {
+        2 // PQ_HYBRID_KYBER
+    } else {
+        1 // CLASSIC_X25519
+    };
+
+    // Construct SuiteKeyMaterial from device keys
+    let suite_key = SuiteKeyMaterial {
+        suite_id,
+        identity_key: BASE64.encode(&d.identity_public),
+        signed_prekey: BASE64.encode(&d.signed_prekey_public),
+        signed_prekey_signature: BASE64.encode(vec![0u8; 64]), // Placeholder - device doesn't store this separately
+        one_time_prekeys: vec![], // Not used for initial key exchange
+    };
+
+    // Construct BundleData
+    let bundle_data = BundleData {
+        user_id: user_id.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        supported_suites: vec![suite_key],
+    };
+
+    // Serialize bundle_data to JSON bytes
+    let bundle_data_bytes = serde_json::to_vec(&bundle_data)
+        .context("Failed to serialize bundle_data")?;
+
+    // For device-based auth, we use verifying_key as master_identity_key
+    // and create a placeholder signature (client will verify via device auth instead)
+    let bundle = UploadableKeyBundle {
+        master_identity_key: BASE64.encode(&d.verifying_key),
+        bundle_data: BASE64.encode(&bundle_data_bytes),
+        signature: BASE64.encode(vec![0u8; 64]), // Placeholder - auth happens via device signature
+        nonce: None,
+        timestamp: None,
+    };
+
+    let username = d.username.unwrap_or_else(|| "anonymous".to_string());
+
+    Ok(Some((bundle, username)))
 }
 
 // ============================================================================

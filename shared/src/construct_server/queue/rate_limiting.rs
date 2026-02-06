@@ -239,4 +239,55 @@ impl<'a> RateLimiter<'a> {
         let reason: Option<String> = self.client.get(&key).await?;
         Ok(reason)
     }
+
+    /// Check and increment warmup-aware rate limit
+    /// Returns Ok(()) if allowed, Err with rate limit exceeded message if blocked
+    ///
+    /// Uses atomic Lua script to check and increment in single operation
+    pub(crate) async fn check_warmup_rate_limit(
+        &mut self,
+        user_id: &str,
+        action: &str,
+        max_count: u32,
+        window_seconds: u64,
+    ) -> Result<()> {
+        let key = format!("ratelimit:{}:{}", user_id, action);
+
+        // Use Lua script to atomically check limit, increment, and set TTL
+        let script = redis::Script::new(
+            r"
+            local count = redis.call('INCR', KEYS[1])
+            if count == 1 then
+                redis.call('EXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+            ",
+        );
+
+        let count: u32 = script
+            .key(&key)
+            .arg(window_seconds as i64)
+            .invoke_async(self.client.connection_mut())
+            .await?;
+
+        if count > max_count {
+            // Get TTL for error message
+            let ttl: i64 = self.client.connection_mut().ttl(&key).await.unwrap_or(0);
+
+            anyhow::bail!(
+                "Rate limit exceeded. Limit: {} per {}. Try again in {} seconds.",
+                max_count,
+                if window_seconds >= 3600 {
+                    format!("{} hours", window_seconds / 3600)
+                } else if window_seconds >= 60 {
+                    format!("{} minutes", window_seconds / 60)
+                } else {
+                    format!("{} seconds", window_seconds)
+                },
+                ttl
+            );
+        }
+
+        Ok(())
+    }
 }

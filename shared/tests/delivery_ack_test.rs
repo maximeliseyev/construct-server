@@ -16,7 +16,6 @@
 // ============================================================================
 
 use chrono::{Duration, Utc};
-use construct_config::{Config, RedisKeyPrefixes};
 use construct_crypto::compute_message_hash;
 use construct_server_shared::delivery_ack::{
     DeliveryAckConfig, DeliveryAckManager, DeliveryAckMode, DeliveryPending,
@@ -24,7 +23,6 @@ use construct_server_shared::delivery_ack::{
 };
 use serial_test::serial;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
-use std::env;
 use std::sync::Arc;
 use uuid::Uuid;
 

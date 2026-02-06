@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use crate::context::AppContext;
 use crate::db::{self as local_db, DbPool};
+use crate::rate_limit::{is_user_in_warmup, RateLimitAction};
 use crate::routes::extractors::AuthenticatedUser;
 use construct_db;
 use construct_error::AppError;
@@ -232,6 +233,38 @@ pub async fn generate_invite(
     Json(request): Json<GenerateInviteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let user_id = user.0;
+
+    // SECURITY: Check warmup-aware rate limits for invite generation
+    // New accounts (<48h) can only create 3 invites per day
+    let in_warmup = is_user_in_warmup(&app_context.db_pool, user_id)
+        .await
+        .unwrap_or(true);
+
+    let action = RateLimitAction::CreateInvite;
+    let (max_count, window_seconds) = if in_warmup {
+        action.warmup_limits() // 3 per day for warmup
+    } else {
+        action.established_limits().unwrap_or((100, 86400)) // 100 per day for established
+    };
+
+    {
+        let mut queue = app_context.queue.lock().await;
+        if let Err(e) = queue
+            .check_warmup_rate_limit(&user_id.to_string(), action.as_str(), max_count, window_seconds)
+            .await
+        {
+            tracing::warn!(
+                user_id = %user_id,
+                in_warmup = in_warmup,
+                error = %e,
+                "Warmup rate limit exceeded for invite generation"
+            );
+            return Err(AppError::TooManyRequests(format!(
+                "Invite rate limit exceeded: {}",
+                e
+            )));
+        }
+    }
 
     // Validate TTL
     let ttl_seconds = request.ttl_seconds.unwrap_or(300); // Default 5 minutes

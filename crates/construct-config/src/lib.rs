@@ -26,7 +26,7 @@ pub use constants::{
 };
 pub use database::DbConfig;
 pub use deeplinks::DeepLinksConfig;
-pub use federation::{ApnsConfig, ApnsEnvironment, FederationConfig};
+pub use federation::{ApnsConfig, ApnsEnvironment, FederationConfig, MtlsConfig};
 pub use kafka::KafkaConfig;
 pub use logging::LoggingConfig;
 pub use media::MediaConfig;

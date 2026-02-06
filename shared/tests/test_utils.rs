@@ -15,7 +15,6 @@ use construct_server_shared::{
     apns::{ApnsClient, DeviceTokenEncryption},
     auth::AuthManager,
     auth_service::{AuthServiceContext, handlers as auth_handlers},
-    db::DbPool,
     kafka::MessageProducer,
     messaging_service::{MessagingServiceContext, handlers as messaging_handlers},
     notification_service::{NotificationServiceContext, handlers as notification_handlers},
@@ -177,8 +176,10 @@ async fn spawn_auth_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> String
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/api/v1/auth/register", post(auth_handlers::register))
-        .route("/api/v1/auth/login", post(auth_handlers::login))
+        // Passwordless device-based authentication endpoints
+        .route("/api/v1/auth/challenge", get(auth_handlers::get_pow_challenge))
+        .route("/api/v1/auth/register-device", post(auth_handlers::register_device))
+        .route("/api/v1/auth/device", post(auth_handlers::authenticate_device))
         .route("/api/v1/auth/refresh", post(auth_handlers::refresh_token))
         .route("/api/v1/auth/logout", post(auth_handlers::logout))
         .with_state(context);
@@ -218,7 +219,7 @@ async fn spawn_user_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> String
         .route("/api/v1/keys/upload", post(user_handlers::upload_keys))
         .route(
             "/api/v1/users/:user_id/public-key",
-            get(user_handlers::get_keys_v1),
+            get(user_handlers::get_public_key_bundle),
         )
         .with_state(context);
 

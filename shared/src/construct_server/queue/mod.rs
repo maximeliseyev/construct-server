@@ -258,6 +258,28 @@ impl MessageQueue {
             .await
     }
 
+    /// Check warmup-aware rate limit for a user action
+    ///
+    /// This is the main entry point for warmup rate limiting.
+    /// It checks the appropriate limits based on whether the user is in warmup period.
+    ///
+    /// Parameters:
+    /// - user_id: User identifier (UUID string)
+    /// - action: Rate limit action identifier (e.g., "msg_send", "chat_create")
+    /// - max_count: Maximum allowed count in the window
+    /// - window_seconds: Time window in seconds
+    pub async fn check_warmup_rate_limit(
+        &mut self,
+        user_id: &str,
+        action: &str,
+        max_count: u32,
+        window_seconds: u64,
+    ) -> Result<()> {
+        rate_limiting::RateLimiter::new(&mut self.client)
+            .check_warmup_rate_limit(user_id, action, max_count, window_seconds)
+            .await
+    }
+
     // ============================================================================
     // Token Management (delegated to tokens module)
     // ============================================================================

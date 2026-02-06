@@ -57,6 +57,8 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             metrics_auth_enabled: false,
             metrics_ip_whitelist: vec![],
             metrics_bearer_token: None,
+            max_pow_challenges_per_hour: 5,
+            max_registrations_per_hour: 3,
         },
         kafka: construct_config::KafkaConfig {
             enabled: false,
@@ -94,7 +96,7 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             instance_domain: "test.local".to_string(),
             base_domain: "test.local".to_string(),
             signing_key_seed: None,
-            mtls: construct_server_shared::federation::MtlsConfig {
+            mtls: construct_config::MtlsConfig {
                 required: false,
                 client_cert_path: None,
                 client_key_path: None,
@@ -260,7 +262,7 @@ async fn test_register_server_instance_logic() {
 async fn test_rate_limit_increment_and_check() {
     let (mut message_queue, mut redis_conn) = setup_queue().await;
     let user_id = format!("test-rate-limit-user-{}", Uuid::new_v4());
-    let window_secs = 3600; // 1 hour window
+    let _window_secs = 3600; // 1 hour window
     let max_requests = 100;
 
     // Test incrementing rate limit
@@ -295,7 +297,7 @@ async fn test_rate_limit_increment_and_check() {
 async fn test_rate_limit_window_expiry() {
     let (mut message_queue, mut redis_conn) = setup_queue().await;
     let user_id = format!("test-rate-expiry-{}", Uuid::new_v4());
-    let short_window = 2; // 2 seconds for testing
+    let _short_window = 2; // 2 seconds for testing
 
     // Increment count
     message_queue
@@ -369,7 +371,7 @@ async fn test_rate_limit_different_keys() {
 #[tokio::test]
 #[serial]
 async fn test_session_store_and_retrieve() {
-    let (mut message_queue, mut redis_conn) = setup_queue().await;
+    let (_message_queue, mut redis_conn) = setup_queue().await;
     let session_id = Uuid::new_v4().to_string();
     let user_id = Uuid::new_v4().to_string();
     let session_data = format!(
@@ -404,7 +406,7 @@ async fn test_session_store_and_retrieve() {
 #[tokio::test]
 #[serial]
 async fn test_session_revocation() {
-    let (mut message_queue, mut redis_conn) = setup_queue().await;
+    let (_message_queue, mut redis_conn) = setup_queue().await;
     let session_id = Uuid::new_v4().to_string();
     let user_id = Uuid::new_v4().to_string();
     let session_data = format!(r#"{{"user_id":"{}"}}"#, user_id);
@@ -439,7 +441,7 @@ async fn test_session_revocation() {
 #[tokio::test]
 #[serial]
 async fn test_delivery_stream_push_pop() {
-    let (mut message_queue, mut redis_conn) = setup_queue().await;
+    let (_message_queue, mut redis_conn) = setup_queue().await;
     let stream_key = format!("test_delivery_queue:{}", Uuid::new_v4());
 
     // Push messages to stream using XADD
