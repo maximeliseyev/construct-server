@@ -120,6 +120,11 @@ async fn main() -> Result<()> {
         // Legacy endpoints (for backward compatibility)
         .route("/keys/:user_id", get(handlers::get_keys_legacy))
         .route("/keys/upload", post(handlers::upload_keys)) // Legacy
+        // Username availability check (no auth required)
+        .route(
+            "/api/v1/users/username/availability",
+            get(handlers::check_username_availability),
+        )
         // Apply middleware
         .layer(
             ServiceBuilder::new()

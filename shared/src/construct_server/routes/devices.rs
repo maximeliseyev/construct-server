@@ -156,7 +156,7 @@ pub async fn register_device_v2(
         device_id = %request.device_id,
         username = ?request.username,
         client_ip = %client_ip,
-        "Device registration attempt"
+        "Device registration attempt (username will be normalized to lowercase)"
     );
 
     // 0. Check rate limiting (configurable, 0 = disabled)
@@ -193,15 +193,19 @@ pub async fn register_device_v2(
         ));
     }
 
-    // 2. Validate username (optional, but if provided must be 3-20 chars, alphanumeric + underscore)
-    if let Some(ref username) = request.username {
+    // 2. Validate and normalize username (optional)
+    // - Convert to lowercase (users can type "Ninshi" but it stores as "ninshi")
+    // - Must be 3-20 chars, alphanumeric + underscore only
+    let normalized_username = request.username.as_ref().map(|u| u.to_lowercase());
+
+    if let Some(ref username) = normalized_username {
         if username.len() < 3 || username.len() > 20 {
             return Err(AppError::Validation(
                 "username must be 3-20 characters".to_string(),
             ));
         }
 
-        if !username.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(AppError::Validation(
                 "username can only contain letters, numbers, and underscores".to_string(),
             ));
@@ -315,10 +319,9 @@ pub async fn register_device_v2(
         crypto_suites,
     };
 
-    // Convert username: Option<String> to Option<&str> for database
+    // Convert normalized username: Option<String> to Option<&str> for database
     // None or empty string = maximum privacy (no username)
-    let username_opt = request
-        .username
+    let username_opt = normalized_username
         .as_ref()
         .filter(|s| !s.is_empty())
         .map(|s| s.as_str());

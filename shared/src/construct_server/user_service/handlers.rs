@@ -11,7 +11,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::IntoResponse,
 };
@@ -94,4 +94,16 @@ pub async fn get_device_profile(
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
     devices::get_device_profile(State(app_context), Path(device_id)).await
+}
+
+/// Wrapper for check_username_availability handler
+/// GET /api/v1/users/username/availability?username=<string>
+/// This endpoint does NOT require authentication
+pub async fn check_username_availability(
+    State(context): State<Arc<UserServiceContext>>,
+    headers: HeaderMap,
+    Query(query): Query<account::UsernameAvailabilityQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    account::check_username_availability(State(app_context), headers, Query(query)).await
 }

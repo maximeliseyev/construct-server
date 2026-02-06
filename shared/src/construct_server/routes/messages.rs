@@ -16,10 +16,32 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
+
+// ============================================================================
+// Response Padding for Traffic Analysis Protection
+// ============================================================================
+//
+// All GET /messages responses are padded to fixed bucket sizes to prevent
+// traffic analysis attacks that could reveal message count or content size.
+//
+// Buckets: 4KB, 16KB, 64KB, 256KB
+// ============================================================================
+
+/// Response size buckets in bytes (after JSON serialization)
+const RESPONSE_BUCKETS: [usize; 4] = [
+    4 * 1024,    // 4 KB - empty or few small messages
+    16 * 1024,   // 16 KB - typical response
+    64 * 1024,   // 64 KB - many messages
+    256 * 1024,  // 256 KB - maximum batch
+];
+
+/// Overhead for the _pad field in JSON: `,"_pad":"..."` = ~12 bytes + base64 content
+const PAD_FIELD_OVERHEAD: usize = 12;
 
 use crate::context::AppContext;
 use crate::kafka::types::KafkaMessageEnvelope;
@@ -367,12 +389,62 @@ pub struct MessageResponse {
 }
 
 /// Response structure for GET /api/v1/messages
+/// Includes optional padding field for traffic analysis protection
 #[derive(Debug, Serialize)]
 pub struct GetMessagesResponse {
     pub messages: Vec<MessageResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_since: Option<String>,
     pub has_more: bool,
+    /// Random padding to normalize response sizes (traffic analysis protection)
+    /// Clients should ignore this field
+    #[serde(rename = "_pad", skip_serializing_if = "Option::is_none")]
+    pub padding: Option<String>,
+}
+
+impl GetMessagesResponse {
+    /// Create a new response with automatic padding to the next bucket size
+    pub fn new_padded(
+        messages: Vec<MessageResponse>,
+        next_since: Option<String>,
+        has_more: bool,
+    ) -> Self {
+        let mut response = Self {
+            messages,
+            next_since,
+            has_more,
+            padding: None,
+        };
+
+        // Calculate current size without padding
+        let current_size = serde_json::to_vec(&response)
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        // Find target bucket
+        let target_bucket = RESPONSE_BUCKETS
+            .iter()
+            .find(|&&b| b >= current_size)
+            .copied()
+            .unwrap_or(RESPONSE_BUCKETS[RESPONSE_BUCKETS.len() - 1]);
+
+        // Calculate padding needed
+        // Account for the overhead of adding the _pad field itself
+        if target_bucket > current_size + PAD_FIELD_OVERHEAD {
+            let padding_bytes_needed = target_bucket - current_size - PAD_FIELD_OVERHEAD;
+            // Base64 encoding: 3 bytes -> 4 chars, so we need ~75% of target bytes
+            let raw_bytes_needed = (padding_bytes_needed * 3) / 4;
+
+            if raw_bytes_needed > 0 {
+                let random_bytes: Vec<u8> = (0..raw_bytes_needed)
+                    .map(|_| rand::random::<u8>())
+                    .collect();
+                response.padding = Some(BASE64.encode(&random_bytes));
+            }
+        }
+
+        response
+    }
 }
 
 /// GET /api/v1/messages?since=<id>&timeout=30&limit=50
@@ -601,11 +673,11 @@ pub async fn get_messages(
 
         return Ok((
             StatusCode::OK,
-            Json(GetMessagesResponse {
-                messages: filtered_messages,
+            Json(GetMessagesResponse::new_padded(
+                filtered_messages,
                 next_since,
-                has_more: false, // TODO: Implement has_more logic
-            }),
+                false, // TODO: Implement has_more logic
+            )),
         ));
     }
 
@@ -727,11 +799,7 @@ pub async fn get_messages(
 
     Ok((
         StatusCode::OK,
-        Json(GetMessagesResponse {
-            messages,
-            next_since,
-            has_more: false,
-        }),
+        Json(GetMessagesResponse::new_padded(messages, next_since, false)),
     ))
 }
 
