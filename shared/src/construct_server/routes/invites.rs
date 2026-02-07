@@ -367,9 +367,7 @@ pub async fn accept_invite(
             "Invite validation failed"
         );
         return Err(match e {
-            InviteValidationError::Expired => AppError::Validation(
-                "Invite has expired. Please ask for a new QR code.".to_string(),
-            ),
+            InviteValidationError::Expired => AppError::InviteExpired,
             InviteValidationError::FutureTimestamp => {
                 AppError::Validation("Invalid invite timestamp".to_string())
             }
@@ -403,13 +401,10 @@ pub async fn accept_invite(
             "Invite signature verification failed"
         );
         return Err(match e {
-            InviteSignatureError::DeviceNotFound => AppError::Validation(
-                "Could not find device to verify signature. The inviter may have removed their device.".to_string(),
-            ),
-            InviteSignatureError::VerificationFailed => AppError::Validation(
-                "Invalid invite signature. This invite may have been tampered with.".to_string(),
-            ),
-            _ => AppError::Validation(format!("Signature verification failed: {}", e)),
+            InviteSignatureError::DeviceNotFound => AppError::PublicKeyNotFound,
+            InviteSignatureError::VerificationFailed => AppError::InviteInvalidSignature,
+            InviteSignatureError::InvalidVerifyingKey(_) => AppError::PublicKeyNotFound,
+            _ => AppError::InviteInvalidSignature,
         });
     }
 
@@ -451,9 +446,7 @@ pub async fn accept_invite(
                 jti = %invite.jti,
                 "Invite token already used or not found"
             );
-            Err(AppError::Validation(
-                "This invite has already been used or is invalid".to_string(),
-            ))
+            Err(AppError::InviteAlreadyUsed)
         }
         Err(e) => {
             tracing::error!(

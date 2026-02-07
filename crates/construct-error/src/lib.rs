@@ -70,6 +70,19 @@ pub enum AppError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    // ===== Invite Errors (per INVITE_LINKS_QR_API_SPEC.md Section 10) =====
+    #[error("Invite expired")]
+    InviteExpired,
+
+    #[error("Invalid invite signature")]
+    InviteInvalidSignature,
+
+    #[error("Invite already used")]
+    InviteAlreadyUsed,
+
+    #[error("Public key not found")]
+    PublicKeyNotFound,
+
     #[error("Resource not found: {0}")]
     NotFound(String),
 
@@ -116,6 +129,10 @@ impl AppError {
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+            AppError::InviteExpired
+            | AppError::InviteInvalidSignature
+            | AppError::InviteAlreadyUsed => StatusCode::BAD_REQUEST,
+            AppError::PublicKeyNotFound => StatusCode::NOT_FOUND,
             #[cfg(feature = "serialization")]
             AppError::Uuid(_) => StatusCode::BAD_REQUEST,
             #[cfg(feature = "http")]
@@ -140,6 +157,10 @@ impl AppError {
             AppError::Validation(msg) => format!("Validation error: {}", msg),
             AppError::NotFound(msg) => format!("Not found: {}", msg),
             AppError::Conflict(msg) => format!("Conflict: {}", msg),
+            AppError::InviteExpired => "Invite has expired. Please ask for a new QR code.".to_string(),
+            AppError::InviteInvalidSignature => "Invalid invite signature. This invite may have been tampered with.".to_string(),
+            AppError::InviteAlreadyUsed => "This invite has already been used.".to_string(),
+            AppError::PublicKeyNotFound => "Public key not found for this user.".to_string(),
             #[cfg(feature = "database")]
             AppError::Database(_) => "Database error".to_string(),
             #[cfg(feature = "redis")]
@@ -166,6 +187,10 @@ impl AppError {
             AppError::NotFound(_) => "NOT_FOUND",
             AppError::Conflict(_) => "CONFLICT",
             AppError::TooManyRequests(_) => "RATE_LIMIT_EXCEEDED",
+            AppError::InviteExpired => "INVITE_EXPIRED",
+            AppError::InviteInvalidSignature => "INVITE_INVALID_SIGNATURE",
+            AppError::InviteAlreadyUsed => "INVITE_ALREADY_USED",
+            AppError::PublicKeyNotFound => "PUBLIC_KEY_NOT_FOUND",
             #[cfg(feature = "database")]
             AppError::Database(_) => "DATABASE_ERROR",
             #[cfg(feature = "redis")]
@@ -218,22 +243,36 @@ impl IntoResponse for AppError {
         let error_code = self.error_code();
         let user_message = self.user_message();
 
-        // Create structured error response
-        let error_response = json!({
-            "error": user_message,
-            "error_code": error_code,
-            "status": status.as_u16(),
-        });
+        // For invite errors, use spec-compliant format (INVITE_LINKS_QR_API_SPEC.md Section 10)
+        // Format: {"error": "INVITE_EXPIRED", "status": 400}
+        let is_invite_error = matches!(
+            self,
+            AppError::InviteExpired
+                | AppError::InviteInvalidSignature
+                | AppError::InviteAlreadyUsed
+                | AppError::PublicKeyNotFound
+        );
 
-        // For server errors, don't expose internal details to client
         let response_body = if status.is_server_error() {
+            // For server errors, don't expose internal details to client
             json!({
                 "error": "Internal server error",
                 "error_code": error_code,
                 "status": status.as_u16(),
             })
+        } else if is_invite_error {
+            // Invite errors use spec-compliant format
+            json!({
+                "error": error_code,
+                "status": status.as_u16(),
+            })
         } else {
-            error_response
+            // Standard format for other errors
+            json!({
+                "error": user_message,
+                "error_code": error_code,
+                "status": status.as_u16(),
+            })
         };
 
         (status, axum::Json(response_body)).into_response()
@@ -318,22 +357,35 @@ impl AppError {
         let error_code = self.error_code();
         let user_message = self.user_message();
 
-        // Create structured error response
-        let error_response = json!({
-            "error": user_message,
-            "error_code": error_code,
-            "status": status.as_u16(),
-        });
+        // For invite errors, use spec-compliant format (INVITE_LINKS_QR_API_SPEC.md Section 10)
+        let is_invite_error = matches!(
+            self,
+            AppError::InviteExpired
+                | AppError::InviteInvalidSignature
+                | AppError::InviteAlreadyUsed
+                | AppError::PublicKeyNotFound
+        );
 
-        // For server errors, don't expose internal details to client
         let response_body = if status.is_server_error() {
+            // For server errors, don't expose internal details to client
             json!({
                 "error": "Internal server error",
                 "error_code": error_code,
                 "status": status.as_u16(),
             })
+        } else if is_invite_error {
+            // Invite errors use spec-compliant format
+            json!({
+                "error": error_code,
+                "status": status.as_u16(),
+            })
         } else {
-            error_response
+            // Standard format for other errors
+            json!({
+                "error": user_message,
+                "error_code": error_code,
+                "status": status.as_u16(),
+            })
         };
 
         let json_bytes = serde_json::to_vec(&response_body).unwrap_or_else(|_| {

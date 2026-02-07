@@ -47,6 +47,8 @@ pub struct KeyBundleResponse {
     pub bundle_data: String,
     /// Base64-encoded X25519 identity key (for key exchange/sessions)
     pub master_identity_key: String,
+    /// Base64-encoded Ed25519 signature of bundle_data (64 bytes)
+    pub signature: String,
 }
 
 /// Public key response structure matching the spec
@@ -509,6 +511,7 @@ async fn get_keys_impl(
                 key_bundle: KeyBundleResponse {
                     bundle_data: ext_bundle.bundle.bundle_data,
                     master_identity_key: ext_bundle.identity_key,
+                    signature: ext_bundle.bundle.signature,
                 },
                 username: ext_bundle.username,
                 verifying_key: ext_bundle.verifying_key,
@@ -522,7 +525,7 @@ async fn get_keys_impl(
                 target_user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
                 "Key bundle not found"
             );
-            Err(AppError::NotFound("PUBLIC_KEY_NOT_FOUND".to_string()))
+            Err(AppError::PublicKeyNotFound)
         }
         Err(e) => {
             // SECURITY: Always use hashed user_id in logs

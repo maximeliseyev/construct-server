@@ -279,6 +279,7 @@ async fn test_get_public_key_success() {
     struct KeyBundleData {
         bundle_data: String,
         master_identity_key: String,
+        signature: String,
     }
 
     #[derive(serde::Deserialize, Debug)]
@@ -291,6 +292,7 @@ async fn test_get_public_key_success() {
 
     let response_data: PublicKeyResponse = response.json().await.unwrap();
     assert!(!response_data.key_bundle.master_identity_key.is_empty());
+    assert!(!response_data.key_bundle.signature.is_empty());
     assert!(!response_data.verifying_key.is_empty());
     assert!(!response_data.username.is_empty());
 }
@@ -424,6 +426,7 @@ async fn test_get_public_key_after_upload() {
     struct KeyBundleData {
         bundle_data: String,
         master_identity_key: String,
+        signature: String,
     }
 
     #[derive(serde::Deserialize, Debug)]
@@ -440,6 +443,7 @@ async fn test_get_public_key_after_upload() {
     // So we just verify the response format is correct, not the exact bundle_data match
     assert!(!response_data.key_bundle.master_identity_key.is_empty());
     assert!(!response_data.key_bundle.bundle_data.is_empty());
+    assert!(!response_data.key_bundle.signature.is_empty());
     assert!(!response_data.verifying_key.is_empty());
     assert!(!response_data.username.is_empty());
 }
