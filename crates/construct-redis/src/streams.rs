@@ -20,15 +20,13 @@ pub struct StreamEntryBinary {
 }
 
 /// Options for XREAD command
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StreamReadOptions {
     /// Block for N milliseconds (None = no blocking)
     pub block: Option<u64>,
     /// Maximum number of entries to return
     pub count: Option<u64>,
 }
-
 
 impl RedisClient {
     // ============================================================================

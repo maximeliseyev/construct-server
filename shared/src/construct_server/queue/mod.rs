@@ -572,4 +572,21 @@ impl MessageQueue {
         .is_delivered_direct(message_id)
         .await
     }
+
+    /// Write a message directly to user's Redis stream (test mode only)
+    ///
+    /// This bypasses Kafka and writes directly to Redis. Used when Kafka is disabled.
+    pub async fn write_message_to_user_stream(
+        &mut self,
+        user_id: &str,
+        envelope: &crate::kafka::types::KafkaMessageEnvelope,
+    ) -> Result<String> {
+        delivery::DeliveryManager::new(
+            &mut self.client,
+            &self.config,
+            self.delivery_queue_prefix.clone(),
+        )
+        .write_message_to_user_stream(user_id, envelope)
+        .await
+    }
 }

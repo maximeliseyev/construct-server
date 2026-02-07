@@ -293,18 +293,50 @@ pub async fn send_message(
     };
     let envelope = KafkaMessageEnvelope::from_encrypted_message(&message, &ctx);
 
-    // Write to Kafka (Phase 5: source of truth)
+    // Write to Kafka (Phase 5: source of truth) or directly to Redis (test mode)
     if let Some(kafka_producer) = &app_context.kafka_producer {
-        if let Err(e) = kafka_producer.send_message(&envelope).await {
-            // SECURITY: Use hashed IDs in error logs
-            tracing::error!(
-                error = %e,
+        // Production path: send to Kafka, delivery worker will write to Redis
+        if kafka_producer.is_enabled() {
+            if let Err(e) = kafka_producer.send_message(&envelope).await {
+                // SECURITY: Use hashed IDs in error logs
+                tracing::error!(
+                    error = %e,
+                    sender_hash = %log_safe_id(&sender_id.to_string(), salt),
+                    recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+                    message_id = %message_id,
+                    "Failed to send message to Kafka"
+                );
+                return Err(AppError::Kafka(e.to_string()));
+            }
+        } else {
+            // Test mode: Kafka disabled, write directly to Redis
+            tracing::info!(
                 sender_hash = %log_safe_id(&sender_id.to_string(), salt),
                 recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
                 message_id = %message_id,
-                "Failed to send message to Kafka"
+                "Kafka disabled - writing message directly to Redis (test mode)"
             );
-            return Err(AppError::Kafka(e.to_string()));
+
+            // Write to recipient's Redis stream directly (bypassing Kafka)
+            let mut queue = app_context.queue.lock().await;
+            if let Err(e) = queue
+                .write_message_to_user_stream(&recipient_id.to_string(), &envelope)
+                .await
+            {
+                drop(queue);
+                tracing::error!(
+                    error = %e,
+                    sender_hash = %log_safe_id(&sender_id.to_string(), salt),
+                    recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+                    message_id = %message_id,
+                    "Failed to write message to Redis"
+                );
+                return Err(AppError::Internal(format!(
+                    "Failed to deliver message: {}",
+                    e
+                )));
+            }
+            drop(queue);
         }
     } else {
         tracing::error!(
@@ -940,18 +972,49 @@ pub async fn send_control_message(
     // Convert to Kafka envelope (will automatically map to ControlMessage type)
     let envelope = KafkaMessageEnvelope::from(chat_message);
 
-    // Write to Kafka (Phase 5: source of truth)
+    // Write to Kafka (Phase 5: source of truth) or directly to Redis (test mode)
     let salt = &app_context.config.logging.hash_salt;
     if let Some(kafka_producer) = &app_context.kafka_producer {
-        if let Err(e) = kafka_producer.send_message(&envelope).await {
-            tracing::error!(
-                error = %e,
+        // Production path: send to Kafka, delivery worker will write to Redis
+        if kafka_producer.is_enabled() {
+            if let Err(e) = kafka_producer.send_message(&envelope).await {
+                tracing::error!(
+                    error = %e,
+                    sender_hash = %log_safe_id(&sender_id_str, salt),
+                    recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+                    message_id = %message_id,
+                    "Failed to send END_SESSION to Kafka"
+                );
+                return Err(AppError::Kafka(e.to_string()));
+            }
+        } else {
+            // Test mode: Kafka disabled, write directly to Redis
+            tracing::info!(
                 sender_hash = %log_safe_id(&sender_id_str, salt),
                 recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
                 message_id = %message_id,
-                "Failed to send END_SESSION to Kafka"
+                "Kafka disabled - writing END_SESSION directly to Redis (test mode)"
             );
-            return Err(AppError::Kafka(e.to_string()));
+
+            let mut queue = app_context.queue.lock().await;
+            if let Err(e) = queue
+                .write_message_to_user_stream(&recipient_id.to_string(), &envelope)
+                .await
+            {
+                drop(queue);
+                tracing::error!(
+                    error = %e,
+                    sender_hash = %log_safe_id(&sender_id_str, salt),
+                    recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+                    message_id = %message_id,
+                    "Failed to write END_SESSION to Redis"
+                );
+                return Err(AppError::Internal(format!(
+                    "Failed to deliver control message: {}",
+                    e
+                )));
+            }
+            drop(queue);
         }
     } else {
         tracing::error!(

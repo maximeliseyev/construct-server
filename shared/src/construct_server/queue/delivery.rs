@@ -467,4 +467,49 @@ impl<'a> DeliveryManager<'a> {
 
         Ok(exists)
     }
+
+    /// Write a message directly to user's Redis stream (test mode only)
+    ///
+    /// This bypasses Kafka and writes directly to Redis, similar to what
+    /// the delivery worker would do. Used only when Kafka is disabled.
+    ///
+    /// Stream format: {delivery_queue_prefix}offline:{user_id}
+    /// Fields: message_id (string), payload (MessagePack serialized envelope)
+    pub(crate) async fn write_message_to_user_stream(
+        &mut self,
+        user_id: &str,
+        envelope: &crate::kafka::types::KafkaMessageEnvelope,
+    ) -> Result<String> {
+        let stream_key = format!("{}offline:{}", self.delivery_queue_prefix, user_id);
+
+        // Serialize envelope to MessagePack (same as delivery worker)
+        let payload = rmp_serde::to_vec(envelope)
+            .context("Failed to serialize KafkaMessageEnvelope to MessagePack")?;
+
+        // Use XADD with MAXLEN for automatic trimming
+        let max_len = 10000_i64; // Same as delivery worker default
+
+        let stream_id: String = redis::cmd("XADD")
+            .arg(&stream_key)
+            .arg("MAXLEN")
+            .arg("~")
+            .arg(max_len)
+            .arg("*")
+            .arg("message_id")
+            .arg(&envelope.message_id)
+            .arg("payload")
+            .arg(&payload)
+            .query_async(self.client.connection_mut())
+            .await
+            .context("Failed to write message to Redis stream")?;
+
+        tracing::debug!(
+            stream_key = %stream_key,
+            message_id = %envelope.message_id,
+            stream_id = %stream_id,
+            "Wrote message directly to user stream (test mode)"
+        );
+
+        Ok(stream_id)
+    }
 }

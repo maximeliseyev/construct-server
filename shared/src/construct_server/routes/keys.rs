@@ -16,6 +16,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -32,6 +33,45 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use construct_crypto::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
 use construct_error::AppError;
 use std::net::IpAddr;
+
+// ============================================================================
+// Public Key Response (Invite Links & QR API Spec)
+// ============================================================================
+
+/// Nested key bundle structure for public key response
+/// Per INVITE_LINKS_QR_API_SPEC.md Section 6A
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyBundleResponse {
+    /// Base64-encoded JSON bundle data (contains cipher suites, keys)
+    pub bundle_data: String,
+    /// Base64-encoded X25519 identity key (for key exchange/sessions)
+    pub master_identity_key: String,
+}
+
+/// Public key response structure matching the spec
+/// Per INVITE_LINKS_QR_API_SPEC.md Section 6A
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicKeyResponse {
+    /// Nested key bundle with bundleData and masterIdentityKey
+    pub key_bundle: KeyBundleResponse,
+    /// Username of the user
+    pub username: String,
+    /// Base64-encoded Ed25519 verifying key (REQUIRED for invite verification)
+    pub verifying_key: String,
+}
+
+/// Request body for PATCH /api/v1/users/me/public-key
+/// Per INVITE_LINKS_QR_API_SPEC.md Section 6B
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateVerifyingKeyRequest {
+    /// Base64-encoded Ed25519 verifying key
+    pub verifying_key: String,
+    /// Optional reason for update (e.g., "invite_signature_mismatch")
+    pub reason: Option<String>,
+}
 
 /// POST /keys/upload (legacy) or POST /api/v1/keys/upload
 /// Uploads or updates a user's key bundle
@@ -412,6 +452,7 @@ pub async fn get_keys(
 
 /// Internal implementation for get_keys
 /// Supports both /keys/:user_id and /api/v1/users/:id/public-key paths
+/// Returns response format per INVITE_LINKS_QR_API_SPEC.md Section 6A
 async fn get_keys_impl(
     app_context: Arc<AppContext>,
     user: AuthenticatedUser,
@@ -454,15 +495,26 @@ async fn get_keys_impl(
     let user_id = Uuid::parse_str(&user_id_str)
         .map_err(|_| AppError::Validation("Invalid user ID format".to_string()))?;
 
-    // Fetch from database
-    match db::get_key_bundle(&app_context.db_pool, &user_id).await {
-        Ok(Some(bundle)) => {
+    // Fetch from database using extended format
+    match db::get_extended_key_bundle(&app_context.db_pool, &user_id).await {
+        Ok(Some(ext_bundle)) => {
             // SECURITY: Always use hashed user_id in logs
             tracing::debug!(
                 target_user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "Key bundle retrieved"
+                "Key bundle retrieved (spec format)"
             );
-            Ok((StatusCode::OK, Json(json!(bundle))))
+
+            // Build response per INVITE_LINKS_QR_API_SPEC.md Section 6A
+            let response = PublicKeyResponse {
+                key_bundle: KeyBundleResponse {
+                    bundle_data: ext_bundle.bundle.bundle_data,
+                    master_identity_key: ext_bundle.identity_key,
+                },
+                username: ext_bundle.username,
+                verifying_key: ext_bundle.verifying_key,
+            };
+
+            Ok((StatusCode::OK, Json(response)))
         }
         Ok(None) => {
             // SECURITY: Always use hashed user_id in logs
@@ -470,7 +522,7 @@ async fn get_keys_impl(
                 target_user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
                 "Key bundle not found"
             );
-            Err(AppError::Validation("Key bundle not found".to_string()))
+            Err(AppError::NotFound("PUBLIC_KEY_NOT_FOUND".to_string()))
         }
         Err(e) => {
             // SECURITY: Always use hashed user_id in logs
@@ -486,10 +538,115 @@ async fn get_keys_impl(
 
 /// GET /api/v1/users/:id/public-key
 /// Retrieves a user's public key bundle (REST API endpoint)
+/// Per INVITE_LINKS_QR_API_SPEC.md Section 6A
 pub async fn get_public_key_bundle(
     State(app_context): State<Arc<AppContext>>,
     user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     get_keys_impl(app_context, user, id).await
+}
+
+/// PATCH /api/v1/users/me/public-key
+/// Updates the user's verifying key (Ed25519)
+/// Per INVITE_LINKS_QR_API_SPEC.md Section 6B
+///
+/// This endpoint allows updating the Ed25519 verifying key used for invite signatures.
+/// Useful when there's a signature mismatch and the client needs to re-sync.
+pub async fn update_verifying_key(
+    State(app_context): State<Arc<AppContext>>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Json(request): Json<UpdateVerifyingKeyRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user_id = user.0;
+    let user_id_hash = log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt);
+
+    // Extract client IP for audit logging
+    let client_ip_str = extract_client_ip(&headers, None);
+    let client_ip: Option<IpAddr> = client_ip_str.parse().ok();
+
+    // Validate the verifying key format (must be valid base64, 32 bytes)
+    let verifying_key_bytes = BASE64.decode(&request.verifying_key).map_err(|e| {
+        tracing::warn!(
+            error = %e,
+            user_hash = %user_id_hash,
+            "Invalid verifying key encoding"
+        );
+        AppError::Validation("Invalid verifying key: must be base64-encoded".to_string())
+    })?;
+
+    if verifying_key_bytes.len() != 32 {
+        tracing::warn!(
+            user_hash = %user_id_hash,
+            key_len = verifying_key_bytes.len(),
+            "Invalid verifying key length"
+        );
+        return Err(AppError::Validation(
+            "Invalid verifying key: must be 32 bytes (Ed25519 public key)".to_string(),
+        ));
+    }
+
+    // Get user's primary device
+    let device = db::get_user_primary_device(&app_context.db_pool, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, user_hash = %user_id_hash, "Failed to get user's device");
+            AppError::Unknown(e)
+        })?;
+
+    let Some(device) = device else {
+        tracing::warn!(user_hash = %user_id_hash, "No device found for user");
+        return Err(AppError::NotFound("No device found for user".to_string()));
+    };
+
+    // Update the verifying key in the devices table
+    match db::update_device_verifying_key(
+        &app_context.db_pool,
+        &device.device_id,
+        &verifying_key_bytes,
+    )
+    .await
+    {
+        Ok(_) => {
+            // AUDIT: Log successful key update
+            let username_hash = db::get_user_by_id(&app_context.db_pool, &user_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|user| {
+                    log_safe_id(
+                        user.username.as_deref().unwrap_or("unknown"),
+                        &app_context.config.logging.hash_salt,
+                    )
+                });
+
+            AuditLogger::log_key_rotation(
+                user_id_hash.clone(),
+                username_hash,
+                client_ip,
+                true,
+                Some(format!(
+                    "Verifying key updated. Reason: {}",
+                    request.reason.as_deref().unwrap_or("not specified")
+                )),
+            );
+
+            tracing::info!(
+                user_hash = %user_id_hash,
+                reason = ?request.reason,
+                "Verifying key updated successfully"
+            );
+
+            Ok((StatusCode::OK, Json(json!({"status": "ok"}))))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                user_hash = %user_id_hash,
+                "Failed to update verifying key"
+            );
+            Err(AppError::Unknown(e))
+        }
+    }
 }

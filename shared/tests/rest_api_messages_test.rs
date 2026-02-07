@@ -10,12 +10,11 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_crypto::EncryptedMessage;
-use serde_json::json;
 use serial_test::serial;
 use uuid::Uuid;
 
 mod test_utils;
-use test_utils::{cleanup_rate_limits, spawn_app};
+use test_utils::{cleanup_rate_limits, register_user_passwordless, spawn_app};
 
 // Helper function to create HTTP client with API headers (bypasses CSRF)
 fn create_api_client() -> reqwest::Client {
@@ -32,13 +31,11 @@ fn create_api_client() -> reqwest::Client {
         .unwrap()
 }
 
-// Helper function to generate a valid test username
+// Helper function to generate a valid test username (3-20 chars)
 fn generate_test_username(prefix: &str) -> String {
-    format!(
-        "{}_{}",
-        prefix,
-        Uuid::new_v4().to_string().replace('-', "_")
-    )
+    // Take first 8 chars of UUID to keep username short enough
+    let uuid_short = &Uuid::new_v4().to_string()[0..8];
+    format!("{}_{}", prefix, uuid_short)
 }
 
 // Helper function to create a test encrypted message
@@ -51,7 +48,7 @@ fn create_test_message(recipient_id: &str, suite_id: u16) -> EncryptedMessage {
 
     EncryptedMessage {
         recipient_id: recipient_id.to_string(),
-        suite_id: suite_id, // SuiteId is a type alias for u16
+        suite_id, // SuiteId is a type alias for u16
         ephemeral_public_key: dummy_ephemeral_key,
         message_number: 0,
         previous_chain_length: 0,
@@ -59,83 +56,6 @@ fn create_test_message(recipient_id: &str, suite_id: u16) -> EncryptedMessage {
         nonce: None,
         timestamp: None,
     }
-}
-
-// Helper function to register a user and get auth tokens
-async fn register_user(
-    client: &reqwest::Client,
-    app_address: &str,
-    username: &str,
-    password: &str,
-) -> (String, String) {
-    use construct_crypto::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
-    use ed25519_dalek::{Signer, SigningKey};
-    use rand::rngs::OsRng;
-
-    // Generate a real Ed25519 key pair for signing
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-
-    // Create key material for suite 1 (CLASSIC_X25519)
-    let suite_key = SuiteKeyMaterial {
-        suite_id: 1,
-        identity_key: BASE64.encode(verifying_key.as_bytes()),
-        signed_prekey: BASE64.encode(&[0u8; 32]), // Dummy prekey
-        signed_prekey_signature: BASE64.encode(&[0u8; 64]), // Dummy signature
-        one_time_prekeys: vec![],
-    };
-
-    let bundle_data = BundleData {
-        user_id: Uuid::new_v4().to_string(),
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        supported_suites: vec![suite_key],
-    };
-
-    let bundle_data_json = serde_json::to_string(&bundle_data).unwrap();
-    let bundle_data_b64 = BASE64.encode(bundle_data_json.as_bytes());
-
-    // Sign bundle_data with Ed25519
-    let signature = signing_key.sign(bundle_data_json.as_bytes());
-    let signature_b64 = BASE64.encode(signature.to_bytes());
-
-    let bundle = UploadableKeyBundle {
-        master_identity_key: BASE64.encode(verifying_key.as_bytes()),
-        bundle_data: bundle_data_b64,
-        signature: signature_b64,
-        nonce: None,
-        timestamp: None,
-    };
-
-    let request = json!({
-        "username": username,
-        "password": password,
-        "keyBundle": bundle
-    });
-
-    let response = client
-        .post(&format!("http://{}/api/v1/auth/register", app_address))
-        .json(&request)
-        .send()
-        .await
-        .unwrap();
-
-    let status = response.status();
-    if status != reqwest::StatusCode::CREATED {
-        let error_text = response.text().await.unwrap();
-        panic!("Registration failed (status {}): {}", status, error_text);
-    }
-
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct AuthResponse {
-        user_id: String,
-        access_token: String,
-        refresh_token: String,
-        expires_at: i64,
-    }
-
-    let auth_response: AuthResponse = response.json().await.unwrap();
-    (auth_response.user_id, auth_response.access_token)
 }
 
 // ============================================================================
@@ -149,25 +69,20 @@ async fn test_send_message_success() {
     let app = spawn_app().await;
     let client = create_api_client();
 
-    // Register two users: sender and recipient
+    // Register two users: sender and recipient (using passwordless auth)
     let sender_username = generate_test_username("sender");
     let recipient_username = generate_test_username("recipient");
 
-    let (sender_user_id, sender_token) =
-        register_user(&client, &app.address, &sender_username, "TestPassword123!").await;
+    let (_sender_user_id, sender_token) =
+        register_user_passwordless(&client, &app.auth_address, Some(&sender_username)).await;
 
-    let (recipient_user_id, _recipient_token) = register_user(
-        &client,
-        &app.address,
-        &recipient_username,
-        "TestPassword123!",
-    )
-    .await;
+    let (recipient_user_id, _recipient_token) =
+        register_user_passwordless(&client, &app.auth_address, Some(&recipient_username)).await;
 
-    // Create and send a message
+    // Create and send a message (to messaging service)
     let message = create_test_message(&recipient_user_id, 1);
     let response = client
-        .post(&format!("http://{}/api/v1/messages", app.address))
+        .post(&format!("http://{}/api/v1/messages", app.messaging_address))
         .header("Authorization", format!("Bearer {}", sender_token))
         .json(&message)
         .send()
@@ -176,8 +91,10 @@ async fn test_send_message_success() {
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(body["status"], "ok");
-    assert!(body.get("message_id").is_some());
+    // API returns status: "sent" (message queued in Kafka)
+    assert_eq!(body["status"], "sent");
+    // Response uses camelCase: "messageId"
+    assert!(body.get("messageId").is_some());
 }
 
 #[tokio::test]
@@ -190,7 +107,7 @@ async fn test_send_message_requires_auth() {
     // Try to send message without authentication
     let message = create_test_message(&Uuid::new_v4().to_string(), 1);
     let response = client
-        .post(&format!("http://{}/api/v1/messages", app.address))
+        .post(&format!("http://{}/api/v1/messages", app.messaging_address))
         .json(&message)
         .send()
         .await
@@ -213,12 +130,12 @@ async fn test_send_message_invalid_recipient() {
     // Register sender
     let sender_username = generate_test_username("sender");
     let (_sender_user_id, sender_token) =
-        register_user(&client, &app.address, &sender_username, "TestPassword123!").await;
+        register_user_passwordless(&client, &app.auth_address, Some(&sender_username)).await;
 
     // Try to send message to invalid recipient ID
     let message = create_test_message("invalid-uuid-format", 1);
     let response = client
-        .post(&format!("http://{}/api/v1/messages", app.address))
+        .post(&format!("http://{}/api/v1/messages", app.messaging_address))
         .header("Authorization", format!("Bearer {}", sender_token))
         .json(&message)
         .send()
@@ -241,12 +158,12 @@ async fn test_send_message_to_self() {
     // Register sender
     let sender_username = generate_test_username("sender");
     let (sender_user_id, sender_token) =
-        register_user(&client, &app.address, &sender_username, "TestPassword123!").await;
+        register_user_passwordless(&client, &app.auth_address, Some(&sender_username)).await;
 
     // Try to send message to self
     let message = create_test_message(&sender_user_id, 1);
     let response = client
-        .post(&format!("http://{}/api/v1/messages", app.address))
+        .post(&format!("http://{}/api/v1/messages", app.messaging_address))
         .header("Authorization", format!("Bearer {}", sender_token))
         .json(&message)
         .send()
@@ -272,27 +189,22 @@ async fn test_send_message_rate_limiting() {
     let sender_username = generate_test_username("sender");
     let recipient_username = generate_test_username("recipient");
 
-    let (sender_user_id, sender_token) =
-        register_user(&client, &app.address, &sender_username, "TestPassword123!").await;
+    let (_sender_user_id, sender_token) =
+        register_user_passwordless(&client, &app.auth_address, Some(&sender_username)).await;
 
-    let (recipient_user_id, _recipient_token) = register_user(
-        &client,
-        &app.address,
-        &recipient_username,
-        "TestPassword123!",
-    )
-    .await;
+    let (recipient_user_id, _recipient_token) =
+        register_user_passwordless(&client, &app.auth_address, Some(&recipient_username)).await;
 
     // Send many messages rapidly to trigger rate limiting
     // Note: Rate limit is typically 100 messages per hour per user+IP
     // We'll send 101 messages to test the limit
     let mut success_count = 0;
-    let mut rate_limited = false;
+    let mut _rate_limited = false;
 
-    for i in 0..105 {
+    for _i in 0..105 {
         let message = create_test_message(&recipient_user_id, 1);
         let response = client
-            .post(&format!("http://{}/api/v1/messages", app.address))
+            .post(&format!("http://{}/api/v1/messages", app.messaging_address))
             .header("Authorization", format!("Bearer {}", sender_token))
             .json(&message)
             .send()
@@ -305,7 +217,7 @@ async fn test_send_message_rate_limiting() {
             let body: serde_json::Value = response.json().await.unwrap();
             let error_msg = body["error"].as_str().unwrap_or("").to_lowercase();
             if error_msg.contains("rate limit") || error_msg.contains("too many") {
-                rate_limited = true;
+                _rate_limited = true;
                 break;
             }
         }
@@ -330,11 +242,11 @@ async fn test_get_messages_empty() {
     // Register user
     let username = generate_test_username("user");
     let (_user_id, access_token) =
-        register_user(&client, &app.address, &username, "TestPassword123!").await;
+        register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
 
     // Get messages (should be empty for new user)
     let response = client
-        .get(&format!("http://{}/api/v1/messages", app.address))
+        .get(&format!("http://{}/api/v1/messages", app.messaging_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -356,13 +268,13 @@ async fn test_get_messages_with_since() {
     // Register user
     let username = generate_test_username("user");
     let (_user_id, access_token) =
-        register_user(&client, &app.address, &username, "TestPassword123!").await;
+        register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
 
     // Get messages with since parameter
     let response = client
         .get(&format!(
             "http://{}/api/v1/messages?since=some-message-id",
-            app.address
+            app.messaging_address
         ))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
@@ -384,7 +296,7 @@ async fn test_get_messages_requires_auth() {
 
     // Try to get messages without authentication
     let response = client
-        .get(&format!("http://{}/api/v1/messages", app.address))
+        .get(&format!("http://{}/api/v1/messages", app.messaging_address))
         .send()
         .await
         .unwrap();
@@ -407,16 +319,16 @@ async fn test_get_messages_only_own() {
     let user1_username = generate_test_username("user1");
     let user2_username = generate_test_username("user2");
 
-    let (user1_id, user1_token) =
-        register_user(&client, &app.address, &user1_username, "TestPassword123!").await;
+    let (_user1_id, user1_token) =
+        register_user_passwordless(&client, &app.auth_address, Some(&user1_username)).await;
 
     let (user2_id, user2_token) =
-        register_user(&client, &app.address, &user2_username, "TestPassword123!").await;
+        register_user_passwordless(&client, &app.auth_address, Some(&user2_username)).await;
 
     // User1 sends a message to User2
     let message = create_test_message(&user2_id, 1);
     let send_response = client
-        .post(&format!("http://{}/api/v1/messages", app.address))
+        .post(&format!("http://{}/api/v1/messages", app.messaging_address))
         .header("Authorization", format!("Bearer {}", user1_token))
         .json(&message)
         .send()
@@ -429,7 +341,7 @@ async fn test_get_messages_only_own() {
     // Note: This test might need adjustment based on how messages are delivered
     // For now, we just verify that user2 can make the request
     let get_response = client
-        .get(&format!("http://{}/api/v1/messages", app.address))
+        .get(&format!("http://{}/api/v1/messages", app.messaging_address))
         .header("Authorization", format!("Bearer {}", user2_token))
         .send()
         .await
@@ -450,13 +362,13 @@ async fn test_get_messages_rate_limiting() {
     // Register user
     let username = generate_test_username("user");
     let (_user_id, access_token) =
-        register_user(&client, &app.address, &username, "TestPassword123!").await;
+        register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
 
     // Make multiple rapid requests (rate limit is 1 per second)
-    let mut rate_limited = false;
+    let mut _rate_limited = false;
     for i in 0..3 {
         let response = client
-            .get(&format!("http://{}/api/v1/messages", app.address))
+            .get(&format!("http://{}/api/v1/messages", app.messaging_address))
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
@@ -466,7 +378,7 @@ async fn test_get_messages_rate_limiting() {
             let body: serde_json::Value = response.json().await.unwrap();
             let error_msg = body["error"].as_str().unwrap_or("").to_lowercase();
             if error_msg.contains("rate limit") || error_msg.contains("per second") {
-                rate_limited = true;
+                _rate_limited = true;
                 break;
             }
         }

@@ -15,7 +15,12 @@
 // - time_cost: 2 iterations
 // - parallelism: 1 thread
 // - hash_len: 32 bytes
-// - salt: "konstruct.pow.v1.salt"
+// - salt: derived from challenge (see derive_pow_salt)
+//
+// Security:
+// - Each challenge has a unique salt (derived from the random challenge)
+// - Prevents precomputation attacks (can't build rainbow tables)
+// - Salt format: "kpow2:" + first 16 chars of challenge
 //
 // Difficulty Levels:
 // - Normal (8):   3-5 minutes on mobile (~256 attempts)
@@ -34,8 +39,27 @@ pub const POW_DIFFICULTY_NORMAL: u32 = 8; // 3-5 minutes
 pub const POW_DIFFICULTY_ATTACK: u32 = 12; // 1-2 hours
 pub const POW_DIFFICULTY_EXTREME: u32 = 16; // ~24 hours
 
-/// Fixed salt for PoW (MUST match client)
-const POW_SALT: &str = "konstruct.pow.v1.salt";
+/// Salt prefix for PoW v2 (challenge-based salt)
+const POW_SALT_PREFIX: &str = "kpow2:";
+
+/// Derive a unique salt from the challenge string.
+///
+/// Format: "kpow2:" + first 16 characters of challenge
+///
+/// This ensures each PoW challenge has a unique salt, preventing:
+/// - Precomputation attacks
+/// - Rainbow tables
+/// - Replay of solutions across different challenges
+///
+/// The salt is deterministic from the challenge, so both client
+/// and server can derive the same salt independently.
+pub fn derive_pow_salt(challenge: &str) -> String {
+    // Take first 16 chars of challenge (minimum for salt uniqueness)
+    // Full challenge is 32 chars (128 bits), but salt needs to be
+    // valid base64 and have reasonable length
+    let challenge_prefix = &challenge[..std::cmp::min(16, challenge.len())];
+    format!("{}{}", POW_SALT_PREFIX, challenge_prefix)
+}
 
 /// Argon2id parameters (MUST match client)
 const MEMORY_COST_KIB: u32 = 32 * 1024; // 32 MB
@@ -93,8 +117,9 @@ pub fn verify_pow_solution(
 
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
 
-    // 3. Create salt
-    let salt = match SaltString::encode_b64(POW_SALT.as_bytes()) {
+    // 3. Create challenge-based salt (v2: unique per challenge)
+    let derived_salt = derive_pow_salt(challenge);
+    let salt = match SaltString::encode_b64(derived_salt.as_bytes()) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(error = %e, "Failed to encode salt");
@@ -268,7 +293,8 @@ mod tests {
                 .unwrap();
 
             let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
-            let salt = SaltString::encode_b64(POW_SALT.as_bytes()).unwrap();
+            let derived_salt = derive_pow_salt(challenge);
+            let salt = SaltString::encode_b64(derived_salt.as_bytes()).unwrap();
 
             if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt) {
                 if let Some(h) = hash.hash {

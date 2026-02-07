@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ProtocolVersion {
     #[serde(rename = "v1")]
     #[default]
@@ -25,4 +24,3 @@ impl ProtocolVersion {
         matches!(self, Self::V2HybridPQ)
     }
 }
-

@@ -35,7 +35,7 @@ pub mod request_signing; // Made public for user-service (account deletion uses 
 
 use axum::{
     Router,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use std::sync::Arc;
 use tower::ServiceBuilder;
@@ -71,6 +71,11 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         .route(
             "/api/v1/users/:id/public-key",
             get(keys::get_public_key_bundle),
+        )
+        // PATCH endpoint for updating verifying key (per INVITE_LINKS_QR_API_SPEC.md)
+        .route(
+            "/api/v1/users/me/public-key",
+            patch(keys::update_verifying_key),
         )
         // Phase 5: Crypto-agility capabilities
         .route(

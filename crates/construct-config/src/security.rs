@@ -51,6 +51,9 @@ pub struct SecurityConfig {
     /// Maximum device registrations per IP per hour (anti-spam)
     /// Set to 0 to disable rate limiting (for testing)
     pub max_registrations_per_hour: u32,
+    /// PoW difficulty (number of leading zero bits required)
+    /// Default: 8 (production), set to 1-2 for fast tests
+    pub pow_difficulty: u32,
 }
 
 impl SecurityConfig {
@@ -159,6 +162,11 @@ impl SecurityConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3), // 3 registrations/hour by default (can set to 0 to disable)
+            // PoW difficulty (default: 8 for production, set to 1-2 for tests)
+            pow_difficulty: std::env::var("POW_DIFFICULTY")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8), // 8 leading zeros by default (3-5 seconds to solve)
         }
     }
 }

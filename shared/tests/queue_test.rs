@@ -59,6 +59,7 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
             metrics_bearer_token: None,
             max_pow_challenges_per_hour: 5,
             max_registrations_per_hour: 3,
+            pow_difficulty: 1, // Low difficulty for tests
         },
         kafka: construct_config::KafkaConfig {
             enabled: false,

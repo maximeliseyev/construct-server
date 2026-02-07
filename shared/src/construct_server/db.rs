@@ -348,6 +348,20 @@ struct DeviceKeyBundle {
     pub username: Option<String>,
 }
 
+/// Extended key bundle data including separate verifying key
+/// Per INVITE_LINKS_QR_API_SPEC.md - verifyingKey must be separate from masterIdentityKey
+#[derive(Debug, Clone)]
+pub struct ExtendedKeyBundle {
+    /// The key bundle (bundleData, masterIdentityKey as X25519)
+    pub bundle: UploadableKeyBundle,
+    /// Username
+    pub username: String,
+    /// Ed25519 verifying key (base64-encoded)
+    pub verifying_key: String,
+    /// X25519 identity key (base64-encoded) - for masterIdentityKey field
+    pub identity_key: String,
+}
+
 /// Retrieves a key bundle from the devices table for passwordless auth users
 /// Uses the user's primary device (or first active device) to construct the bundle
 async fn get_key_bundle_from_device(
@@ -429,6 +443,133 @@ async fn get_key_bundle_from_device(
     let username = d.username.unwrap_or_else(|| "anonymous".to_string());
 
     Ok(Some((bundle, username)))
+}
+
+/// Retrieves extended key bundle with separate verifying_key and identity_key
+/// Per INVITE_LINKS_QR_API_SPEC.md - verifyingKey (Ed25519) must be separate from masterIdentityKey (X25519)
+pub async fn get_extended_key_bundle(
+    pool: &DbPool,
+    user_id: &Uuid,
+) -> Result<Option<ExtendedKeyBundle>> {
+    use construct_crypto::{BundleData, SuiteKeyMaterial};
+
+    // Get the user's primary device or first active device
+    let device = sqlx::query_as::<_, DeviceKeyBundle>(
+        r#"
+        SELECT
+            d.verifying_key,
+            d.identity_public,
+            d.signed_prekey_public,
+            d.crypto_suites,
+            u.username
+        FROM devices d
+        JOIN users u ON d.user_id = u.id
+        WHERE d.user_id = $1 AND d.is_active = true
+        ORDER BY
+            CASE WHEN d.device_id = u.primary_device_id THEN 0 ELSE 1 END,
+            d.registered_at ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(d) = device else {
+        // Fallback: try legacy key_bundles table
+        // For legacy users, verifying_key = master_identity_key (Ed25519)
+        let record = sqlx::query_as::<_, KeyBundleWithUsername>(
+            r#"
+            SELECT
+                kb.master_identity_key,
+                kb.bundle_data,
+                kb.signature,
+                u.username
+            FROM key_bundles kb
+            JOIN users u ON kb.user_id = u.id
+            WHERE kb.user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(r) = record {
+            // For legacy bundles, master_identity_key is Ed25519 (used for both)
+            let verifying_key = BASE64.encode(&r.master_identity_key);
+            return Ok(Some(ExtendedKeyBundle {
+                bundle: UploadableKeyBundle {
+                    master_identity_key: verifying_key.clone(),
+                    bundle_data: BASE64.encode(&r.bundle_data),
+                    signature: BASE64.encode(&r.signature),
+                    nonce: None,
+                    timestamp: None,
+                },
+                username: r.username,
+                verifying_key: verifying_key.clone(),
+                identity_key: verifying_key, // Legacy: same key for both
+            }));
+        }
+
+        return Ok(None);
+    };
+
+    // Parse crypto_suites to determine suite_id
+    let suites: Vec<String> = serde_json::from_value(d.crypto_suites.clone())
+        .unwrap_or_else(|_| vec!["Curve25519+Ed25519".to_string()]);
+
+    // Determine suite_id from first suite
+    let suite_id: u16 = if suites
+        .iter()
+        .any(|s| s.contains("Kyber") || s.contains("PQ"))
+    {
+        2 // PQ_HYBRID_KYBER
+    } else {
+        1 // CLASSIC_X25519
+    };
+
+    // Construct SuiteKeyMaterial from device keys
+    let suite_key = SuiteKeyMaterial {
+        suite_id,
+        identity_key: BASE64.encode(&d.identity_public),
+        signed_prekey: BASE64.encode(&d.signed_prekey_public),
+        signed_prekey_signature: BASE64.encode(vec![0u8; 64]), // Placeholder
+        one_time_prekeys: vec![],
+    };
+
+    // Construct BundleData
+    let bundle_data = BundleData {
+        user_id: user_id.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        supported_suites: vec![suite_key],
+    };
+
+    // Serialize bundle_data to JSON bytes
+    let bundle_data_bytes =
+        serde_json::to_vec(&bundle_data).context("Failed to serialize bundle_data")?;
+
+    // Separate keys per spec:
+    // - verifying_key: Ed25519 (for invite signatures)
+    // - identity_public: X25519 (for key exchange/sessions)
+    let verifying_key = BASE64.encode(&d.verifying_key);
+    let identity_key = BASE64.encode(&d.identity_public);
+
+    let bundle = UploadableKeyBundle {
+        master_identity_key: identity_key.clone(), // X25519 for sessions
+        bundle_data: BASE64.encode(&bundle_data_bytes),
+        signature: BASE64.encode(vec![0u8; 64]), // Placeholder
+        nonce: None,
+        timestamp: None,
+    };
+
+    let username = d.username.unwrap_or_else(|| "anonymous".to_string());
+
+    Ok(Some(ExtendedKeyBundle {
+        bundle,
+        username,
+        verifying_key,
+        identity_key,
+    }))
 }
 
 // ============================================================================
@@ -661,6 +802,55 @@ pub async fn update_device_last_active(pool: &DbPool, device_id: &str) -> Result
         .execute(pool)
         .await
         .context("Failed to update device last_active")?;
+
+    Ok(())
+}
+
+/// Get user's primary device (or first active device)
+/// Per INVITE_LINKS_QR_API_SPEC.md - used for updating verifying key
+pub async fn get_user_primary_device(pool: &DbPool, user_id: &Uuid) -> Result<Option<Device>> {
+    let device = sqlx::query_as::<_, Device>(
+        r#"
+        SELECT
+            d.device_id,
+            d.server_hostname,
+            d.user_id,
+            d.verifying_key,
+            d.identity_public,
+            d.signed_prekey_public,
+            d.crypto_suites,
+            d.registered_at,
+            d.is_active
+        FROM devices d
+        JOIN users u ON d.user_id = u.id
+        WHERE d.user_id = $1 AND d.is_active = true
+        ORDER BY
+            CASE WHEN d.device_id = u.primary_device_id THEN 0 ELSE 1 END,
+            d.registered_at ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to get user's primary device")?;
+
+    Ok(device)
+}
+
+/// Update device's verifying key (Ed25519 public key)
+/// Per INVITE_LINKS_QR_API_SPEC.md Section 6B
+pub async fn update_device_verifying_key(
+    pool: &DbPool,
+    device_id: &str,
+    verifying_key: &[u8],
+) -> Result<()> {
+    sqlx::query("UPDATE devices SET verifying_key = $1 WHERE device_id = $2")
+        .bind(verifying_key)
+        .bind(device_id)
+        .execute(pool)
+        .await
+        .context("Failed to update device verifying key")?;
 
     Ok(())
 }

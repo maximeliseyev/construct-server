@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CryptoSuite {
     #[default]
     ClassicX25519 = 0x01,
@@ -24,7 +23,6 @@ impl CryptoSuite {
         matches!(self, Self::HybridKyber1024X25519)
     }
 }
-
 
 impl Serialize for CryptoSuite {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>

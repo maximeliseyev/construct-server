@@ -8,8 +8,13 @@
 //
 // ============================================================================
 
+use argon2::{
+    Argon2, ParamsBuilder, Version,
+    password_hash::{PasswordHasher, SaltString},
+};
 use axum::Router;
 use axum::routing::{delete, get, post, put};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_config::Config;
 use construct_server_shared::{
     apns::{ApnsClient, DeviceTokenEncryption},
@@ -21,10 +26,15 @@ use construct_server_shared::{
     queue::MessageQueue,
     user_service::{UserServiceContext, handlers as user_handlers},
 };
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::sync::Arc;
 use tokio::{net::TcpListener, sync::Mutex};
 use uuid::Uuid;
+use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
 /// Test application with all microservices
 pub struct TestApp {
@@ -68,6 +78,11 @@ async fn create_test_config(db_name: &str) -> Config {
     unsafe {
         std::env::set_var("JWT_PRIVATE_KEY", &private_key);
         std::env::set_var("JWT_PUBLIC_KEY", &public_key);
+        // Low PoW difficulty for fast tests (1 leading zero bit = instant)
+        std::env::set_var("POW_DIFFICULTY", "1");
+        // Disable rate limiting for tests
+        std::env::set_var("MAX_POW_CHALLENGES_PER_HOUR", "0");
+        std::env::set_var("MAX_REGISTRATIONS_PER_HOUR", "0");
     }
 
     let mut config = Config::from_env().expect("Failed to read base config from .env.test");
@@ -435,4 +450,187 @@ impl SingleServiceApp {
     pub fn url(&self) -> String {
         format!("http://{}", self.address)
     }
+}
+
+// ============================================================================
+// Passwordless Registration Helper
+// ============================================================================
+
+/// PoW challenge response from server
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChallengeResponse {
+    challenge: String,
+    difficulty: u32,
+    expires_at: i64,
+}
+
+/// Device registration response
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterDeviceResponse {
+    pub user_id: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: u64,
+}
+
+/// Salt prefix for PoW v2 (challenge-based salt)
+const POW_SALT_PREFIX: &str = "kpow2:";
+
+/// Argon2id parameters (MUST match server)
+const MEMORY_COST_KIB: u32 = 32 * 1024; // 32 MB
+const TIME_COST: u32 = 2; // 2 iterations
+const PARALLELISM: u32 = 1; // 1 thread
+const HASH_LENGTH: usize = 32; // 32 bytes
+
+/// Derive a unique salt from the challenge string.
+/// Format: "kpow2:" + first 16 characters of challenge
+fn derive_pow_salt(challenge: &str) -> String {
+    let challenge_prefix = &challenge[..std::cmp::min(16, challenge.len())];
+    format!("{}{}", POW_SALT_PREFIX, challenge_prefix)
+}
+
+/// Solve PoW challenge (find nonce that produces hash with required leading zero bits)
+fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
+    let params = ParamsBuilder::new()
+        .m_cost(MEMORY_COST_KIB)
+        .t_cost(TIME_COST)
+        .p_cost(PARALLELISM)
+        .output_len(HASH_LENGTH)
+        .build()
+        .expect("Failed to build Argon2 params");
+
+    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
+    let derived_salt = derive_pow_salt(challenge);
+    let salt = SaltString::encode_b64(derived_salt.as_bytes()).expect("Failed to encode salt");
+
+    for nonce in 0u64.. {
+        let input = format!("{}{}", challenge, nonce);
+
+        if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt) {
+            if let Some(h) = hash.hash {
+                let hash_bytes = h.as_bytes();
+                let leading_zeros = count_leading_zero_bits(hash_bytes);
+
+                if leading_zeros >= difficulty {
+                    return (nonce, hex::encode(hash_bytes));
+                }
+            }
+        }
+    }
+
+    unreachable!("PoW should always find a solution")
+}
+
+/// Count leading zero bits in hash
+fn count_leading_zero_bits(hash_bytes: &[u8]) -> u32 {
+    let mut count = 0;
+    for byte in hash_bytes {
+        if *byte == 0 {
+            count += 8;
+        } else {
+            count += byte.leading_zeros();
+            break;
+        }
+    }
+    count
+}
+
+/// Register a new user using passwordless device-based authentication.
+///
+/// This function:
+/// 1. Generates Ed25519 + X25519 key pairs
+/// 2. Gets PoW challenge from server
+/// 3. Solves PoW (fast with difficulty=1 in tests)
+/// 4. Registers device with server
+/// 5. Returns (user_id, access_token)
+pub async fn register_user_passwordless(
+    client: &reqwest::Client,
+    auth_address: &str,
+    username: Option<&str>,
+) -> (String, String) {
+    // 1. Generate Ed25519 signing key (for authentication)
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+
+    // 2. Generate X25519 key pair (for E2EE identity)
+    let identity_secret = EphemeralSecret::random_from_rng(OsRng);
+    let identity_public = X25519PublicKey::from(&identity_secret);
+
+    // 3. Generate signed prekey (X25519 for Double Ratchet)
+    let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
+    let prekey_public = X25519PublicKey::from(&prekey_secret);
+
+    // 4. Compute device_id = SHA256(identity_public)[0..16] as hex
+    let device_id = {
+        let hash = Sha256::digest(identity_public.as_bytes());
+        hex::encode(&hash[0..16])
+    };
+
+    // 5. Get PoW challenge from server
+    let challenge_url = format!("http://{}/api/v1/auth/challenge", auth_address);
+    let challenge_response = client
+        .get(&challenge_url)
+        .send()
+        .await
+        .expect("Failed to get PoW challenge");
+
+    assert_eq!(
+        challenge_response.status(),
+        reqwest::StatusCode::OK,
+        "Challenge request failed: {:?}",
+        challenge_response.text().await
+    );
+
+    let challenge: ChallengeResponse = client
+        .get(&challenge_url)
+        .send()
+        .await
+        .expect("Failed to get PoW challenge")
+        .json()
+        .await
+        .expect("Failed to parse challenge response");
+
+    // 6. Solve PoW (with difficulty=1 in tests, this is instant)
+    let (nonce, hash) = solve_pow(&challenge.challenge, challenge.difficulty);
+
+    // 7. Build registration request
+    let register_request = serde_json::json!({
+        "username": username,
+        "deviceId": device_id,
+        "publicKeys": {
+            "verifyingKey": BASE64.encode(verifying_key.as_bytes()),
+            "identityPublic": BASE64.encode(identity_public.as_bytes()),
+            "signedPrekeyPublic": BASE64.encode(prekey_public.as_bytes()),
+            "suiteId": "Curve25519+Ed25519"
+        },
+        "powSolution": {
+            "challenge": challenge.challenge,
+            "nonce": nonce,
+            "hash": hash
+        }
+    });
+
+    // 8. Register device
+    let register_url = format!("http://{}/api/v1/auth/register-device", auth_address);
+    let register_response = client
+        .post(&register_url)
+        .json(&register_request)
+        .send()
+        .await
+        .expect("Failed to send registration request");
+
+    let status = register_response.status();
+    if status != reqwest::StatusCode::CREATED {
+        let error_text = register_response.text().await.unwrap();
+        panic!("Registration failed (status {}): {}", status, error_text);
+    }
+
+    let auth_response: RegisterDeviceResponse = register_response
+        .json()
+        .await
+        .expect("Failed to parse registration response");
+
+    (auth_response.user_id, auth_response.access_token)
 }

@@ -334,17 +334,17 @@ pub async fn register_device_v2(
     if let Some(username) = username_opt
         && let Ok(Some(_existing_user)) =
             db::get_user_by_username(&app_context.db_pool, username).await
-        {
-            tracing::warn!(
-                username = username,
-                device_id = %request.device_id,
-                "Registration failed: username already taken"
-            );
-            return Err(AppError::Conflict(format!(
-                "Username '{}' is already taken",
-                username
-            )));
-        }
+    {
+        tracing::warn!(
+            username = username,
+            device_id = %request.device_id,
+            "Registration failed: username already taken"
+        );
+        return Err(AppError::Conflict(format!(
+            "Username '{}' is already taken",
+            username
+        )));
+    }
 
     let (user, _device) =
         db::create_user_with_first_device(&app_context.db_pool, username_opt, device_data)
@@ -616,8 +616,8 @@ pub async fn get_pow_challenge(
         }
     }
 
-    // 2. Determine difficulty (normal = 8, could be dynamic)
-    let difficulty = crate::pow::POW_DIFFICULTY_NORMAL;
+    // 2. Determine difficulty (from config, default 8 for production, can be lowered for tests)
+    let difficulty = app_context.config.security.pow_difficulty;
 
     // 3. Generate challenge
     let challenge = crate::pow::generate_challenge();
