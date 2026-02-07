@@ -4,13 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-# New modular crates (Phase 4)
+# New modular crates (Phase 4 + Phase 5)
 construct-types = { path = "../crates/construct-types" }
 construct-error = { path = "../crates/construct-error", features = ["full"] }
 construct-crypto = { path = "../crates/construct-crypto", features = ["full"] }
 construct-config = { path = "../crates/construct-config" }
 construct-redis = { path = "../crates/construct-redis" }
 construct-db = { path = "../crates/construct-db" }
+construct-metrics = { path = "../crates/construct-metrics" }
 crypto-agility = { path = "../crates/crypto-agility" }
 
 tokio = {workspace = true}

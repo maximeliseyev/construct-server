@@ -18,7 +18,7 @@ members = [
     "crates/construct-redis",
     "crates/construct-config",
     # Phase 5 - Crypto-Agility
-    "crates/crypto-agility",
+    "crates/crypto-agility", "crates/construct-metrics",
 ]
 
 # Единая версия для всех пакетов
@@ -74,3 +74,4 @@ zeroize = "1.8"
 
 # Metrics
 prometheus = { version = "0.14", features = ["process"] }
+once_cell = "1.21"
