@@ -27,7 +27,7 @@ use uuid::Uuid;
 use crate::context::AppContext;
 use crate::db::{self as local_db, DbPool};
 use crate::rate_limit::{RateLimitAction, is_user_in_warmup};
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use construct_db;
 use construct_error::AppError;
 use crypto_agility::{InviteToken, InviteValidationError};
@@ -245,12 +245,15 @@ pub struct AcceptInviteResponse {
 /// 5. Display as QR or URL: konstruct.cc/add#{token}
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires authentication (via Gateway X-User-Id header)
 /// - Stores jti in database for one-time use tracking
 /// - Auto-cleanup after 5 minutes
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
+/// Gateway verifies JWT and propagates user identity via X-User-Id header.
 pub async fn generate_invite(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Json(request): Json<GenerateInviteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let user_id = user.0;
@@ -370,9 +373,12 @@ pub async fn generate_invite(
 ///
 /// For federated users, this will trigger an S2S request to the user's server
 /// to validate and burn the jti.
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
+/// Gateway verifies JWT and propagates user identity via X-User-Id header.
 pub async fn accept_invite(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Json(request): Json<AcceptInviteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let accepter_user_id = user.0; // User who is accepting the invite

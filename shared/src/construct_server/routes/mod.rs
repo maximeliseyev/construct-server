@@ -18,6 +18,7 @@
 // ============================================================================
 
 pub mod account; // Made public for user-service
+pub mod account_deletion; // Device-signed account deletion (Phase 5.0.1)
 pub mod auth; // Made public for auth-service
 mod capabilities; // Phase 5: Crypto-agility capabilities endpoint
 pub mod csrf; // Made public for gateway middleware
@@ -35,7 +36,7 @@ pub mod request_signing; // Made public for user-service (account deletion uses 
 
 use axum::{
     Router,
-    routing::{delete, get, patch, post, put},
+    routing::{get, patch, post, put},
 };
 use std::sync::Arc;
 use tower::ServiceBuilder;
@@ -62,7 +63,15 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         // Account management (CSRF protected, authenticated)
         .route("/api/v1/account", get(account::get_account))
         .route("/api/v1/account", put(account::update_account))
-        .route("/api/v1/account", delete(account::delete_account))
+        // Device-signed account deletion (Phase 5.0.1) - replaces legacy DELETE /api/v1/account
+        .route(
+            "/api/v1/users/me/delete-challenge",
+            get(account_deletion::get_delete_challenge),
+        )
+        .route(
+            "/api/v1/users/me/delete-confirm",
+            post(account_deletion::confirm_delete),
+        )
         // Keys management (CSRF protected)
         .route("/keys/upload", post(keys::upload_keys)) // Legacy
         .route("/keys/:user_id", get(keys::get_keys)) // Legacy

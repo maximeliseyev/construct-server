@@ -20,7 +20,7 @@ use axum::{
     Json, Router,
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
 };
 use construct_config::Config;
 use construct_server_shared::auth::AuthManager;
@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
         // Account management endpoints
         .route("/api/v1/account", get(handlers::get_account))
         .route("/api/v1/account", put(handlers::update_account))
-        .route("/api/v1/account", delete(handlers::delete_account))
+        // Note: DELETE /api/v1/account removed - use device-signed deletion instead
         // Keys management endpoints
         .route(
             "/api/v1/users/:id/public-key",
@@ -128,6 +128,15 @@ async fn main() -> Result<()> {
         // Invite endpoints (Phase 5: Dynamic invite tokens)
         .route("/api/v1/invites/generate", post(handlers::generate_invite))
         .route("/api/v1/invites/accept", post(handlers::accept_invite))
+        // Device-signed account deletion (Phase 5.0.1)
+        .route(
+            "/api/v1/users/me/delete-challenge",
+            get(handlers::get_delete_challenge),
+        )
+        .route(
+            "/api/v1/users/me/delete-confirm",
+            post(handlers::confirm_delete),
+        )
         // Apply middleware
         .layer(
             ServiceBuilder::new()

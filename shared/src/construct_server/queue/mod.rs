@@ -433,6 +433,31 @@ impl MessageQueue {
         Ok(())
     }
 
+    /// Set a key with expiration (generic string storage)
+    pub async fn set_with_expiry(&mut self, key: &str, value: &str, ttl_seconds: u64) -> Result<()> {
+        use redis::AsyncCommands;
+        let _: () = self
+            .client
+            .connection_mut()
+            .set_ex(key, value, ttl_seconds)
+            .await?;
+        Ok(())
+    }
+
+    /// Get a string value by key
+    pub async fn get(&mut self, key: &str) -> Result<Option<String>> {
+        use redis::AsyncCommands;
+        let value: Option<String> = self.client.connection_mut().get(key).await?;
+        Ok(value)
+    }
+
+    /// Delete a key
+    pub async fn delete(&mut self, key: &str) -> Result<()> {
+        use redis::AsyncCommands;
+        let _: i64 = self.client.connection_mut().del(key).await?;
+        Ok(())
+    }
+
     // ============================================================================
     // Message Delivery (delegated to delivery module)
     // ============================================================================

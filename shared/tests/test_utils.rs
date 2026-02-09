@@ -13,7 +13,7 @@ use argon2::{
     password_hash::{PasswordHasher, SaltString},
 };
 use axum::Router;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_config::Config;
 use construct_server_shared::{
@@ -239,7 +239,7 @@ async fn spawn_user_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> String
         .route("/health", get(|| async { "ok" }))
         .route("/api/v1/account", get(user_handlers::get_account))
         .route("/api/v1/account", put(user_handlers::update_account))
-        .route("/api/v1/account", delete(user_handlers::delete_account))
+        // Note: DELETE /api/v1/account removed - use device-signed deletion
         .route("/api/v1/keys/upload", post(user_handlers::upload_keys))
         .route(
             "/api/v1/users/:user_id/public-key",

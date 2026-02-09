@@ -17,7 +17,7 @@ use crate::routes::csrf::{
 use crate::utils::extract_client_ip;
 use axum::{
     extract::{Request, State},
-    http::{StatusCode, header::AUTHORIZATION},
+    http::{HeaderName, HeaderValue, StatusCode, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
 };
@@ -25,6 +25,10 @@ use construct_config::Config;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
+
+// Header names for identity propagation (Trust Boundary pattern)
+const HEADER_USER_ID: &str = "x-user-id";
+const HEADER_REQUEST_ID: &str = "x-request-id";
 
 /// Gateway state with dependencies for middleware
 pub struct GatewayMiddlewareState {
@@ -34,23 +38,41 @@ pub struct GatewayMiddlewareState {
 }
 
 /// JWT authentication verification middleware
+///
+/// After successful JWT verification, adds trusted headers for downstream services:
+/// - X-User-Id: User UUID from JWT claims
+/// - X-Request-Id: Unique request trace ID
+///
+/// This implements the Trust Boundary pattern where Gateway is the single
+/// point of authentication and services trust the propagated headers.
 pub async fn jwt_verification(
     State(state): State<Arc<GatewayMiddlewareState>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let path = request.uri().path();
+    let path = request.uri().path().to_string();
+
+    // Generate request ID for tracing (always, even for public endpoints)
+    let request_id = Uuid::new_v4().to_string();
 
     // Skip authentication for public endpoints
-    if is_public_endpoint(path) {
+    if is_public_endpoint(&path) {
+        // Add request ID even for public endpoints (useful for tracing)
+        if let Ok(value) = HeaderValue::from_str(&request_id) {
+            request.headers_mut().insert(
+                HeaderName::from_static(HEADER_REQUEST_ID),
+                value,
+            );
+        }
         return Ok(next.run(request).await);
     }
 
     // Extract Authorization header
-    let headers = request.headers();
-    let auth_header = headers
+    let auth_header = request
+        .headers()
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
         .ok_or_else(|| {
             // Only warn for known API endpoints that require auth
             // Unknown endpoints (like /api/v1/config) might be client-side routes or health checks
@@ -95,11 +117,41 @@ pub async fn jwt_verification(
     }
     drop(queue);
 
-    // Add user_id to request extensions for downstream use
-    let _user_id = Uuid::parse_str(&claims.sub).map_err(|_| {
+    // Parse and validate user_id
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| {
         tracing::error!("Invalid user ID in token");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    // =========================================================================
+    // Trust Boundary: Add trusted headers for downstream services
+    // =========================================================================
+    // These headers allow handlers to use TrustedUser extractor instead of
+    // re-parsing JWT. Services MUST NOT be directly accessible from internet.
+    // =========================================================================
+
+    // Add X-User-Id header (ALWAYS overwrite to prevent injection attacks)
+    if let Ok(value) = HeaderValue::from_str(&user_id.to_string()) {
+        request.headers_mut().insert(
+            HeaderName::from_static(HEADER_USER_ID),
+            value,
+        );
+    }
+
+    // Add X-Request-Id header for distributed tracing
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        request.headers_mut().insert(
+            HeaderName::from_static(HEADER_REQUEST_ID),
+            value,
+        );
+    }
+
+    tracing::debug!(
+        user_id = %user_id,
+        request_id = %request_id,
+        path = %path,
+        "JWT verified, trusted headers added"
+    );
 
     // Continue with authenticated request
     Ok(next.run(request).await)
@@ -235,10 +287,18 @@ pub async fn csrf_protection(
 fn is_public_endpoint(path: &str) -> bool {
     matches!(
         path,
-        // Passwordless authentication endpoints (public)
-        "/api/v1/auth/challenge"
+        // Legacy authentication endpoints (public)
+        "/api/v1/auth/register"
+            | "/api/v1/auth/login"
+            // Passwordless authentication endpoints (public)
+            | "/api/v1/auth/challenge"
             | "/api/v1/auth/register-device"
             | "/api/v1/auth/device"
+            // Device registration v2 (public, PoW protected)
+            | "/api/v1/register/v2"
+            | "/api/v1/register/challenge"
+            // Username availability check (public, rate-limited)
+            | "/api/v1/users/username/availability"
             // Health check endpoints
             | "/health"
             | "/health/ready"

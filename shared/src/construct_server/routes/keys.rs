@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::db;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use crate::routes::request_signing::{
     compute_body_hash, extract_request_signature, verify_request_signature,
 };
@@ -79,13 +79,16 @@ pub struct UpdateVerifyingKeyRequest {
 /// Uploads or updates a user's key bundle
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires authentication (via Gateway X-User-Id header)
 /// - Requires CSRF protection (via middleware)
 /// - Requires request signature (Ed25519) if enabled
 /// - Replay protection (nonce + timestamp)
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
+/// Gateway verifies JWT and propagates user identity via X-User-Id header.
 pub async fn upload_keys(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     headers: HeaderMap,
     Json(bundle): Json<UploadableKeyBundle>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -444,9 +447,11 @@ pub async fn upload_keys(
 
 /// GET /keys/:user_id (legacy) or GET /api/v1/users/:id/public-key
 /// Retrieves a user's public key bundle
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
 pub async fn get_keys(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Path(user_id_str): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     get_keys_impl(app_context, user, user_id_str).await
@@ -457,7 +462,7 @@ pub async fn get_keys(
 /// Returns response format per INVITE_LINKS_QR_API_SPEC.md Section 6A
 async fn get_keys_impl(
     app_context: Arc<AppContext>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     user_id_str: String,
 ) -> Result<impl IntoResponse, AppError> {
     let authenticated_user_id = user.0;
@@ -542,9 +547,11 @@ async fn get_keys_impl(
 /// GET /api/v1/users/:id/public-key
 /// Retrieves a user's public key bundle (REST API endpoint)
 /// Per INVITE_LINKS_QR_API_SPEC.md Section 6A
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
 pub async fn get_public_key_bundle(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     get_keys_impl(app_context, user, id).await
@@ -556,9 +563,11 @@ pub async fn get_public_key_bundle(
 ///
 /// This endpoint allows updating the Ed25519 verifying key used for invite signatures.
 /// Useful when there's a signature mismatch and the client needs to re-sync.
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
 pub async fn update_verifying_key(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     headers: HeaderMap,
     Json(request): Json<UpdateVerifyingKeyRequest>,
 ) -> Result<impl IntoResponse, AppError> {

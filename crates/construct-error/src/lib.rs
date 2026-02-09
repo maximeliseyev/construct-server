@@ -86,6 +86,12 @@ pub enum AppError {
     #[error("Resource not found: {0}")]
     NotFound(String),
 
+    #[error("Access forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("Resource gone: {0}")]
+    Gone(String),
+
     #[error("Resource conflict: {0}")]
     Conflict(String),
 
@@ -127,6 +133,8 @@ impl AppError {
             AppError::Csrf(_) => StatusCode::FORBIDDEN,
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::Gone(_) => StatusCode::GONE,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::InviteExpired
@@ -156,6 +164,8 @@ impl AppError {
             AppError::Csrf(_) => "CSRF validation failed".to_string(),
             AppError::Validation(msg) => format!("Validation error: {}", msg),
             AppError::NotFound(msg) => format!("Not found: {}", msg),
+            AppError::Forbidden(msg) => format!("Forbidden: {}", msg),
+            AppError::Gone(msg) => format!("Gone: {}", msg),
             AppError::Conflict(msg) => format!("Conflict: {}", msg),
             AppError::InviteExpired => "Invite has expired. Please ask for a new QR code.".to_string(),
             AppError::InviteInvalidSignature => "Invalid invite signature. This invite may have been tampered with.".to_string(),
@@ -185,6 +195,8 @@ impl AppError {
             AppError::Csrf(_) => "CSRF_ERROR",
             AppError::Validation(_) => "VALIDATION_ERROR",
             AppError::NotFound(_) => "NOT_FOUND",
+            AppError::Forbidden(_) => "FORBIDDEN",
+            AppError::Gone(_) => "GONE",
             AppError::Conflict(_) => "CONFLICT",
             AppError::TooManyRequests(_) => "RATE_LIMIT_EXCEEDED",
             AppError::InviteExpired => "INVITE_EXPIRED",
@@ -314,6 +326,16 @@ impl AppError {
     /// Create a conflict error (409)
     pub fn conflict(msg: impl Into<String>) -> Self {
         AppError::Conflict(msg.into())
+    }
+
+    /// Create a forbidden error (403)
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        AppError::Forbidden(msg.into())
+    }
+
+    /// Create a gone error (410)
+    pub fn gone(msg: impl Into<String>) -> Self {
+        AppError::Gone(msg.into())
     }
 
     /// Create an internal server error

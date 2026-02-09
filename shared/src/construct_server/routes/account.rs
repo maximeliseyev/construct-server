@@ -5,7 +5,9 @@
 // Endpoints:
 // - GET /api/v1/account - Get account information
 // - PUT /api/v1/account - Update account (username, password)
-// - DELETE /api/v1/account - Delete account (requires request signing)
+// - GET /api/v1/users/username/availability - Check username availability
+//
+// Note: Account deletion moved to account_deletion.rs (device-signed flow)
 //
 // ============================================================================
 
@@ -21,10 +23,7 @@ use std::sync::Arc;
 
 use crate::context::AppContext;
 use crate::db;
-use crate::routes::extractors::AuthenticatedUser;
-use crate::routes::request_signing::{
-    compute_body_hash, extract_request_signature, verify_request_signature,
-};
+use crate::routes::extractors::TrustedUser;
 use crate::utils::{extract_client_ip, log_safe_id};
 use construct_error::AppError;
 
@@ -45,11 +44,14 @@ pub struct AccountInfo {
 /// Get current user's account information
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires authentication (via Gateway X-User-Id header)
 /// - Returns only non-sensitive information (no password hash)
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
+/// Gateway verifies JWT and propagates user identity via X-User-Id header.
 pub async fn get_account(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
 ) -> Result<impl IntoResponse, AppError> {
     let user_id = user.0;
 
@@ -108,13 +110,16 @@ pub struct UpdateAccountRequest {
 /// Update account information (username, password)
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires authentication (via Gateway X-User-Id header)
 /// - Requires CSRF protection (via middleware)
 /// - Password update requires old password verification
 /// - Username changes should be rate-limited
+///
+/// Note: Uses TrustedUser extractor (Trust Boundary pattern).
+/// Gateway verifies JWT and propagates user identity via X-User-Id header.
 pub async fn update_account(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     _headers: HeaderMap, // Reserved for future request signing
     Json(request): Json<UpdateAccountRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -217,219 +222,11 @@ pub async fn update_account(
     ))
 }
 
-/// Request body for account deletion
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeleteAccountRequest {
-    /// Password confirmation (required for account deletion)
-    pub password: String,
-    /// Confirmation flag (must be true)
-    #[serde(default)]
-    pub confirm: bool,
-}
-
-/// DELETE /api/v1/account
-/// Delete user account and all associated data
-///
-/// Security:
-/// - Requires JWT authentication
-/// - Requires CSRF protection (via middleware)
-/// - Requires request signature (Ed25519) if enabled
-/// - Requires password confirmation
-/// - Requires explicit confirmation flag
-/// - Revokes all tokens and sessions
-/// - Deletes all user data (GDPR compliance)
-pub async fn delete_account(
-    State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
-    headers: HeaderMap,
-    Json(request): Json<DeleteAccountRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let user_id = user.0;
-
-    // 1. Verify confirmation flag
-    if !request.confirm {
-        return Err(AppError::Validation(
-            "Account deletion requires explicit confirmation (confirm: true)".to_string(),
-        ));
-    }
-
-    // 2. Verify password
-    let user_record = db::get_legacy_user_by_id(&app_context.db_pool, &user_id)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to fetch user");
-            AppError::Unknown(e)
-        })?
-        .ok_or_else(
-            || // SECURITY: Don't reveal whether user exists - use generic error
-        AppError::Auth("Session is invalid or expired".to_string()),
-        )?;
-
-    let password_valid = db::verify_password(&user_record, &request.password)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to verify password");
-            AppError::Unknown(e)
-        })?;
-
-    if !password_valid {
-        tracing::warn!(
-            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-            "Invalid password during account deletion"
-        );
-        // SECURITY: Use generic error to prevent confirmation of user existence
-        return Err(AppError::Auth("Verification failed".to_string()));
-    }
-
-    // 3. Request signing verification (if enabled)
-    if app_context.config.security.request_signing_required {
-        let request_sig = extract_request_signature(&headers)
-            .ok_or_else(|| {
-                tracing::warn!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                    "Request signature missing for account deletion"
-                );
-                AppError::Validation(
-                    "Request signature is required for account deletion. Please sign the request with your master_identity_key.".to_string(),
-                )
-            })?;
-
-        // Compute body hash
-        let body_json = serde_json::to_string(&request).map_err(|e| {
-            tracing::error!(error = %e, "Failed to serialize request for signature verification");
-            AppError::Unknown(e.into())
-        })?;
-        let body_hash = compute_body_hash(body_json.as_bytes());
-
-        // Get user's master_identity_key from key bundle
-        let (bundle, _) = db::get_key_bundle(&app_context.db_pool, &user_id)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to fetch key bundle");
-                AppError::Unknown(e)
-            })?
-            .ok_or_else(|| {
-                AppError::Validation(
-                    "Key bundle not found. Cannot verify request signature.".to_string(),
-                )
-            })?;
-
-        // Verify request signature
-        match verify_request_signature(
-            &bundle.master_identity_key,
-            "DELETE",
-            "/api/v1/account",
-            request_sig.timestamp,
-            &body_hash,
-            &request_sig.signature,
-        ) {
-            Ok(()) => {
-                tracing::debug!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                    "Request signature verified for account deletion"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                    error = %e,
-                    "Request signature verification failed for account deletion"
-                );
-                return Err(AppError::Validation(format!(
-                    "Request signature verification failed: {}",
-                    e
-                )));
-            }
-        }
-
-        // Verify public_key matches master_identity_key
-        use subtle::ConstantTimeEq;
-        if !bool::from(
-            request_sig
-                .public_key
-                .as_bytes()
-                .ct_eq(bundle.master_identity_key.as_bytes()),
-        ) {
-            tracing::warn!(
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "Request signature public key does not match bundle master_identity_key"
-            );
-            return Err(AppError::Validation(
-                "Request signature public key must match bundle master_identity_key".to_string(),
-            ));
-        }
-    }
-
-    // 4. Revoke all tokens and sessions
-    {
-        let mut queue = app_context.queue.lock().await;
-
-        // Revoke all refresh tokens
-        if let Err(e) = queue.revoke_all_user_tokens(&user_id.to_string()).await {
-            tracing::warn!(error = %e, "Failed to revoke all user tokens");
-        }
-
-        // Revoke all sessions
-        if let Err(e) = queue.revoke_all_sessions(&user_id.to_string()).await {
-            tracing::warn!(
-                error = %e,
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "Failed to revoke all sessions"
-            );
-        }
-        drop(queue);
-    }
-
-    // 5. Delete delivery ACK data (GDPR compliance)
-    if let Some(ack_manager) = &app_context.delivery_ack_manager
-        && let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await
-    {
-        tracing::warn!(
-            error = %e,
-            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-            "Failed to delete delivery ACK data"
-        );
-    }
-
-    // 6. Untrack user online status
-    {
-        let mut queue = app_context.queue.lock().await;
-        if let Err(e) = queue.untrack_user_online(&user_id.to_string()).await {
-            tracing::warn!(
-                error = %e,
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "Failed to untrack user online status"
-            );
-        }
-        drop(queue);
-    }
-
-    // 7. Delete user account from database (cascade will handle related records)
-    db::delete_user_account(&app_context.db_pool, &user_id)
-        .await
-        .map_err(|e| {
-            tracing::error!(
-                error = %e,
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "Failed to delete user account"
-            );
-            AppError::Unknown(e)
-        })?;
-
-    tracing::info!(
-        user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-        "Account deleted successfully"
-    );
-
-    Ok((
-        StatusCode::OK,
-        Json(json!({
-            "status": "ok",
-            "message": "Account deleted successfully"
-        })),
-    ))
-}
+// NOTE: Legacy DELETE /api/v1/account removed in Phase 5.0.1
+// Use device-signed deletion instead:
+// - GET /api/v1/users/me/delete-challenge
+// - POST /api/v1/users/me/delete-confirm
+// See: account_deletion.rs
 
 // ============================================================================
 // Username Availability Check
