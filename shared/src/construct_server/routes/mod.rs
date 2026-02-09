@@ -25,7 +25,7 @@ pub mod devices; // Device-based passwordless authentication
 pub mod extractors; // Made public for auth-service, user-service, messaging-service, and notification-service
 mod federation;
 mod health;
-mod invites; // Phase 5: Dynamic invite tokens (one-time QR codes)
+pub mod invites; // Phase 5: Dynamic invite tokens (one-time QR codes) - Made public for user-service
 pub mod keys; // Made public for user-service
 pub mod media; // Made public for messaging-service
 pub mod messages; // Made public for messaging-service
@@ -76,6 +76,11 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         .route(
             "/api/v1/users/me/public-key",
             patch(keys::update_verifying_key),
+        )
+        // Username availability check (public, rate-limited)
+        .route(
+            "/api/v1/users/username/availability",
+            get(account::check_username_availability),
         )
         // Phase 5: Crypto-agility capabilities
         .route(

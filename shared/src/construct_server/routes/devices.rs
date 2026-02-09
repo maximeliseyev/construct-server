@@ -309,7 +309,7 @@ pub async fn register_device_v2(
         .map_err(|e| AppError::Internal(format!("Failed to mark challenge as used: {}", e)))?;
 
     // 7. Create user + device atomically
-    let server_hostname = "localhost:8080".to_string(); // TODO: Add server_hostname to Config
+    let server_hostname = app_context.config.instance_domain.clone();
 
     // Convert suite_id to crypto_suites JSONB format
     let crypto_suites = format!(r#"["{}"]"#, request.public_keys.suite_id);
@@ -544,7 +544,7 @@ pub async fn get_device_profile(
         })?
         .ok_or_else(|| AppError::NotFound("Device not found".to_string()))?;
 
-    let server_hostname = "localhost:8080".to_string();
+    let server_hostname = app_context.config.instance_domain.clone();
 
     // Extract first suite from crypto_suites JSONB array
     let suite_id = device

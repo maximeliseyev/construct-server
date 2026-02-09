@@ -277,7 +277,6 @@ mod tests {
         // In production, we'd have known good values from client
 
         let challenge = "test_challenge_12345";
-        let nonce = 0u64;
 
         // Try to find a valid nonce (difficulty 4 for fast test)
         // NOTE: In real usage, client does this work

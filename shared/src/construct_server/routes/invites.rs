@@ -112,6 +112,13 @@ pub async fn verify_invite_signature(
         device.verifying_key
     };
 
+    // DEBUG: Log the verifying key from database
+    tracing::info!(
+        verifying_key_base64 = %BASE64.encode(&verifying_key_bytes),
+        verifying_key_len = verifying_key_bytes.len(),
+        "DEBUG: Verifying key fetched from database"
+    );
+
     // 2. Parse verifying key (32 bytes Ed25519 public key)
     if verifying_key_bytes.len() != 32 {
         return Err(InviteSignatureError::InvalidVerifyingKey(format!(
@@ -149,10 +156,24 @@ pub async fn verify_invite_signature(
     // 4. Build canonical string and verify
     let canonical = invite.canonical_string();
 
+    // DEBUG: Log what we're verifying
+    tracing::info!(
+        canonical_string = %canonical,
+        signature_base64 = %invite.sig,
+        "DEBUG: Verifying signature"
+    );
+
     verifying_key
         .verify(canonical.as_bytes(), &signature)
-        .map_err(|_| InviteSignatureError::VerificationFailed)?;
+        .map_err(|e| {
+            tracing::warn!(
+                error = %e,
+                "DEBUG: Signature verification FAILED"
+            );
+            InviteSignatureError::VerificationFailed
+        })?;
 
+    tracing::info!("DEBUG: Signature verification SUCCESS");
     Ok(())
 }
 
@@ -387,6 +408,18 @@ pub async fn accept_invite(
         version = invite.v,
         device_id = ?invite.device_id,
         "Processing invite"
+    );
+
+    // DEBUG: Log invite details for troubleshooting
+    tracing::info!(
+        jti = %invite.jti,
+        version = invite.v,
+        uuid = %invite.uuid,
+        device_id = ?invite.device_id,
+        server = %invite.server,
+        ts = invite.ts,
+        canonical = %invite.canonical_string(),
+        "DEBUG: Invite canonical string for verification"
     );
 
     // 2. Verify Ed25519 signature

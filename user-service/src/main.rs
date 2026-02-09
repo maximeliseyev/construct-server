@@ -125,6 +125,9 @@ async fn main() -> Result<()> {
             "/api/v1/users/username/availability",
             get(handlers::check_username_availability),
         )
+        // Invite endpoints (Phase 5: Dynamic invite tokens)
+        .route("/api/v1/invites/generate", post(handlers::generate_invite))
+        .route("/api/v1/invites/accept", post(handlers::accept_invite))
         // Apply middleware
         .layer(
             ServiceBuilder::new()

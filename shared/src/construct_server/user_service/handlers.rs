@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::routes::account;
 use crate::routes::devices;
 use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::invites;
 use crate::routes::keys;
 use crate::user_service::UserServiceContext;
 use construct_error::AppError;
@@ -106,4 +107,26 @@ pub async fn check_username_availability(
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
     account::check_username_availability(State(app_context), headers, Query(query)).await
+}
+
+/// Wrapper for generate_invite handler
+/// POST /api/v1/invites/generate
+pub async fn generate_invite(
+    State(context): State<Arc<UserServiceContext>>,
+    user: AuthenticatedUser,
+    Json(request): Json<invites::GenerateInviteRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    invites::generate_invite(State(app_context), user, Json(request)).await
+}
+
+/// Wrapper for accept_invite handler
+/// POST /api/v1/invites/accept
+pub async fn accept_invite(
+    State(context): State<Arc<UserServiceContext>>,
+    user: AuthenticatedUser,
+    Json(request): Json<invites::AcceptInviteRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let app_context = Arc::new(context.to_app_context());
+    invites::accept_invite(State(app_context), user, Json(request)).await
 }
