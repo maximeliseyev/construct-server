@@ -48,6 +48,11 @@ pub struct DevicePublicKeys {
     /// Signed prekey public for Double Ratchet (base64)
     pub signed_prekey_public: String,
 
+    /// Ed25519 signature of (prologue || signed_prekey_public) (base64, 64 bytes)
+    /// Required for X3DH session initialization
+    /// Prologue = "KonstruktX3DH-v1" || suite_id (2 bytes BE)
+    pub signed_prekey_signature: String,
+
     /// Crypto suite identifier (e.g., "Curve25519+Ed25519", "ML-KEM-768+Ed25519")
     #[serde(default = "default_suite_id")]
     pub suite_id: String,
@@ -237,6 +242,19 @@ pub async fn register_device_v2(
             AppError::Validation("signed_prekey_public must be valid base64".to_string())
         })?;
 
+    // Decode and validate signed_prekey_signature (Ed25519, 64 bytes)
+    let signed_prekey_signature = BASE64
+        .decode(&request.public_keys.signed_prekey_signature)
+        .map_err(|_| {
+            AppError::Validation("signed_prekey_signature must be valid base64".to_string())
+        })?;
+
+    if signed_prekey_signature.len() != 64 {
+        return Err(AppError::Validation(
+            "signed_prekey_signature must be exactly 64 bytes (Ed25519 signature)".to_string(),
+        ));
+    }
+
     // 4. Verify device_id matches identity_public (SHA256 first 16 bytes = 32 hex chars)
     let computed_device_id = {
         let hash = Sha256::digest(&identity_public);
@@ -320,6 +338,7 @@ pub async fn register_device_v2(
         verifying_key,
         identity_public,
         signed_prekey_public,
+        signed_prekey_signature,
         crypto_suites,
     };
 
@@ -556,6 +575,13 @@ pub async fn get_device_profile(
         .to_string();
 
     // Return public profile
+    // signed_prekey_signature may be None for legacy devices
+    let signed_prekey_signature = device
+        .signed_prekey_signature
+        .as_ref()
+        .map(|s| BASE64.encode(s))
+        .unwrap_or_else(|| BASE64.encode(vec![0u8; 64]));
+
     Ok(Json(DeviceProfileResponse {
         device_id: device.device_id,
         server: server_hostname,
@@ -564,6 +590,7 @@ pub async fn get_device_profile(
             verifying_key: BASE64.encode(&device.verifying_key),
             identity_public: BASE64.encode(&device.identity_public),
             signed_prekey_public: BASE64.encode(&device.signed_prekey_public),
+            signed_prekey_signature,
             suite_id,
         },
     }))

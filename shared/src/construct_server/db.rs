@@ -344,6 +344,9 @@ struct DeviceKeyBundle {
     pub verifying_key: Vec<u8>,
     pub identity_public: Vec<u8>,
     pub signed_prekey_public: Vec<u8>,
+    /// Ed25519 signature of (prologue || signed_prekey_public)
+    /// May be None for legacy devices
+    pub signed_prekey_signature: Option<Vec<u8>>,
     pub crypto_suites: serde_json::Value,
     pub username: Option<String>,
 }
@@ -431,11 +434,12 @@ async fn get_key_bundle_from_device(
         serde_json::to_vec(&bundle_data).context("Failed to serialize bundle_data")?;
 
     // For device-based auth, we use verifying_key as master_identity_key
-    // and create a placeholder signature (client will verify via device auth instead)
+    // TODO: Store real bundle signature from client when system stabilizes
+    // For now: placeholder, client doesn't verify
     let bundle = UploadableKeyBundle {
         master_identity_key: BASE64.encode(&d.verifying_key),
         bundle_data: BASE64.encode(&bundle_data_bytes),
-        signature: BASE64.encode(vec![0u8; 64]), // Placeholder - auth happens via device signature
+        signature: BASE64.encode(vec![0u8; 64]), // TODO: store real signature from client
         nonce: None,
         timestamp: None,
     };
@@ -460,6 +464,7 @@ pub async fn get_extended_key_bundle(
             d.verifying_key,
             d.identity_public,
             d.signed_prekey_public,
+            d.signed_prekey_signature,
             d.crypto_suites,
             u.username
         FROM devices d
@@ -528,12 +533,26 @@ pub async fn get_extended_key_bundle(
         1 // CLASSIC_X25519
     };
 
+    // Get signed_prekey_signature - required for session initialization
+    // If missing, device needs to re-upload their key bundle
+    let signed_prekey_sig = match &d.signed_prekey_signature {
+        Some(sig) if sig.len() == 64 => BASE64.encode(sig),
+        _ => {
+            tracing::warn!(
+                user_id = %user_id,
+                "Device missing signed_prekey_signature - needs key bundle re-upload"
+            );
+            // Return empty signature - client will fail and prompt user to re-upload
+            BASE64.encode(vec![0u8; 64])
+        }
+    };
+
     // Construct SuiteKeyMaterial from device keys
     let suite_key = SuiteKeyMaterial {
         suite_id,
         identity_key: BASE64.encode(&d.identity_public),
         signed_prekey: BASE64.encode(&d.signed_prekey_public),
-        signed_prekey_signature: BASE64.encode(vec![0u8; 64]), // Placeholder
+        signed_prekey_signature: signed_prekey_sig,
         one_time_prekeys: vec![],
     };
 
@@ -554,10 +573,18 @@ pub async fn get_extended_key_bundle(
     let verifying_key = BASE64.encode(&d.verifying_key);
     let identity_key = BASE64.encode(&d.identity_public);
 
+    // Bundle signature is for the entire bundleData JSON
+    // This is separate from signedPrekeySignature
+    //
+    // TODO: When system stabilizes, implement full bundle signature verification:
+    //   1. Client generates bundleSignature on key upload
+    //   2. Server stores bundleSignature in devices table
+    //   3. Client verifies on GET /public-key
+    // For now: placeholder, client doesn't verify
     let bundle = UploadableKeyBundle {
         master_identity_key: identity_key.clone(), // X25519 for sessions
         bundle_data: BASE64.encode(&bundle_data_bytes),
-        signature: BASE64.encode(vec![0u8; 64]), // Placeholder
+        signature: BASE64.encode(vec![0u8; 64]), // TODO: store real signature from client
         nonce: None,
         timestamp: None,
     };
@@ -585,6 +612,9 @@ pub struct Device {
     pub verifying_key: Vec<u8>,
     pub identity_public: Vec<u8>,
     pub signed_prekey_public: Vec<u8>,
+    /// Ed25519 signature of (prologue || signed_prekey_public), 64 bytes
+    /// May be None for legacy devices that haven't re-uploaded their keys
+    pub signed_prekey_signature: Option<Vec<u8>>,
     pub crypto_suites: serde_json::Value, // JSONB array
     pub registered_at: DateTime<Utc>,     // Needed for warmup logic
     pub is_active: bool,
@@ -598,6 +628,9 @@ pub struct CreateDeviceData {
     pub verifying_key: Vec<u8>,
     pub identity_public: Vec<u8>,
     pub signed_prekey_public: Vec<u8>,
+    /// Ed25519 signature of (prologue || signed_prekey_public), 64 bytes
+    /// Required for X3DH session initialization
+    pub signed_prekey_signature: Vec<u8>,
     pub crypto_suites: String, // JSONB string like '["Curve25519+Ed25519"]'
 }
 
@@ -636,13 +669,14 @@ where
             verifying_key,
             identity_public,
             signed_prekey_public,
+            signed_prekey_signature,
             crypto_suites,
             registered_at,
             is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), TRUE)
-        RETURNING device_id, server_hostname, user_id, verifying_key, 
-                  identity_public, signed_prekey_public, crypto_suites, 
-                  registered_at, is_active
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), TRUE)
+        RETURNING device_id, server_hostname, user_id, verifying_key,
+                  identity_public, signed_prekey_public, signed_prekey_signature,
+                  crypto_suites, registered_at, is_active
         "#,
     )
     .bind(&data.device_id)
@@ -651,6 +685,7 @@ where
     .bind(&data.verifying_key)
     .bind(&data.identity_public)
     .bind(&data.signed_prekey_public)
+    .bind(&data.signed_prekey_signature)
     .bind(&data.crypto_suites)
     .fetch_one(executor)
     .await
