@@ -66,7 +66,22 @@ impl<'a> DeliveryManager<'a> {
         since_id: Option<&str>,
         count: usize,
     ) -> Result<Vec<(String, HashMap<String, Vec<u8>>)>> {
-        let start_id = since_id.unwrap_or("0");
+        // Validate Redis Stream ID format: {timestamp}-{sequence} (e.g., "1707584371151-0")
+        // If client sends invalid format (e.g., UUID), reset to "0" to read from beginning
+        let start_id = if let Some(id) = since_id {
+            if Self::is_valid_stream_id(id) {
+                id
+            } else {
+                tracing::warn!(
+                    stream_key = %stream_key,
+                    invalid_id = %id,
+                    "Invalid Redis Stream ID format - expected '{{timestamp}}-{{sequence}}', resetting to '0'"
+                );
+                "0"
+            }
+        } else {
+            "0"
+        };
 
         // XREAD COUNT count STREAMS stream_key start_id
         type StreamResult = Vec<(String, Vec<(String, Vec<(String, Vec<u8>)>)>)>;
@@ -126,6 +141,24 @@ impl<'a> DeliveryManager<'a> {
                 }
             }
         }
+    }
+
+    /// Validate Redis Stream ID format: {timestamp}-{sequence}
+    /// Examples: "0", "1707584371151-0", "1707584371151-42"
+    fn is_valid_stream_id(id: &str) -> bool {
+        // Special IDs
+        if id == "0" || id == "$" || id == "*" {
+            return true;
+        }
+
+        // Check format: {timestamp}-{sequence}
+        let parts: Vec<&str> = id.split('-').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+
+        // Both parts must be valid numbers
+        parts[0].parse::<u64>().is_ok() && parts[1].parse::<u64>().is_ok()
     }
 
     /// Parse stream message fields into KafkaMessageEnvelope

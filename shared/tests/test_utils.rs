@@ -26,7 +26,7 @@ use construct_server_shared::{
     queue::MessageQueue,
     user_service::{UserServiceContext, handlers as user_handlers},
 };
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, Signer};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -562,6 +562,17 @@ pub async fn register_user_passwordless(
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
 
+    // 3.5. Generate signedPrekeySignature for X3DH
+    // Signature over: prologue || signed_prekey_public
+    // Prologue = "KonstruktX3DH-v1" || suite_id (2 bytes BE, 0x0001 for Curve25519+Ed25519)
+    let prekey_signature = {
+        let mut message = Vec::new();
+        message.extend_from_slice(b"KonstruktX3DH-v1");
+        message.extend_from_slice(&[0x00, 0x01]); // suite_id = 1 (Curve25519+Ed25519)
+        message.extend_from_slice(prekey_public.as_bytes());
+        signing_key.sign(&message)
+    };
+
     // 4. Compute device_id = SHA256(identity_public)[0..16] as hex
     let device_id = {
         let hash = Sha256::digest(identity_public.as_bytes());
@@ -603,6 +614,7 @@ pub async fn register_user_passwordless(
             "verifyingKey": BASE64.encode(verifying_key.as_bytes()),
             "identityPublic": BASE64.encode(identity_public.as_bytes()),
             "signedPrekeyPublic": BASE64.encode(prekey_public.as_bytes()),
+            "signedPrekeySignature": BASE64.encode(prekey_signature.to_bytes()),
             "suiteId": "Curve25519+Ed25519"
         },
         "powSolution": {

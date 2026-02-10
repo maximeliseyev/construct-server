@@ -444,7 +444,9 @@ async fn get_key_bundle_from_device(
         timestamp: None,
     };
 
-    let username = d.username.unwrap_or_else(|| "anonymous".to_string());
+    // Return empty string for users without username (privacy-focused)
+    // Client will generate friendly display name (e.g., "Blue Penguin")
+    let username = d.username.unwrap_or_default();
 
     Ok(Some((bundle, username)))
 }
@@ -589,7 +591,9 @@ pub async fn get_extended_key_bundle(
         timestamp: None,
     };
 
-    let username = d.username.unwrap_or_else(|| "anonymous".to_string());
+    // Return empty string for users without username (privacy-focused)
+    // Client will generate friendly display name (e.g., "Blue Penguin")
+    let username = d.username.unwrap_or_default();
 
     Ok(Some(ExtendedKeyBundle {
         bundle,

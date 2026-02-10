@@ -375,7 +375,10 @@ pub async fn send_message(
 /// Query parameters for GET /api/v1/messages
 #[derive(Debug, Deserialize)]
 pub struct GetMessagesParams {
-    /// Message ID to get messages after (optional)
+    /// Last Stream ID received - used for ACK-based pagination (optional)
+    /// Format: "{timestamp}-{sequence}" (e.g., "1707584371151-5")
+    /// On first request: omit this parameter
+    /// On subsequent requests: use `nextSince` from previous response
     pub since: Option<String>,
     /// Timeout for long polling in seconds (default: 30, max: 60)
     pub timeout: Option<u64>,
@@ -388,9 +391,9 @@ pub struct GetMessagesParams {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")] // ✅ Use camelCase for all fields
 pub struct MessageResponse {
-    pub id: String, // KafkaMessageEnvelope.message_id (UUID)
+    pub id: String, // Message UUID (unique identifier, NOT used for pagination)
     #[serde(skip_serializing)]
-    pub stream_id: String, // Redis Stream ID (internal use only, not in spec)
+    pub stream_id: String, // Redis Stream ID (used for ACK-based pagination via nextSince)
 
     // ✅ SPEC: Use "from" and "to" as per specification.md (not sender_id/recipient_id)
     pub from: String,
@@ -425,6 +428,10 @@ pub struct MessageResponse {
 #[derive(Debug, Serialize)]
 pub struct GetMessagesResponse {
     pub messages: Vec<MessageResponse>,
+    /// Stream ID to use in next request for ACK-based pagination
+    /// Format: "{timestamp}-{sequence}" (e.g., "1707584371151-5")
+    /// Usage: GET /api/v1/messages?since=<this_value>
+    /// Effect: Acknowledges receipt of all messages up to this ID (they will be deleted)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_since: Option<String>,
     pub has_more: bool,
@@ -582,15 +589,16 @@ pub async fn get_messages(
     let limit = params.limit.unwrap_or(50).min(100) as usize;
 
     // Step 1: Check for existing messages in Redis Streams
-    // Note: `since` parameter is for message_id pagination, but Redis Streams use stream message IDs
-    // For now, we'll read from the beginning and filter client-side if needed
-    // TODO: Implement proper stream ID tracking for pagination
+    // Pagination strategy: Use Redis Stream IDs for ACK-based delivery
+    // - Client sends ?since=<stream_id> to acknowledge receipt
+    // - Server deletes acknowledged messages and returns new ones
+    // - This ensures exactly-once delivery
     let mut queue = app_context.queue.lock().await;
     let stream_messages = queue
         .read_user_messages_from_stream(
             &user_id_str,
             None,                    // server_instance_id not needed - using user-based streams
-            params.since.as_deref(), // Pass the client's 'since' parameter
+            params.since.as_deref(), // Stream ID for ACK (or None for first request)
             limit,
         )
         .await;
@@ -671,49 +679,36 @@ pub async fn get_messages(
         }
     };
 
-    // Filter by since_id if provided (client-side filtering for now)
-    // TODO: Implement server-side filtering using stream message IDs
-    let filtered_messages: Vec<MessageResponse> = if let Some(ref since_id) = params.since {
-        messages
-            .iter()
-            .filter(|msg| {
-                // Simple comparison: only return messages with ID greater than since_id
-                // In production, you'd want proper UUID comparison
-                msg.id > *since_id
-            })
-            .cloned()
-            .collect()
-    } else {
-        messages.clone()
-    };
+    // No client-side filtering needed - Redis XREAD already filters by stream ID
+    // We get exactly the messages we need
 
     // If we have messages, return them immediately
-    if !filtered_messages.is_empty() {
+    if !messages.is_empty() {
         drop(queue);
-        // ✅ FIX: Use stream_id (not message UUID) for next_since
-        // Redis Stream requires format: "{timestamp}-{sequence}"
-        let next_since = filtered_messages.last().map(|m| m.stream_id.clone());
+        // Return last Stream ID for next request (ACK-based pagination)
+        // Client will send this back to acknowledge receipt and get next batch
+        let next_since = messages.last().map(|m| m.stream_id.clone());
 
         tracing::debug!(
             user_hash = %user_id_hash,
-            count = filtered_messages.len(),
+            count = messages.len(),
             "Returning {} messages immediately",
-            filtered_messages.len()
+            messages.len()
         );
 
         return Ok((
             StatusCode::OK,
             Json(GetMessagesResponse::new_padded(
-                filtered_messages,
+                messages,
                 next_since,
                 false, // TODO: Implement has_more logic
             )),
         ));
     }
 
-    // Step 2: No messages found - long polling
-    // Subscribe to Redis Pub/Sub and wait for notifications
-    drop(queue);
+    // No messages yet - proceed to long polling
+    // Important: We should preserve the client's 'since' parameter for the final response
+    // This allows client to maintain its position even when no new messages arrive
 
     tracing::debug!(
         user_hash = %user_id_hash,
@@ -737,7 +732,7 @@ pub async fn get_messages(
             .read_user_messages_from_stream(
                 &user_id_str,
                 None, // server_instance_id not needed - using user-based streams
-                None,
+                params.since.as_deref(), // Stream ID for ACK
                 limit,
             )
             .await;
@@ -804,25 +799,23 @@ pub async fn get_messages(
             }
         };
 
-        // Filter by since_id if provided
-        let final_messages = if let Some(ref since_id) = params.since {
-            new_messages
-                .into_iter()
-                .filter(|msg| msg.id > *since_id)
-                .collect()
-        } else {
-            new_messages
-        };
-
-        messages = final_messages;
+        // No filtering needed - Redis XREAD handles pagination
+        messages = new_messages;
     }
 
-    // ✅ FIX: Use stream_id (not message UUID) for next_since
-    let next_since = messages.last().map(|m| m.stream_id.clone());
+    // Return Stream ID for ACK-based pagination
+    // If we have messages, return the last stream_id
+    // If no messages, echo back client's 'since' to maintain their position
+    let next_since = if !messages.is_empty() {
+        messages.last().map(|m| m.stream_id.clone())
+    } else {
+        params.since.clone() // Preserve client's position
+    };
 
     tracing::debug!(
         user_hash = %user_id_hash,
         count = messages.len(),
+        next_since = ?next_since,
         notification_received = notification_received,
         "Long polling completed"
     );
