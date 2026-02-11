@@ -31,8 +31,8 @@
 //
 // ============================================================================
 
-use crate::delivery_worker::deduplication::{mark_message_processed, should_skip_message};
-use crate::delivery_worker::redis_streams::push_to_offline_stream;
+use crate::delivery_worker::deduplication::should_skip_message;
+use crate::delivery_worker::redis_streams::push_to_offline_stream_atomic;
 use crate::delivery_worker::state::WorkerState;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::utils::log_safe_id;
@@ -110,7 +110,7 @@ pub async fn process_kafka_message(
     let message_bytes = rmp_serde::encode::to_vec_named(envelope)
         .context("Failed to serialize Kafka envelope to MessagePack")?;
 
-    let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
+    let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY) as u64;
 
     // 4. Route message to user-based stream
     // ========================================================================
@@ -125,15 +125,26 @@ pub async fn process_kafka_message(
     // the request, solving the message delivery problem in multi-instance setups.
     // ========================================================================
 
-    // Always write to user-based stream for reliable delivery
-    push_to_offline_stream(state, recipient_id, message_id, &message_bytes, None)
-        .await
-        .context("Failed to push message to user delivery stream")?;
-
-    // Mark message as processed (deduplication)
-    mark_message_processed(state, message_id, ttl_seconds)
-        .await
-        .context("Failed to mark message as processed")?;
+    // CRITICAL: Use atomic transaction to prevent race condition
+    // If we do XADD then SET separately, worker could crash between operations:
+    // - XADD succeeds, SET fails → message delivered but not marked as processed
+    // - Kafka redelivers → duplicate delivery
+    // Solution: MULTI/EXEC transaction - both succeed or both fail
+    let stream_key = format!(
+        "{}offline:{}",
+        state.config.delivery_queue_prefix, recipient_id
+    );
+    
+    push_to_offline_stream_atomic(
+        state,
+        &stream_key,
+        recipient_id,
+        message_id,
+        &message_bytes,
+        ttl_seconds,
+    )
+    .await
+    .context("Failed to atomically push message and mark as processed")?;
 
     // Publish notification for long polling endpoints
     if let Err(e) = publish_message_notification(state, recipient_id).await {
@@ -154,7 +165,7 @@ pub async fn process_kafka_message(
         message_id = %message_id,
         recipient_hash = %log_safe_id(recipient_id, salt),
         stream_key = %stream_key,
-        "Message pushed to user delivery stream - offset will NOT be committed immediately"
+        "Message pushed to user delivery stream atomically - offset will NOT be committed immediately"
     );
 
     // Do not commit offset immediately.
