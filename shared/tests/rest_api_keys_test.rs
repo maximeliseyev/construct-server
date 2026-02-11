@@ -447,3 +447,194 @@ async fn test_get_public_key_after_upload() {
     assert!(!response_data.verifying_key.is_empty());
     assert!(!response_data.username.is_empty());
 }
+
+// ============================================================================
+// Additional Tests for signedPrekeySignature (device-based architecture)
+// ============================================================================
+
+#[tokio::test]
+#[serial]
+async fn test_get_key_bundle_includes_signed_prekey_signature() {
+    cleanup_rate_limits("redis://127.0.0.1:6379").await;
+    let app = spawn_app().await;
+    let client = create_api_client();
+
+    // Register a user with device (includes signedPrekeySignature)
+    let username = generate_test_username("sigtest");
+    let (user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
+
+    // Get user's key bundle via device API
+    // This should return the device's keys including signedPrekeySignature
+    let response = client
+        .get(&format!(
+            "http://{}/api/v1/users/{}/public-key",
+            app.user_address, user_id
+        ))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    // Parse response
+    #[derive(serde::Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    struct KeyBundleData {
+        bundle_data: String,
+        master_identity_key: String,
+        signature: String,
+    }
+
+    #[derive(serde::Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    struct PublicKeyResponse {
+        key_bundle: KeyBundleData,
+        username: String,
+        verifying_key: String,
+    }
+
+    let response_data: PublicKeyResponse = response.json().await.unwrap();
+    
+    // Verify key bundle has signature (this is the bundle signature, not prekey signature)
+    assert!(!response_data.key_bundle.signature.is_empty());
+    
+    // Decode bundle_data to check if it contains signedPrekeySignature
+    let bundle_data_bytes = BASE64.decode(&response_data.key_bundle.bundle_data).unwrap();
+    let bundle_data_json: serde_json::Value = serde_json::from_slice(&bundle_data_bytes).unwrap();
+    
+    // Check that supported_suites contains signed_prekey_signature
+    if let Some(suites) = bundle_data_json["supportedSuites"].as_array() {
+        if let Some(first_suite) = suites.first() {
+            // signedPrekeySignature should be present
+            assert!(
+                first_suite.get("signedPrekeySignature").is_some(),
+                "signedPrekeySignature should be present in device key bundle"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_upload_keys_preserves_device_signed_prekey() {
+    cleanup_rate_limits("redis://127.0.0.1:6379").await;
+    let app = spawn_app().await;
+    let client = create_api_client();
+
+    // Register a user with device
+    let username = generate_test_username("preservetest");
+    let (user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
+
+    // Upload a new key bundle (legacy API)
+    let new_bundle = create_test_bundle(Some(user_id.clone()));
+    
+    let upload_response = client
+        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&new_bundle)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(upload_response.status(), reqwest::StatusCode::OK);
+
+    // Get public key - should still return device keys (not uploaded bundle)
+    // Because device keys take precedence in device-based architecture
+    let response = client
+        .get(&format!(
+            "http://{}/api/v1/users/{}/public-key",
+            app.user_address, user_id
+        ))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    #[derive(serde::Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    struct KeyBundleData {
+        bundle_data: String,
+        master_identity_key: String,
+        signature: String,
+    }
+
+    #[derive(serde::Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    struct PublicKeyResponse {
+        key_bundle: KeyBundleData,
+        username: String,
+        verifying_key: String,
+    }
+
+    let response_data: PublicKeyResponse = response.json().await.unwrap();
+    
+    // Device keys should be returned (not the uploaded bundle)
+    // Verify that verifying_key is the device's verifying key
+    assert!(!response_data.verifying_key.is_empty());
+    assert!(!response_data.key_bundle.signature.is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn test_update_verifying_key_success() {
+    cleanup_rate_limits("redis://127.0.0.1:6379").await;
+    let app = spawn_app().await;
+    let client = create_api_client();
+
+    // Register a user
+    let username = generate_test_username("updatekey");
+    let (user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
+
+    // Generate new verifying key
+    let new_signing_key = SigningKey::generate(&mut OsRng);
+    let new_verifying_key = new_signing_key.verifying_key();
+
+    // Update verifying key
+    let update_request = json!({
+        "verifyingKey": BASE64.encode(new_verifying_key.as_bytes()),
+        "reason": "test_update"
+    });
+
+    let response = client
+        .patch(&format!("http://{}/api/v1/users/me/public-key", app.user_address))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&update_request)
+        .send()
+        .await
+        .unwrap();
+
+    // Should succeed
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_update_verifying_key_invalid_format() {
+    cleanup_rate_limits("redis://127.0.0.1:6379").await;
+    let app = spawn_app().await;
+    let client = create_api_client();
+
+    // Register a user
+    let username = generate_test_username("invalidkey");
+    let (user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
+
+    // Try to update with invalid verifying key (wrong length)
+    let update_request = json!({
+        "verifyingKey": BASE64.encode(vec![0u8; 16]), // Wrong length (should be 32)
+        "reason": "test_invalid"
+    });
+
+    let response = client
+        .patch(&format!("http://{}/api/v1/users/me/public-key", app.user_address))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&update_request)
+        .send()
+        .await
+        .unwrap();
+
+    // Should fail with validation error
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}

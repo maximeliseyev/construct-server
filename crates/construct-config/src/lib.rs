@@ -297,7 +297,6 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_federation_id() {
