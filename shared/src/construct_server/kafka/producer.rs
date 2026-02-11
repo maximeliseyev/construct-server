@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 
+use super::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError};
 use super::config::create_client_config;
 use super::metrics;
 use super::types::{DeliveryAckEvent, KafkaMessageEnvelope};
@@ -17,9 +18,12 @@ use construct_config::KafkaConfig;
 /// - Idempotent writes (no duplicates within producer session)
 /// - Compression (snappy)
 /// - Low latency (10ms linger)
+/// - Circuit breaker protection (prevents cascading failures)
 pub struct MessageProducer {
     /// The actual Kafka producer (None when disabled)
     producer: Option<Arc<FutureProducer>>,
+    /// Circuit breaker for fault tolerance
+    circuit_breaker: Arc<CircuitBreaker>,
     topic: String,
     enabled: bool,
 }
@@ -36,12 +40,22 @@ impl MessageProducer {
     /// - `retries=2147483647`: Retry indefinitely on transient errors.
     /// - `compression.type=snappy`: Optimized compression.
     /// - `linger.ms=10`: Small batching window for low latency.
+    /// - Circuit breaker: 5 failures → open, 3s timeout, 30s reset
     pub fn new(config: &KafkaConfig) -> Result<Self> {
+        // Create circuit breaker (always, even when Kafka disabled)
+        let circuit_breaker_config = CircuitBreakerConfig {
+            failure_threshold: 5,
+            timeout: Duration::from_secs(3),
+            reset_timeout: Duration::from_secs(30),
+        };
+        let circuit_breaker = Arc::new(CircuitBreaker::with_config(circuit_breaker_config));
+
         if !config.enabled {
             info!("Kafka/Redpanda producer disabled (KAFKA_ENABLED=false)");
             // Don't create any producer when disabled - avoid connection attempts entirely
             return Ok(Self {
                 producer: None,
+                circuit_breaker,
                 topic: config.topic.clone(),
                 enabled: false,
             });
@@ -82,41 +96,62 @@ impl MessageProducer {
             .context("Failed to create Kafka producer")?;
 
         info!(
-            "Kafka/Redpanda producer initialized successfully for topic '{}'",
+            "Kafka/Redpanda producer initialized successfully for topic '{}' with circuit breaker",
             config.topic
         );
 
         Ok(Self {
             producer: Some(Arc::new(producer)),
+            circuit_breaker,
             topic: config.topic.clone(),
             enabled: true,
         })
     }
 
-    /// Send a message to Kafka
+    /// Send a message to Kafka with circuit breaker protection
     ///
     /// This is a blocking async operation that waits for Kafka acknowledgment.
-    /// In Phase 1 (dual-write), failures are logged but don't fail the request.
-    /// In Phase 6 (cutover), failures should fail the request.
+    /// Circuit breaker protects against cascading failures:
+    /// - If Kafka is slow/down, circuit opens after 5 failures
+    /// - Subsequent requests fail fast (no blocking)
+    /// - Automatically recovers when Kafka is back
     ///
     /// # Arguments
     /// * `envelope` - Message envelope to send
     ///
     /// # Returns
     /// * `Ok((partition, offset))` - Successfully written to Kafka
-    /// * `Err(anyhow::Error)` - Failed to write (should be logged/alerted)
-    pub async fn send_message(&self, envelope: &KafkaMessageEnvelope) -> Result<(i32, i64)> {
+    /// * `Err(CircuitBreakerError::Open)` - Circuit is open, Kafka unavailable
+    /// * `Err(CircuitBreakerError::Timeout)` - Request timed out (3s)
+    /// * `Err(CircuitBreakerError::Inner)` - Kafka error
+    pub async fn send_message(
+        &self,
+        envelope: &KafkaMessageEnvelope,
+    ) -> Result<(i32, i64), CircuitBreakerError<anyhow::Error>> {
         // Skip if Kafka/Redpanda disabled
-        let producer = match &self.producer {
-            Some(p) => p,
-            None => {
-                tracing::debug!(
-                    message_id = %envelope.message_id,
-                    "Kafka/Redpanda disabled - message NOT sent (dummy response)"
-                );
-                return Ok((-1, -1)); // Dummy partition/offset
-            }
-        };
+        if !self.enabled {
+            tracing::debug!(
+                message_id = %envelope.message_id,
+                "Kafka/Redpanda disabled - message NOT sent (dummy response)"
+            );
+            return Ok((-1, -1)); // Dummy partition/offset
+        }
+
+        // Execute with circuit breaker protection
+        self.circuit_breaker
+            .call(async {
+                self.send_message_internal(envelope)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Kafka send failed: {}", e))
+            })
+            .await
+    }
+
+    /// Internal send implementation (wrapped by circuit breaker)
+    async fn send_message_internal(&self, envelope: &KafkaMessageEnvelope) -> Result<(i32, i64)> {
+        let producer = self.producer.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Kafka producer not initialized")
+        })?;
 
         // Validate envelope before sending
         envelope.validate().context("Invalid message envelope")?;
@@ -300,6 +335,7 @@ impl Clone for MessageProducer {
     fn clone(&self) -> Self {
         Self {
             producer: self.producer.as_ref().map(Arc::clone),
+            circuit_breaker: Arc::clone(&self.circuit_breaker),
             topic: self.topic.clone(),
             enabled: self.enabled,
         }

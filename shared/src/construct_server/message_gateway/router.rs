@@ -141,7 +141,16 @@ impl MessageRouter {
     /// Route to local Kafka
     async fn route_to_local_kafka(&self, msg: &ChatMessage) -> Result<()> {
         let envelope = crate::kafka::KafkaMessageEnvelope::from(msg);
-        self.kafka_producer.send_message(&envelope).await?;
+        
+        // Use circuit breaker protection
+        if let Err(e) = self.kafka_producer.send_message(&envelope).await {
+            tracing::error!(
+                error = %e,
+                message_id = %msg.id,
+                "Circuit breaker: Failed to route message to Kafka"
+            );
+            return Err(anyhow::anyhow!("Message queue unavailable: {}", e));
+        }
 
         tracing::debug!(
             message_id = %msg.id,

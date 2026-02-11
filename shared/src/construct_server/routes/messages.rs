@@ -296,16 +296,44 @@ pub async fn send_message(
     if let Some(kafka_producer) = &app_context.kafka_producer {
         // Production path: send to Kafka, delivery worker will write to Redis
         if kafka_producer.is_enabled() {
-            if let Err(e) = kafka_producer.send_message(&envelope).await {
-                // SECURITY: Use hashed IDs in error logs
-                tracing::error!(
-                    error = %e,
-                    sender_hash = %log_safe_id(&sender_id.to_string(), salt),
-                    recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
-                    message_id = %message_id,
-                    "Failed to send message to Kafka"
-                );
-                return Err(AppError::Kafka(e.to_string()));
+            match kafka_producer.send_message(&envelope).await {
+                Ok(_) => {
+                    // Message sent successfully
+                }
+                Err(e) => {
+                    use crate::kafka::CircuitBreakerError;
+                    
+                    // Handle circuit breaker errors
+                    let error_message = match &e {
+                        CircuitBreakerError::Open(elapsed) => {
+                            format!(
+                                "Messaging service temporarily unavailable (circuit breaker open for {} seconds)",
+                                elapsed.as_secs()
+                            )
+                        }
+                        CircuitBreakerError::Timeout { timeout } => {
+                            format!(
+                                "Messaging service timeout (exceeded {} seconds)",
+                                timeout.as_secs()
+                            )
+                        }
+                        CircuitBreakerError::Inner(_) => {
+                            "Messaging service unavailable".to_string()
+                        }
+                    };
+                    
+                    // SECURITY: Use hashed IDs in error logs
+                    tracing::error!(
+                        error = %e,
+                        sender_hash = %log_safe_id(&sender_id.to_string(), salt),
+                        recipient_hash = %log_safe_id(&recipient_id.to_string(), salt),
+                        message_id = %message_id,
+                        "Failed to send message to Kafka (circuit breaker)"
+                    );
+                    
+                    // Return 503 Service Unavailable
+                    return Err(AppError::MessageQueue(error_message));
+                }
             }
         } else {
             // Test mode: Kafka disabled, write directly to Redis
