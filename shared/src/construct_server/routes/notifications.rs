@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::apns::DeviceTokenEncryption;
 use crate::context::AppContext;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use crate::utils::log_safe_id;
 use construct_error::AppError;
 
@@ -58,14 +58,13 @@ pub struct UpdatePreferencesRequest {
 /// Register a device token for push notifications
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires JWT authentication (verified by Gateway, identity via X-User-Id header)
 /// - Device token is encrypted before storage
 pub async fn register_device(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     Json(request): Json<RegisterDeviceRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = user.0;
     let user_id_str = user_id.to_string();
     let user_id_hash = log_safe_id(&user_id_str, &app_context.config.logging.hash_salt);
 
@@ -185,13 +184,12 @@ pub async fn register_device(
 /// Unregister a device token
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires JWT authentication (verified by Gateway, identity via X-User-Id header)
 pub async fn unregister_device(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     Json(request): Json<UnregisterDeviceRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = user.0;
     let user_id_str = user_id.to_string();
     let user_id_hash = log_safe_id(&user_id_str, &app_context.config.logging.hash_salt);
 
@@ -247,13 +245,12 @@ pub async fn unregister_device(
 /// Update notification preferences for a device
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires JWT authentication (verified by Gateway, identity via X-User-Id header)
 pub async fn update_preferences(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     Json(request): Json<UpdatePreferencesRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = user.0;
     let user_id_str = user_id.to_string();
     let user_id_hash = log_safe_id(&user_id_str, &app_context.config.logging.hash_salt);
 

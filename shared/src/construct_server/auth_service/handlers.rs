@@ -19,7 +19,7 @@ use std::sync::Arc;
 use crate::auth_service::AuthServiceContext;
 use crate::routes::auth;
 use crate::routes::devices;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use construct_error::AppError;
 
 /// Wrapper for get_pow_challenge handler
@@ -60,7 +60,7 @@ pub async fn refresh_token(
 /// Wrapper for logout handler
 pub async fn logout(
     State(context): State<Arc<AuthServiceContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Json(request): Json<auth::LogoutRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());

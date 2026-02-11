@@ -20,7 +20,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::messaging_service::MessagingServiceContext;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use crate::routes::messages;
 use crate::utils::log_safe_id;
 use construct_crypto::EncryptedMessage;
@@ -30,7 +30,7 @@ use construct_types::message::EndSessionData;
 /// Wrapper for send_message handler (POST /api/v1/messages)
 pub async fn send_message(
     State(context): State<Arc<MessagingServiceContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     headers: HeaderMap,
     Json(message): Json<EncryptedMessage>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -40,7 +40,7 @@ pub async fn send_message(
     let recipient_id = message.recipient_id.clone();
 
     // Send message (existing handler)
-    let result = messages::send_message(State(app_context), user, headers, Json(message)).await?;
+    let result = messages::send_message(State(app_context), TrustedUser(user_id), headers, Json(message)).await?;
 
     // ✅ NEW: Send push notification asynchronously (non-blocking)
     if context.config.apns.enabled {
@@ -62,11 +62,11 @@ pub async fn send_message(
 /// Wrapper for get_messages handler (GET /api/v1/messages?since=<id>)
 pub async fn get_messages(
     State(context): State<Arc<MessagingServiceContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     query: Query<messages::GetMessagesParams>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
-    messages::get_messages(State(app_context), user, query).await
+    messages::get_messages(State(app_context), TrustedUser(user_id), query).await
 }
 
 // ============================================================================
@@ -179,10 +179,10 @@ async fn send_push_notification(
 /// Wrapper for send_control_message handler (POST /api/v1/control)
 pub async fn send_control_message(
     State(context): State<Arc<MessagingServiceContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     headers: HeaderMap,
     Json(data): Json<EndSessionData>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
-    messages::send_control_message(State(app_context), user, headers, Json(data)).await
+    messages::send_control_message(State(app_context), TrustedUser(user_id), headers, Json(data)).await
 }

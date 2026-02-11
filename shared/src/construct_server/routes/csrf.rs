@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::context::AppContext;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use construct_config::CsrfConfig;
 use construct_error::AppError;
 
@@ -229,9 +229,9 @@ pub fn extract_csrf_token(
 /// Also sets it as a cookie for Double Submit Cookie pattern
 pub async fn get_csrf_token(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = user.0.to_string();
+    let user_id = user_id.to_string();
     let token = generate_csrf_token(&app_context.config.csrf, &user_id);
 
     // Build cookie value with security attributes

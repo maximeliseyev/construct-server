@@ -74,7 +74,8 @@ struct AuthenticateDeviceResponse {
 #[serde(rename_all = "camelCase")]
 struct RefreshTokenResponse {
     access_token: String,
-    expires_in: u64,
+    refresh_token: String,
+    expires_at: i64,
 }
 
 // Helper: Solve PoW challenge (simple implementation for tests)
@@ -746,7 +747,7 @@ async fn test_refresh_token_success() {
 
     let refresh_data: RefreshTokenResponse = refresh_response.json().await.unwrap();
     assert!(!refresh_data.access_token.is_empty());
-    assert!(refresh_data.expires_in > 0);
+    assert!(refresh_data.expires_at > chrono::Utc::now().timestamp());
 
     cleanup_rate_limits("redis://127.0.0.1:6379").await;
 }

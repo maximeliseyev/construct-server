@@ -23,7 +23,7 @@ use crate::context::AppContext;
 use crate::routes::csrf::{
     extract_csrf_token, has_custom_header, is_browser_request, validate_csrf_token, validate_origin,
 };
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use crate::utils::{add_security_headers as utils_add_security_headers, extract_client_ip};
 use construct_error::AppError;
 use subtle::ConstantTimeEq;
@@ -324,11 +324,11 @@ pub async fn ip_rate_limiting(
 /// - Different users from same IP: separate limits per user
 ///
 /// This middleware should be applied to authenticated endpoints.
-/// It requires AuthenticatedUser extractor to be applied first.
+/// It requires TrustedUser extractor to be applied first (Gateway verifies JWT).
 #[allow(dead_code)]
 pub async fn combined_rate_limiting(
     State(ctx): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
@@ -346,7 +346,7 @@ pub async fn combined_rate_limiting(
     }
 
     let path = req.uri().path();
-    let user_id = user.0.to_string();
+    let user_id_str = user_id.to_string();
 
     // Extract client IP from headers
     // Note: In production, ensure your reverse proxy sets X-Forwarded-For correctly
@@ -357,7 +357,7 @@ pub async fn combined_rate_limiting(
     {
         let mut queue = ctx.queue.lock().await;
         match queue
-            .increment_combined_rate_limit(&user_id, &client_ip, 3600)
+            .increment_combined_rate_limit(&user_id_str, &client_ip, 3600)
             .await
         {
             Ok(count) => {
@@ -365,8 +365,9 @@ pub async fn combined_rate_limiting(
                 let max_combined_requests = ctx.config.security.max_requests_per_user_ip_per_hour;
                 if count > max_combined_requests {
                     drop(queue);
+                    let user_id_for_log = user_id.to_string();
                     tracing::warn!(
-                        user_hash = %crate::utils::log_safe_id(&user_id, &ctx.config.logging.hash_salt),
+                        user_hash = %crate::utils::log_safe_id(&user_id_for_log, &ctx.config.logging.hash_salt),
                         ip = %client_ip,
                         count = count,
                         limit = max_combined_requests,
@@ -380,9 +381,11 @@ pub async fn combined_rate_limiting(
                 }
             }
             Err(e) => {
+                drop(queue);
+                let user_id_for_log = user_id.to_string();
                 tracing::error!(
                     error = %e,
-                    user_hash = %crate::utils::log_safe_id(&user_id, &ctx.config.logging.hash_salt),
+                    user_hash = %crate::utils::log_safe_id(&user_id_for_log, &ctx.config.logging.hash_salt),
                     ip = %client_ip,
                     "Failed to check combined rate limit"
                 );

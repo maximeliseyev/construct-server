@@ -46,7 +46,7 @@ const PAD_FIELD_OVERHEAD: usize = 12;
 use crate::context::AppContext;
 use crate::kafka::types::KafkaMessageEnvelope;
 use crate::rate_limit::{RateLimitAction, is_user_in_warmup};
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use crate::utils::{extract_client_ip, log_safe_id};
 use construct_crypto::{EncryptedMessage, ServerCryptoValidator};
 use construct_error::AppError;
@@ -56,11 +56,10 @@ use construct_types::message::{ChatMessage, EndSessionData};
 /// Sends an E2E-encrypted message using Double Ratchet protocol
 pub async fn send_message(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(sender_id): TrustedUser,
     headers: HeaderMap,
     Json(message): Json<EncryptedMessage>,
 ) -> Result<impl IntoResponse, AppError> {
-    let sender_id = user.0;
     let sender_id_str = sender_id.to_string();
 
     // SECURITY: Check rate limiting BEFORE processing (DoS protection)
@@ -372,6 +371,24 @@ pub async fn send_message(
 // Phase 2.5: REST API for Message Retrieval (Long Polling)
 // ============================================================================
 
+/// Validate Redis Stream ID format: {timestamp}-{sequence}
+/// Examples: "0", "1707584371151-0", "1707584371151-42"
+fn is_valid_stream_id(id: &str) -> bool {
+    // Special IDs
+    if id == "0" || id == "$" || id == "*" {
+        return true;
+    }
+
+    // Check format: {timestamp}-{sequence}
+    let parts: Vec<&str> = id.split('-').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+
+    // Both parts must be valid numbers
+    parts[0].parse::<u64>().is_ok() && parts[1].parse::<u64>().is_ok()
+}
+
 /// Query parameters for GET /api/v1/messages
 #[derive(Debug, Deserialize)]
 pub struct GetMessagesParams {
@@ -494,15 +511,14 @@ impl GetMessagesResponse {
 /// 3. Returns messages when they arrive or empty array on timeout
 ///
 /// Security:
-/// - Requires JWT authentication
+/// - Requires JWT authentication (verified by Gateway, identity via X-User-Id header)
 /// - Returns only messages for the authenticated user
 /// - Rate limiting: configurable via MAX_LONG_POLL_REQUESTS_PER_WINDOW (default: 100/60s)
 pub async fn get_messages(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     Query(params): Query<GetMessagesParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = user.0;
     let user_id_str = user_id.to_string();
     let user_id_hash = log_safe_id(&user_id_str, &app_context.config.logging.hash_salt);
 
@@ -805,11 +821,24 @@ pub async fn get_messages(
 
     // Return Stream ID for ACK-based pagination
     // If we have messages, return the last stream_id
-    // If no messages, echo back client's 'since' to maintain their position
+    // If no messages: echo back client's 'since' ONLY if it's valid, otherwise return None
     let next_since = if !messages.is_empty() {
         messages.last().map(|m| m.stream_id.clone())
     } else {
-        params.since.clone() // Preserve client's position
+        // Only preserve client's position if it's a valid Stream ID
+        // This prevents echoing back invalid IDs (e.g., UUIDs) that would cause repeated warnings
+        params.since.as_ref().and_then(|s| {
+            if is_valid_stream_id(s) {
+                Some(s.clone())
+            } else {
+                tracing::debug!(
+                    user_hash = %user_id_hash,
+                    invalid_since = %s,
+                    "Client sent invalid 'since' parameter, not echoing back"
+                );
+                None // Return None instead of invalid ID
+            }
+        })
     };
 
     tracing::debug!(
@@ -834,11 +863,10 @@ pub async fn get_messages(
 /// Sends a control message (e.g., END_SESSION) to notify recipient
 pub async fn send_control_message(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(sender_id): TrustedUser,
     headers: HeaderMap,
     Json(data): Json<EndSessionData>,
 ) -> Result<impl IntoResponse, AppError> {
-    let sender_id = user.0;
     let sender_id_str = sender_id.to_string();
 
     // SECURITY: Check rate limiting BEFORE processing (DoS protection)

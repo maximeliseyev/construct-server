@@ -13,14 +13,14 @@ use axum::{Json, extract::State, response::IntoResponse};
 use std::sync::Arc;
 
 use crate::notification_service::NotificationServiceContext;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use crate::routes::notifications;
 use construct_error::AppError;
 
 /// Wrapper for register_device handler (POST /api/v1/notifications/register-device)
 pub async fn register_device(
     State(context): State<Arc<NotificationServiceContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Json(request): Json<notifications::RegisterDeviceRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
@@ -30,7 +30,7 @@ pub async fn register_device(
 /// Wrapper for unregister_device handler (POST /api/v1/notifications/unregister-device)
 pub async fn unregister_device(
     State(context): State<Arc<NotificationServiceContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Json(request): Json<notifications::UnregisterDeviceRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
@@ -40,7 +40,7 @@ pub async fn unregister_device(
 /// Wrapper for update_preferences handler (PUT /api/v1/notifications/preferences)
 pub async fn update_preferences(
     State(context): State<Arc<NotificationServiceContext>>,
-    user: AuthenticatedUser,
+    user: TrustedUser,
     Json(request): Json<notifications::UpdatePreferencesRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());

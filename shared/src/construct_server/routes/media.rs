@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::messaging_service::MessagingServiceContext;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 
 /// Request for media upload token
 #[derive(Debug, Deserialize)]
@@ -52,7 +52,7 @@ pub struct MediaTokenError {
 /// POST /api/v1/media/token
 pub async fn generate_media_token(
     State(ctx): State<Arc<MessagingServiceContext>>,
-    AuthenticatedUser(user_id): AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     Json(_payload): Json<MediaTokenRequest>,
 ) -> Result<Json<MediaTokenResponse>, (StatusCode, Json<MediaTokenError>)> {
     // Check if media is enabled

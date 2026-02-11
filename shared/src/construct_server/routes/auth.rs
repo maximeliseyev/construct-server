@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::audit::AuditLogger;
 use crate::context::AppContext;
 use crate::db;
-use crate::routes::extractors::AuthenticatedUser;
+use crate::routes::extractors::TrustedUser;
 use crate::utils::{extract_client_ip, log_safe_id, validate_password_strength, validate_username};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use construct_crypto::{BundleData, ServerCryptoValidator, UploadableKeyBundle};
@@ -173,10 +173,9 @@ pub struct LogoutRequest {
 /// - Optionally revokes all refresh tokens for user (all_devices=true)
 pub async fn logout(
     State(app_context): State<Arc<AppContext>>,
-    user: AuthenticatedUser,
+    TrustedUser(user_id): TrustedUser,
     Json(request): Json<LogoutRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = user.0;
 
     // Extract JTI from current access token
     // We need to decode the token to get JTI
