@@ -104,6 +104,7 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         // Phase 2.5: REST API for messages
         .route("/api/v1/messages", post(messages::send_message)) // Phase 2.5.4: Migrated
         .route("/api/v1/messages", get(messages::get_messages)) // Phase 2.5.1: Long polling
+        .route("/api/v1/messages/confirm", post(messages::confirm_message)) // Week R2: 2-phase commit
         // Federation (no CSRF - uses server signatures)
         .route(
             "/.well-known/konstruct",

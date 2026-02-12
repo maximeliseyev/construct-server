@@ -17,6 +17,7 @@ use crate::auth::AuthManager;
 use crate::db::DbPool;
 use crate::delivery_ack::{DeliveryAckManager, PostgresDeliveryStorage};
 use crate::federation::{PublicKeyCache, ServerSigner};
+use crate::pending_messages::PendingMessageStorage;
 use construct_config::Config;
 
 use crate::kafka::MessageProducer;
@@ -72,6 +73,10 @@ pub struct AppContext {
     /// When None: key management is disabled (uses static keys from config)
     /// When Some: automatic rotation, Vault integration, hot reload
     pub key_management: Option<Arc<KeyManagementSystem>>,
+    /// Pending message storage for 2-phase commit protocol
+    /// When None: 2-phase commit is disabled (legacy mode)
+    /// When Some: idempotent message delivery with network failure recovery
+    pub pending_message_storage: Option<Arc<PendingMessageStorage>>,
 }
 
 impl AppContext {
@@ -104,6 +109,7 @@ impl AppContext {
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
             key_management: None, // Disabled by default
+            pending_message_storage: None, // Disabled by default
         }
     }
 
@@ -121,6 +127,12 @@ impl AppContext {
     /// Set key management system (builder pattern)
     pub fn with_key_management(mut self, kms: Arc<KeyManagementSystem>) -> Self {
         self.key_management = Some(kms);
+        self
+    }
+
+    /// Set pending message storage (builder pattern)
+    pub fn with_pending_message_storage(mut self, storage: Arc<PendingMessageStorage>) -> Self {
+        self.pending_message_storage = Some(storage);
         self
     }
 
@@ -270,6 +282,7 @@ pub struct AppContextBuilder {
     // gateway_client removed
     delivery_ack_manager: Option<Arc<DeliveryAckManager<PostgresDeliveryStorage>>>,
     key_management: Option<Arc<KeyManagementSystem>>,
+    pending_message_storage: Option<Arc<PendingMessageStorage>>,
 }
 
 impl AppContextBuilder {
@@ -286,6 +299,7 @@ impl AppContextBuilder {
             // gateway_client removed
             delivery_ack_manager: None,
             key_management: None,
+            pending_message_storage: None,
         }
     }
 
@@ -344,6 +358,11 @@ impl AppContextBuilder {
         self
     }
 
+    pub fn with_pending_message_storage(mut self, storage: Arc<PendingMessageStorage>) -> Self {
+        self.pending_message_storage = Some(storage);
+        self
+    }
+
     /// Build AppContext from builder
     ///
     /// Initializes server_signer and public_key_cache from config if available.
@@ -379,6 +398,7 @@ impl AppContextBuilder {
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
             key_management: self.key_management,
+            pending_message_storage: self.pending_message_storage,
         })
     }
 }

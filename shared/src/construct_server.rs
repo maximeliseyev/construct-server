@@ -33,6 +33,7 @@ pub mod messaging_service;
 pub mod metrics;
 pub mod models; // Invite objects and other data models
 pub mod notification_service;
+pub mod pending_messages; // 2-Phase commit protocol for message delivery
 pub mod pow; // Proof of Work for device registration
 pub mod queue;
 pub mod rate_limit; // ← NEW: Rate limiting & warmup sandbox

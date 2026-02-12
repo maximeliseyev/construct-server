@@ -626,4 +626,12 @@ pub struct EncryptedMessage {
     /// Server rejects messages older than 5 minutes
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
+
+    // ===== 2-Phase Commit Protocol (Week R2) =====
+    /// Optional: Temporary ID for idempotent message delivery
+    /// Client generates UUID and includes it for retry safety
+    /// If network fails after server writes to Kafka, client can retry with same temp_id
+    /// Server will detect duplicate and return existing message_id (idempotent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temp_id: Option<String>,
 }

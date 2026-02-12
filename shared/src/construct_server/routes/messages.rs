@@ -292,13 +292,93 @@ pub async fn send_message(
     };
     let envelope = KafkaMessageEnvelope::from_encrypted_message(&message, &ctx);
 
+    // ============================================================================
+    // Week R2: 2-Phase Commit Protocol - Idempotent Message Delivery
+    // ============================================================================
+    //
+    // Phase 1 (PREPARE): Check if temp_id exists, store PENDING, write to Kafka
+    //   - If temp_id provided AND exists in Redis → Return existing message_id (idempotent)
+    //   - If temp_id provided AND new → Store PENDING → Write Kafka → Return message_id
+    //   - If no temp_id → Legacy mode (backward compatibility)
+    //
+    // Phase 2 (COMMIT): Client calls /messages/confirm with temp_id (separate endpoint)
+    //
+    // This prevents message loss when network fails after Kafka write but before
+    // client receives 200 OK response.
+    // ============================================================================
+    
+    // Generate or use provided temp_id for idempotency
+    let temp_id = message.temp_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    
+    // Phase 1: Check if this is a retry (temp_id already exists)
+    if let Some(pending_storage) = &app_context.pending_message_storage {
+        if let Ok(Some(existing)) = pending_storage.get_pending(&temp_id).await {
+            // IDEMPOTENT: temp_id already exists, return existing message_id
+            tracing::info!(
+                temp_id = %temp_id,
+                message_id = %existing.message_id,
+                sender_hash = %log_safe_id(&sender_id.to_string(), salt),
+                "Idempotent retry detected - returning existing message_id"
+            );
+            
+            return Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "status": "sent",
+                    "messageId": existing.message_id,
+                    "tempId": temp_id,
+                    "idempotent": true
+                })),
+            ));
+        }
+        
+        // Phase 1: Store PENDING state before Kafka write
+        use crate::pending_messages::PendingMessageData;
+        let pending_data = PendingMessageData::new(
+            temp_id.clone(),
+            message_id.clone(),
+            sender_id.to_string(),
+            recipient_id.to_string(),
+        );
+        
+        if let Err(e) = pending_storage.store_pending(&pending_data).await {
+            tracing::error!(
+                error = %e,
+                temp_id = %temp_id,
+                message_id = %message_id,
+                "Failed to store pending message - continuing without 2-phase commit"
+            );
+            // Continue without 2-phase commit (graceful degradation)
+        } else {
+            tracing::debug!(
+                temp_id = %temp_id,
+                message_id = %message_id,
+                "Stored pending message (Phase 1)"
+            );
+        }
+    }
+
     // Write to Kafka (Phase 5: source of truth) or directly to Redis (test mode)
     if let Some(kafka_producer) = &app_context.kafka_producer {
         // Production path: send to Kafka, delivery worker will write to Redis
         if kafka_producer.is_enabled() {
             match kafka_producer.send_message(&envelope).await {
-                Ok(_) => {
-                    // Message sent successfully
+                Ok((partition, offset)) => {
+                    // Message sent successfully, update pending storage with Kafka info
+                    if let Some(pending_storage) = &app_context.pending_message_storage {
+                        if let Err(e) = pending_storage
+                            .update_kafka_info(&temp_id, partition, offset)
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                temp_id = %temp_id,
+                                partition = partition,
+                                offset = offset,
+                                "Failed to update pending message with Kafka info"
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     use crate::kafka::CircuitBreakerError;
@@ -390,7 +470,8 @@ pub async fn send_message(
         StatusCode::OK,
         Json(json!({
             "status": "sent",
-            "messageId": message_id
+            "messageId": message_id,
+            "tempId": temp_id
         })),
     ))
 }
@@ -1093,3 +1174,98 @@ pub async fn send_control_message(
         })),
     ))
 }
+
+// ============================================================================
+// Week R2: 2-Phase Commit - Message Confirmation Endpoint
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ConfirmMessageRequest {
+    /// Temporary ID from Phase 1 (send_message response)
+    #[serde(rename = "tempId")]
+    pub temp_id: String,
+}
+
+/// POST /api/v1/messages/confirm - Phase 2 of 2-phase commit
+///
+/// Client calls this after successfully receiving message_id from send_message.
+/// If network failed and client never received the response, they retry send_message
+/// with the same temp_id (idempotent).
+///
+/// This endpoint is fire-and-forget - even if confirmation fails, the auto-cleanup
+/// worker will confirm pending messages after 5 minutes.
+pub async fn confirm_message(
+    State(app_context): State<Arc<AppContext>>,
+    TrustedUser(sender_id): TrustedUser,
+    Json(data): Json<ConfirmMessageRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let sender_id_str = sender_id.to_string();
+    
+    // Check if 2-phase commit is enabled
+    let Some(pending_storage) = &app_context.pending_message_storage else {
+        // 2-phase commit disabled, return success (backward compatibility)
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "status": "confirmed",
+                "message": "2-phase commit not enabled"
+            })),
+        ));
+    };
+    
+    // Confirm the pending message (Phase 2)
+    match pending_storage.confirm_pending(&data.temp_id).await {
+        Ok(true) => {
+            tracing::debug!(
+                temp_id = %data.temp_id,
+                sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
+                "Message confirmed (Phase 2)"
+            );
+            
+            Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "status": "confirmed",
+                    "tempId": data.temp_id
+                })),
+            ))
+        }
+        Ok(false) => {
+            // temp_id not found (already confirmed or expired)
+            tracing::warn!(
+                temp_id = %data.temp_id,
+                sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
+                "Attempted to confirm non-existent pending message"
+            );
+            
+            // Return success anyway (fire-and-forget, idempotent)
+            Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "status": "confirmed",
+                    "tempId": data.temp_id,
+                    "message": "Already confirmed or expired"
+                })),
+            ))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                temp_id = %data.temp_id,
+                "Failed to confirm pending message"
+            );
+            
+            // Return success anyway (fire-and-forget)
+            // Auto-cleanup worker will confirm after 5 minutes
+            Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "status": "confirmed",
+                    "tempId": data.temp_id,
+                    "message": "Confirmation queued"
+                })),
+            ))
+        }
+    }
+}
+
