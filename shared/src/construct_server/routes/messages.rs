@@ -763,8 +763,8 @@ pub async fn get_messages(
                     };
 
                     MessageResponse {
-                        id: envelope.message_id,
-                        stream_id, // Internal use, skip in serialization
+                        id: envelope.message_id.clone(),
+                        stream_id: stream_id.clone(), // Internal use, skip in serialization
                         // ✅ SPEC: Use "from"/"to" as per specification
                         from: envelope.sender_id,
                         to: envelope.recipient_id,
@@ -787,6 +787,7 @@ pub async fn get_messages(
                 tracing::info!(
                     user_hash = %user_id_hash,
                     count = collected_messages.len(),
+                    last_stream_id = %collected_messages.last().map(|m| m.stream_id.as_str()).unwrap_or("NONE"),
                     "Successfully read {} messages from Redis stream for user",
                     collected_messages.len()
                 );
@@ -812,11 +813,25 @@ pub async fn get_messages(
         drop(queue);
         // Return last Stream ID for next request (ACK-based pagination)
         // Client will send this back to acknowledge receipt and get next batch
-        let next_since = messages.last().map(|m| m.stream_id.clone());
+        // ✅ CRITICAL: ALWAYS return nextSince when messages exist (nextSince bug fix)
+        let next_since = messages.last().and_then(|m| {
+            let stream_id = m.stream_id.trim();
+            if stream_id.is_empty() {
+                tracing::error!(
+                    user_hash = %user_id_hash,
+                    message_id = %m.id,
+                    "CRITICAL: Empty stream_id in message response - this should never happen!"
+                );
+                None
+            } else {
+                Some(stream_id.to_string())
+            }
+        });
 
         tracing::debug!(
             user_hash = %user_id_hash,
             count = messages.len(),
+            next_since = ?next_since,
             "Returning {} messages immediately",
             messages.len()
         );
@@ -895,8 +910,8 @@ pub async fn get_messages(
                     };
 
                     MessageResponse {
-                        id: envelope.message_id,
-                        stream_id, // Internal use, skip in serialization
+                        id: envelope.message_id.clone(),
+                        stream_id: stream_id.clone(), // Internal use, skip in serialization
                         // ✅ SPEC: Use "from"/"to" as per specification
                         from: envelope.sender_id,
                         to: envelope.recipient_id,
@@ -924,6 +939,16 @@ pub async fn get_messages(
             }
         };
 
+        if !new_messages.is_empty() {
+            tracing::debug!(
+                user_hash = %user_id_hash,
+                count = new_messages.len(),
+                last_stream_id = %new_messages.last().map(|m| m.stream_id.as_str()).unwrap_or("NONE"),
+                "Read {} messages after notification",
+                new_messages.len()
+            );
+        }
+
         // No filtering needed - Redis XREAD handles pagination
         messages = new_messages;
     }
@@ -931,8 +956,21 @@ pub async fn get_messages(
     // Return Stream ID for ACK-based pagination
     // If we have messages, return the last stream_id
     // If no messages: echo back client's 'since' ONLY if it's valid, otherwise return None
+    // ✅ CRITICAL: ALWAYS return nextSince when messages exist (nextSince bug fix)
     let next_since = if !messages.is_empty() {
-        messages.last().map(|m| m.stream_id.clone())
+        messages.last().and_then(|m| {
+            let stream_id = m.stream_id.trim();
+            if stream_id.is_empty() {
+                tracing::error!(
+                    user_hash = %user_id_hash,
+                    message_id = %m.id,
+                    "CRITICAL: Empty stream_id in message response after long polling!"
+                );
+                None
+            } else {
+                Some(stream_id.to_string())
+            }
+        })
     } else {
         // Only preserve client's position if it's a valid Stream ID
         // This prevents echoing back invalid IDs (e.g., UUIDs) that would cause repeated warnings
