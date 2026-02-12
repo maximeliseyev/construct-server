@@ -54,12 +54,10 @@ pub fn create_router(app_context: Arc<AppContext>) -> Router {
         .route("/metrics", get(health::metrics))
         // CSRF token endpoint (GET - no CSRF needed)
         .route("/api/csrf-token", get(csrf::get_csrf_token))
-        // Authentication endpoints
+        // Authentication endpoints (legacy, kept for backward compatibility)
+        // NOTE: Device-based auth is in auth-service (POST /api/v1/auth/register-device)
         .route("/auth/refresh", post(auth::refresh_token))
         .route("/auth/logout", post(auth::logout))
-        // Phase 2.5: REST API authentication endpoints
-        .route("/api/v1/auth/register", post(auth::register))
-        .route("/api/v1/auth/login", post(auth::login))
         // Account management (CSRF protected, authenticated)
         .route("/api/v1/account", get(account::get_account))
         .route("/api/v1/account", put(account::update_account))
