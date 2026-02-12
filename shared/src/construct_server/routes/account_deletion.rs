@@ -75,6 +75,7 @@ pub struct DeleteConfirmRequest {
 
 /// Success response for deletion
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteSuccessResponse {
     pub status: &'static str,
 }
