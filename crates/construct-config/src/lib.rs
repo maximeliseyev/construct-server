@@ -65,6 +65,14 @@ pub struct Config {
     pub server_registry_ttl_secs: i64,
     pub message_ttl_days: i64,
 
+    /// Deduplication key safety margin in hours
+    /// Added to Kafka retention period to prevent edge case race conditions.
+    /// If message is at end of Kafka retention and worker crashes after creating
+    /// dedup key but before committing offset, Kafka will NOT redeliver (expired).
+    /// Solution: dedup TTL = Kafka retention + safety_margin
+    /// Recommendation: 2-4 hours for typical network/restart delays
+    pub dedup_safety_margin_hours: i64,
+
     /// Access token TTL in hours (for REST API - short-lived for security)
     pub access_token_ttl_hours: i64,
 
@@ -183,6 +191,10 @@ impl Config {
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(DEFAULT_MESSAGE_TTL_DAYS),
+            dedup_safety_margin_hours: std::env::var("DEDUP_SAFETY_MARGIN_HOURS")
+                .ok()
+                .and_then(|h| h.parse().ok())
+                .unwrap_or(2), // Default: 2 hours safety margin
 
             access_token_ttl_hours: std::env::var("ACCESS_TOKEN_TTL_HOURS")
                 .ok()

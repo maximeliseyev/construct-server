@@ -37,7 +37,7 @@ use crate::delivery_worker::state::WorkerState;
 use crate::kafka::KafkaMessageEnvelope;
 use crate::utils::log_safe_id;
 use anyhow::{Context, Result};
-use construct_config::SECONDS_PER_DAY;
+use construct_config::{SECONDS_PER_DAY, SECONDS_PER_HOUR};
 use redis::cmd;
 use tracing::{debug, info};
 
@@ -110,7 +110,24 @@ pub async fn process_kafka_message(
     let message_bytes = rmp_serde::encode::to_vec_named(envelope)
         .context("Failed to serialize Kafka envelope to MessagePack")?;
 
-    let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY) as u64;
+    // 3. Calculate deduplication TTL with safety margin
+    // ========================================================================
+    // RELIABILITY FIX: Dedup TTL must exceed Kafka retention to prevent edge case
+    //
+    // Problem: If message is at end of Kafka retention (e.g., 6d 23h 59m) and worker
+    // crashes after creating dedup key but before committing offset:
+    // - Kafka deletes message (retention expired) → NO redelivery possible
+    // - Dedup key remains for full retention period → wasted memory
+    //
+    // Solution: TTL = Kafka retention + safety_margin (2h)
+    // - Covers network delays, worker restart time, offset commit lag
+    // - Kafka can still redeliver within safety window
+    // - Dedup prevents duplicates if redelivery happens
+    //
+    // Example: 7 days retention + 2h margin = 604,800s + 7,200s = 612,000s
+    // ========================================================================
+    let ttl_seconds = ((state.config.message_ttl_days * SECONDS_PER_DAY) 
+                      + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR)) as u64;
 
     // 4. Route message to user-based stream
     // ========================================================================

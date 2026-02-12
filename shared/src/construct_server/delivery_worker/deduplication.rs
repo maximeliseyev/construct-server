@@ -29,7 +29,7 @@
 use crate::delivery_worker::retry::execute_redis_with_retry;
 use crate::delivery_worker::state::WorkerState;
 use anyhow::{Context, Result};
-use construct_config::SECONDS_PER_DAY;
+use construct_config::{SECONDS_PER_DAY, SECONDS_PER_HOUR};
 use redis::cmd;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
@@ -210,7 +210,9 @@ pub async fn mark_content_hash_processed(
 /// # Arguments
 /// * `state` - Worker state
 /// * `message_id` - Message ID to mark as processed
-/// * `ttl_seconds` - TTL in seconds (usually message_ttl_days * SECONDS_PER_DAY)
+/// * `ttl_seconds` - TTL in seconds
+///                   Should be: Kafka retention + safety_margin
+///                   Example: (7 days * 86400) + (2 hours * 3600) = 612,000s
 pub async fn mark_message_processed(
     state: &WorkerState,
     message_id: &str,
@@ -283,7 +285,9 @@ pub async fn should_skip_message(
         );
 
         // Mark as processed so we don't check again on next Kafka redeliver
-        let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
+        // Use TTL with safety margin (Kafka retention + 2h)
+        let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY) 
+                        + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR);
         if let Err(e) = mark_message_processed(state, message_id, ttl_seconds).await {
             warn!(
                 message_id = %message_id,
@@ -335,7 +339,9 @@ pub async fn should_skip_message_with_content(
         );
 
         // Mark as processed
-        let ttl_seconds = state.config.message_ttl_days * SECONDS_PER_DAY;
+        // Use TTL with safety margin (Kafka retention + 2h)
+        let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY) 
+                        + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR);
         if let Err(e) = mark_message_processed(state, message_id, ttl_seconds).await {
             warn!(
                 message_id = %message_id,
