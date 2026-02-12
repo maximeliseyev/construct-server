@@ -108,19 +108,25 @@ pub async fn get_delete_challenge(
     let user_id = user.0;
 
     // Get user's primary device
-    let device = db::get_user_primary_device(&app_context.db_pool, &user_id)
+    let device_opt = db::get_user_primary_device(&app_context.db_pool, &user_id)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to get user's primary device");
             AppError::Unknown(e)
-        })?
-        .ok_or_else(|| {
-            tracing::warn!(
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "No device found for user"
-            );
-            AppError::NotFound("No device found for this account".to_string())
         })?;
+    
+    // TEMPORARY FIX: If no device found, this is a legacy user without device registration
+    // Return helpful error message suggesting they contact support or re-register
+    let device = device_opt.ok_or_else(|| {
+        tracing::warn!(
+            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+            "No device found for user - legacy account without device"
+        );
+        AppError::Validation(
+            "Your account was created before device-based authentication. \
+            Please contact support or create a new account to enable secure deletion.".to_string()
+        )
+    })?;
 
     // Generate random 32-char hex challenge
     let challenge = generate_hex_challenge();
