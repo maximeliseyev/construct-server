@@ -552,6 +552,7 @@ pub struct MessageResponse {
 /// Response structure for GET /api/v1/messages
 /// Includes optional padding field for traffic analysis protection
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")] // ✅ Use camelCase for all fields (nextSince, hasMore)
 pub struct GetMessagesResponse {
     pub messages: Vec<MessageResponse>,
     /// Stream ID to use in next request for ACK-based pagination
