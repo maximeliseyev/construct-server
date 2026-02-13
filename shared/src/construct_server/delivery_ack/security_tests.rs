@@ -349,7 +349,6 @@ fn test_batching_configuration() {
 
 #[cfg(all(test, feature = "integration-tests"))]
 mod integration_tests {
-    use super::*;
 
     /// Integration test: Verify Redis ephemeral mappings expire
     #[tokio::test]

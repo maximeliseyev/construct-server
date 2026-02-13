@@ -8,6 +8,9 @@
 //
 // ============================================================================
 
+#![allow(dead_code)]
+#![allow(clippy::needless_borrows_for_generic_args)]
+
 use serial_test::serial;
 use uuid::Uuid;
 

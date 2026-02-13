@@ -18,7 +18,7 @@ fn start_service(binary_name: &str, port: u16) -> Child {
     println!("Starting {} on port {}", binary_name, port);
 
     let child = Command::new("cargo")
-        .args(&["run", "--bin", binary_name])
+        .args(["run", "--bin", binary_name])
         .env("PORT", port.to_string())
         .env(
             "DATABASE_URL",
@@ -27,7 +27,7 @@ fn start_service(binary_name: &str, port: u16) -> Child {
         .env("REDIS_URL", "redis://localhost:6379")
         .env("JWT_SECRET", "test_jwt_secret_for_microservices_testing")
         .spawn()
-        .expect(&format!("Failed to start {}", binary_name));
+        .unwrap_or_else(|_| panic!("Failed to start {}", binary_name));
 
     // Give service time to start
     thread::sleep(Duration::from_secs(3));

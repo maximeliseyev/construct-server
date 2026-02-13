@@ -8,6 +8,8 @@
 //
 // ============================================================================
 
+#![allow(dead_code)]
+
 use argon2::{
     Argon2, ParamsBuilder, Version,
     password_hash::{PasswordHasher, SaltString},

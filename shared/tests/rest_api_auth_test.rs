@@ -11,6 +11,10 @@
 //
 // ============================================================================
 
+#![allow(dead_code)]
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(unused_variables)]
+
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;

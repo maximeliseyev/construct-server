@@ -10,6 +10,8 @@
 //
 // ============================================================================
 
+#![allow(dead_code)]
+
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_crypto::{BundleData, SuiteKeyMaterial, UploadableKeyBundle};
 use ed25519_dalek::{Signer, SigningKey};

@@ -8,6 +8,10 @@
 //
 // ============================================================================
 
+#![allow(dead_code)]
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(unused_variables)]
+
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_crypto::EncryptedMessage;
 use serial_test::serial;
@@ -402,7 +406,7 @@ async fn test_get_messages_rate_limiting() {
     // Rate limiting should eventually kick in for rapid requests
     // (Note: This test might be flaky depending on rate limit configuration)
     // For now, we just verify the endpoint works
-    assert!(true); // Placeholder - rate limiting behavior may vary
+    // Placeholder - rate limiting behavior may vary
 }
 
 // Note: Long polling tests (test_get_messages_long_polling, test_get_messages_long_polling_timeout)
