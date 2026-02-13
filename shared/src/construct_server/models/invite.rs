@@ -220,9 +220,9 @@ mod tests {
             uuid: "650e8400-e29b-41d4-a716-446655440001".to_string(),
             device_id: Some("4e1f9dbe209c1bedb33ee32dda5a28f0".to_string()),
             server: "konstruct.cc".to_string(),
-            eph_key: base64::engine::general_purpose::STANDARD.encode(&[0u8; 32]),
+            eph_key: base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
             ts: chrono::Utc::now().timestamp(),
-            sig: base64::engine::general_purpose::STANDARD.encode(&[0u8; 64]),
+            sig: base64::engine::general_purpose::STANDARD.encode([0u8; 64]),
         };
 
         assert!(invite.validate().is_ok());
@@ -236,9 +236,9 @@ mod tests {
             uuid: "650e8400-e29b-41d4-a716-446655440001".to_string(),
             device_id: None, // Missing!
             server: "konstruct.cc".to_string(),
-            eph_key: base64::engine::general_purpose::STANDARD.encode(&[0u8; 32]),
+            eph_key: base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
             ts: chrono::Utc::now().timestamp(),
-            sig: base64::engine::general_purpose::STANDARD.encode(&[0u8; 64]),
+            sig: base64::engine::general_purpose::STANDARD.encode([0u8; 64]),
         };
 
         assert!(matches!(
@@ -255,9 +255,9 @@ mod tests {
             uuid: "650e8400-e29b-41d4-a716-446655440001".to_string(),
             device_id: Some("tooshort".to_string()), // Wrong length!
             server: "konstruct.cc".to_string(),
-            eph_key: base64::engine::general_purpose::STANDARD.encode(&[0u8; 32]),
+            eph_key: base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
             ts: chrono::Utc::now().timestamp(),
-            sig: base64::engine::general_purpose::STANDARD.encode(&[0u8; 64]),
+            sig: base64::engine::general_purpose::STANDARD.encode([0u8; 64]),
         };
 
         assert!(matches!(

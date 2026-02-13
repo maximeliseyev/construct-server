@@ -368,8 +368,8 @@ pub async fn send_message(
             match kafka_producer.send_message(&envelope).await {
                 Ok((partition, offset)) => {
                     // Message sent successfully, update pending storage with Kafka info
-                    if let Some(pending_storage) = &app_context.pending_message_storage {
-                        if let Err(e) = pending_storage
+                    if let Some(pending_storage) = &app_context.pending_message_storage
+                        && let Err(e) = pending_storage
                             .update_kafka_info(&temp_id, partition, offset)
                             .await
                         {
@@ -381,7 +381,6 @@ pub async fn send_message(
                                 "Failed to update pending message with Kafka info"
                             );
                         }
-                    }
                 }
                 Err(e) => {
                     use crate::kafka::CircuitBreakerError;

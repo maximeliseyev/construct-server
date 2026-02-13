@@ -28,7 +28,7 @@ use construct_server_shared::{
 };
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::sync::Arc;
@@ -149,8 +149,8 @@ pub async fn cleanup_rate_limits(redis_url: &str) {
     use redis::AsyncCommands;
 
     let client = redis::Client::open(redis_url).ok();
-    if let Some(client) = client {
-        if let Ok(mut conn) = client.get_multiplexed_async_connection().await {
+    if let Some(client) = client
+        && let Ok(mut conn) = client.get_multiplexed_async_connection().await {
             let patterns = vec![
                 "rate:*",
                 "rate:login:*",
@@ -165,7 +165,6 @@ pub async fn cleanup_rate_limits(redis_url: &str) {
                 }
             }
         }
-    }
 }
 
 /// Spawn auth service
@@ -508,8 +507,8 @@ fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
     for nonce in 0u64.. {
         let input = format!("{}{}", challenge, nonce);
 
-        if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt) {
-            if let Some(h) = hash.hash {
+        if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt)
+            && let Some(h) = hash.hash {
                 let hash_bytes = h.as_bytes();
                 let leading_zeros = count_leading_zero_bits(hash_bytes);
 
@@ -517,7 +516,6 @@ fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
                     return (nonce, hex::encode(hash_bytes));
                 }
             }
-        }
     }
 
     unreachable!("PoW should always find a solution")

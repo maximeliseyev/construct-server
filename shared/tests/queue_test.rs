@@ -17,9 +17,10 @@ async fn setup_queue() -> (MessageQueue, redis::Connection) {
         bind_address: "127.0.0.1".to_string(),
         port: 8080,
         health_port: 8081,
-        heartbeat_interval_secs: 60 as i64,
-        server_registry_ttl_secs: 120 as i64,
+        heartbeat_interval_secs: 60_i64,
+        server_registry_ttl_secs: 120_i64,
         message_ttl_days: 7,
+        dedup_safety_margin_hours: 24,
         access_token_ttl_hours: 1,
         session_ttl_days: 30,
         refresh_token_ttl_days: 90,
@@ -199,7 +200,7 @@ async fn test_register_server_instance_logic() {
 
     // 1. Test creation of a new, non-existent key
     message_queue
-        .register_server_instance(&queue_key, 60 as i64)
+        .register_server_instance(&queue_key, 60_i64)
         .await
         .expect("register_server_instance failed on creation");
 
@@ -235,7 +236,7 @@ async fn test_register_server_instance_logic() {
     );
 
     message_queue
-        .register_server_instance(&queue_key, 60 as i64)
+        .register_server_instance(&queue_key, 60_i64)
         .await
         .expect("register_server_instance failed on correction");
 
@@ -361,10 +362,10 @@ async fn test_rate_limit_different_keys() {
 
     // Cleanup
     let _: () = redis_conn
-        .del(&format!("test_rate:{}", user1))
+        .del(format!("test_rate:{}", user1))
         .unwrap_or_default();
     let _: () = redis_conn
-        .del(&format!("test_rate:{}", user2))
+        .del(format!("test_rate:{}", user2))
         .unwrap_or_default();
 }
 

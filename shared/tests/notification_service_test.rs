@@ -98,7 +98,7 @@ async fn register_and_get_token(client: &reqwest::Client, auth_url: &str) -> Aut
     });
 
     let response = client
-        .post(&format!("{}/api/v1/auth/register", auth_url))
+        .post(format!("{}/api/v1/auth/register", auth_url))
         .json(&request)
         .send()
         .await
@@ -145,7 +145,7 @@ async fn device_token_register_success() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -175,7 +175,7 @@ async fn device_token_register_requires_auth() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -204,7 +204,7 @@ async fn device_token_register_invalid_format_empty() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -233,7 +233,7 @@ async fn device_token_register_invalid_format_too_long() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -262,7 +262,7 @@ async fn device_token_register_invalid_filter() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -293,7 +293,7 @@ async fn device_token_register_duplicate_updates() {
     });
 
     let response1 = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -313,7 +313,7 @@ async fn device_token_register_duplicate_updates() {
     });
 
     let response2 = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -347,7 +347,7 @@ async fn device_token_unregister_success() {
     });
 
     let register_response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -365,7 +365,7 @@ async fn device_token_unregister_success() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/unregister-device",
             app.notification_url()
         ))
@@ -397,7 +397,7 @@ async fn device_token_unregister_not_found() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/unregister-device",
             app.notification_url()
         ))
@@ -422,7 +422,7 @@ async fn device_token_unregister_requires_auth() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/unregister-device",
             app.notification_url()
         ))
@@ -456,7 +456,7 @@ async fn notification_preferences_update_success() {
     });
 
     let register_response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -476,7 +476,7 @@ async fn notification_preferences_update_success() {
     });
 
     let response = client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/notifications/preferences",
             app.notification_url()
         ))
@@ -510,7 +510,7 @@ async fn notification_preferences_disable_notifications() {
     });
 
     client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -528,7 +528,7 @@ async fn notification_preferences_disable_notifications() {
     });
 
     let response = client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/notifications/preferences",
             app.notification_url()
         ))
@@ -558,7 +558,7 @@ async fn notification_preferences_invalid_filter() {
     });
 
     client
-        .post(&format!(
+        .post(format!(
             "{}/api/v1/notifications/register-device",
             app.notification_url()
         ))
@@ -576,7 +576,7 @@ async fn notification_preferences_invalid_filter() {
     });
 
     let response = client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/notifications/preferences",
             app.notification_url()
         ))
@@ -606,7 +606,7 @@ async fn notification_preferences_device_not_found() {
     });
 
     let response = client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/notifications/preferences",
             app.notification_url()
         ))
@@ -633,7 +633,7 @@ async fn notification_preferences_requires_auth() {
     });
 
     let response = client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/notifications/preferences",
             app.notification_url()
         ))
@@ -675,7 +675,7 @@ async fn device_token_register_all_valid_filters() {
         });
 
         let response = client
-            .post(&format!(
+            .post(format!(
                 "{}/api/v1/notifications/register-device",
                 app.notification_url()
             ))

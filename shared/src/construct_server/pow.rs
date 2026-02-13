@@ -295,8 +295,8 @@ mod tests {
             let derived_salt = derive_pow_salt(challenge);
             let salt = SaltString::encode_b64(derived_salt.as_bytes()).unwrap();
 
-            if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt) {
-                if let Some(h) = hash.hash {
+            if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt)
+                && let Some(h) = hash.hash {
                     let hash_bytes = h.as_bytes();
                     let leading_zeros = count_leading_zero_bits(hash_bytes);
 
@@ -317,7 +317,6 @@ mod tests {
                         return;
                     }
                 }
-            }
         }
 
         // If we didn't find a nonce in 1000 attempts, that's OK for difficulty 4

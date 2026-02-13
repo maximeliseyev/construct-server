@@ -92,7 +92,7 @@ async fn register_user(
     });
 
     let response = client
-        .post(&format!("http://{}/api/v1/auth/register", app_address))
+        .post(format!("http://{}/api/v1/auth/register", app_address))
         .json(&request)
         .send()
         .await
@@ -122,7 +122,7 @@ async fn register_user(
 // Helper function to get CSRF token
 async fn get_csrf_token(client: &reqwest::Client, app_address: &str, access_token: &str) -> String {
     let response = client
-        .get(&format!("http://{}/api/csrf-token", app_address))
+        .get(format!("http://{}/api/csrf-token", app_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -152,12 +152,12 @@ async fn test_csrf_bypass_with_x_requested_with() {
 
     // Register a user
     let username = generate_test_username("testuser");
-    let (user_id, access_token) =
+    let (_user_id, access_token) =
         register_user(&client, &app.address, &username, "TestPassword123!").await;
 
     // API clients with X-Requested-With header should bypass CSRF
     let response = client
-        .put(&format!("http://{}/api/v1/account", app.address))
+        .put(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", format!("Bearer {}", access_token))
         .header("X-Requested-With", "XMLHttpRequest")
         .json(&json!({
@@ -182,12 +182,12 @@ async fn test_csrf_required_for_browser_requests() {
 
     // Register a user
     let username = generate_test_username("testuser");
-    let (user_id, access_token) =
+    let (_user_id, access_token) =
         register_user(&client, &app.address, &username, "TestPassword123!").await;
 
     // Browser request without CSRF token should fail
-    let response = client
-        .put(&format!("http://{}/api/v1/account", app.address))
+    let _response = client
+        .put(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", format!("Bearer {}", access_token))
         .header("User-Agent", "Mozilla/5.0") // Browser user agent
         .json(&json!({
@@ -212,12 +212,12 @@ async fn test_csrf_skip_safe_methods() {
 
     // Register a user
     let username = generate_test_username("testuser");
-    let (user_id, access_token) =
+    let (_user_id, access_token) =
         register_user(&client, &app.address, &username, "TestPassword123!").await;
 
     // GET requests should not require CSRF token
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.address))
+        .get(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -236,7 +236,7 @@ async fn test_csrf_skip_health_endpoints() {
 
     // Health endpoints should not require CSRF
     let response = client
-        .get(&format!("http://{}/health/ready", app.address))
+        .get(format!("http://{}/health/ready", app.address))
         .send()
         .await
         .unwrap();
@@ -261,13 +261,13 @@ async fn test_rate_limiting_allows_normal_usage() {
 
     // Register a user
     let username = generate_test_username("testuser");
-    let (user_id, access_token) =
+    let (_user_id, access_token) =
         register_user(&client, &app.address, &username, "TestPassword123!").await;
 
     // Make a few requests (should be within rate limit)
     for _ in 0..5 {
         let response = client
-            .post(&format!("http://{}/api/v1/messages", app.address))
+            .post(format!("http://{}/api/v1/messages", app.address))
             .header("Authorization", format!("Bearer {}", access_token))
             .json(&json!({
                 "recipientId": Uuid::new_v4().to_string(),
@@ -292,13 +292,13 @@ async fn test_rate_limiting_skip_safe_methods() {
 
     // Register a user
     let username = generate_test_username("testuser");
-    let (user_id, access_token) =
+    let (_user_id, access_token) =
         register_user(&client, &app.address, &username, "TestPassword123!").await;
 
     // GET requests should not be rate limited
     for _ in 0..20 {
         let response = client
-            .get(&format!("http://{}/api/v1/account", app.address))
+            .get(format!("http://{}/api/v1/account", app.address))
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
@@ -319,7 +319,7 @@ async fn test_rate_limiting_skip_health_endpoints() {
     // Health endpoints should not be rate limited
     for _ in 0..20 {
         let response = client
-            .get(&format!("http://{}/health/live", app.address))
+            .get(format!("http://{}/health/live", app.address))
             .send()
             .await
             .unwrap();
@@ -347,7 +347,7 @@ async fn test_jwt_extractor_valid_token() {
 
     // Request with valid JWT token should succeed
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.address))
+        .get(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -376,7 +376,7 @@ async fn test_jwt_extractor_invalid_token() {
 
     // Request with invalid JWT token should fail
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.address))
+        .get(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", "Bearer invalid_token_here")
         .send()
         .await
@@ -395,7 +395,7 @@ async fn test_jwt_extractor_missing_token() {
 
     // Request without Authorization header should fail
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.address))
+        .get(format!("http://{}/api/v1/account", app.address))
         .send()
         .await
         .unwrap();
@@ -419,7 +419,7 @@ async fn test_jwt_extractor_expired_token() {
     let expired_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJleHAiOjE1MTYyMzkwMjJ9.invalid_signature";
 
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.address))
+        .get(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", format!("Bearer {}", expired_token))
         .send()
         .await
@@ -438,7 +438,7 @@ async fn test_jwt_extractor_malformed_header() {
 
     // Request with malformed Authorization header should fail
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.address))
+        .get(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", "InvalidFormat token_here")
         .send()
         .await
@@ -472,7 +472,7 @@ async fn test_request_signing_optional_when_disabled() {
     // Upload keys without request signature (should work if signing is disabled)
     let bundle = create_test_bundle(Some(user_id.clone()));
     let response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.address))
+        .post(format!("http://{}/api/v1/keys/upload", app.address))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&bundle)
         .send()
@@ -501,7 +501,7 @@ async fn test_middleware_chain_order() {
 
     // Register a user
     let username = generate_test_username("testuser");
-    let (user_id, access_token) =
+    let (_user_id, access_token) =
         register_user(&client, &app.address, &username, "TestPassword123!").await;
 
     // Make a request that goes through all middleware:
@@ -509,7 +509,7 @@ async fn test_middleware_chain_order() {
     // 2. Rate limiting (should pass)
     // 3. JWT authentication (should pass)
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.address))
+        .get(format!("http://{}/api/v1/account", app.address))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -536,7 +536,7 @@ async fn test_middleware_public_endpoints() {
 
     for endpoint in endpoints {
         let response = client
-            .get(&format!("http://{}{}", app.address, endpoint))
+            .get(format!("http://{}{}", app.address, endpoint))
             .send()
             .await
             .unwrap();

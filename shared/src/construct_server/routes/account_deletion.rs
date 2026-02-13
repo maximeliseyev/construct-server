@@ -165,7 +165,7 @@ pub async fn get_delete_challenge(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to store delete challenge in Redis");
-                AppError::Unknown(e.into())
+                AppError::Unknown(e)
             })?;
     }
 
@@ -398,11 +398,10 @@ async fn perform_account_deletion(
     }
 
     // 2. Delete delivery ACK data (GDPR compliance)
-    if let Some(ack_manager) = &app_context.delivery_ack_manager {
-        if let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
+    if let Some(ack_manager) = &app_context.delivery_ack_manager
+        && let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
             tracing::warn!(error = %e, "Failed to delete delivery ACK data");
         }
-    }
 
     // 3. Untrack user online status
     {

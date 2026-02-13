@@ -41,6 +41,7 @@ async fn create_test_state() -> WorkerState {
         heartbeat_interval_secs: 180,
         server_registry_ttl_secs: 270,
         message_ttl_days: 7,
+        dedup_safety_margin_hours: 24,
         access_token_ttl_hours: 1,
         session_ttl_days: 30,
         refresh_token_ttl_days: 90,

@@ -78,7 +78,7 @@ impl PendingMessageStorage {
             .set(&key, &json_data)
             .ignore()
             // Set TTL
-            .expire(&key, PENDING_MSG_TTL_SECONDS as i64)
+            .expire(&key, PENDING_MSG_TTL_SECONDS)
             .ignore()
             // Add to index (sorted set by timestamp)
             .zadd(PENDING_INDEX_KEY, &data.temp_id, data.created_at)

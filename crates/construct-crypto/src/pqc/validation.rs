@@ -156,10 +156,10 @@ mod tests {
 
         let suite = SuiteKeyMaterial {
             suite_id: 2, // PQ_HYBRID_KYBER
-            identity_key: BASE64.encode(&vec![0u8; key_sizes::HYBRID_SIGNATURE_PUBLIC_KEY]),
-            signed_prekey: BASE64.encode(&vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY]),
-            signed_prekey_signature: BASE64.encode(&vec![0u8; 64]), // Dummy Ed25519 signature
-            one_time_prekeys: vec![BASE64.encode(&vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY])],
+            identity_key: BASE64.encode(vec![0u8; key_sizes::HYBRID_SIGNATURE_PUBLIC_KEY]),
+            signed_prekey: BASE64.encode(vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY]),
+            signed_prekey_signature: BASE64.encode(vec![0u8; 64]), // Dummy Ed25519 signature
+            one_time_prekeys: vec![BASE64.encode(vec![0u8; key_sizes::HYBRID_KEM_PUBLIC_KEY])],
         };
 
         assert!(validate_hybrid_suite_key_material(&suite).is_ok());

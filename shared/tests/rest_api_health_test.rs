@@ -30,7 +30,7 @@ async fn test_readiness_check_success() {
 
     // Get readiness status
     let response = client
-        .get(&format!("http://{}/health/ready", app.address))
+        .get(format!("http://{}/health/ready", app.address))
         .send()
         .await
         .unwrap();
@@ -70,7 +70,7 @@ async fn test_readiness_check_returns_json() {
 
     // Get readiness status
     let response = client
-        .get(&format!("http://{}/health/ready", app.address))
+        .get(format!("http://{}/health/ready", app.address))
         .send()
         .await
         .unwrap();
@@ -96,7 +96,7 @@ async fn test_readiness_check_structure() {
 
     // Get readiness status
     let response = client
-        .get(&format!("http://{}/health/ready", app.address))
+        .get(format!("http://{}/health/ready", app.address))
         .send()
         .await
         .unwrap();
@@ -144,7 +144,7 @@ async fn test_readiness_check_no_auth_required() {
 
     // Health endpoints should not require authentication
     let response = client
-        .get(&format!("http://{}/health/ready", app.address))
+        .get(format!("http://{}/health/ready", app.address))
         .send()
         .await
         .unwrap();
@@ -166,7 +166,7 @@ async fn test_liveness_check_success() {
 
     // Get liveness status
     let response = client
-        .get(&format!("http://{}/health/live", app.address))
+        .get(format!("http://{}/health/live", app.address))
         .send()
         .await
         .unwrap();
@@ -186,7 +186,7 @@ async fn test_liveness_check_returns_json() {
 
     // Get liveness status
     let response = client
-        .get(&format!("http://{}/health/live", app.address))
+        .get(format!("http://{}/health/live", app.address))
         .send()
         .await
         .unwrap();
@@ -212,7 +212,7 @@ async fn test_liveness_check_structure() {
 
     // Get liveness status
     let response = client
-        .get(&format!("http://{}/health/live", app.address))
+        .get(format!("http://{}/health/live", app.address))
         .send()
         .await
         .unwrap();
@@ -232,7 +232,7 @@ async fn test_liveness_check_no_auth_required() {
 
     // Health endpoints should not require authentication
     let response = client
-        .get(&format!("http://{}/health/live", app.address))
+        .get(format!("http://{}/health/live", app.address))
         .send()
         .await
         .unwrap();
@@ -252,7 +252,7 @@ async fn test_liveness_check_fast() {
     let start = std::time::Instant::now();
 
     let response = client
-        .get(&format!("http://{}/health/live", app.address))
+        .get(format!("http://{}/health/live", app.address))
         .send()
         .await
         .unwrap();
@@ -273,7 +273,7 @@ async fn test_readiness_vs_liveness() {
 
     // Liveness should always return 200 if process is running
     let live_response = client
-        .get(&format!("http://{}/health/live", app.address))
+        .get(format!("http://{}/health/live", app.address))
         .send()
         .await
         .unwrap();
@@ -282,7 +282,7 @@ async fn test_readiness_vs_liveness() {
 
     // Readiness might return 503 if dependencies are unavailable
     let ready_response = client
-        .get(&format!("http://{}/health/ready", app.address))
+        .get(format!("http://{}/health/ready", app.address))
         .send()
         .await
         .unwrap();

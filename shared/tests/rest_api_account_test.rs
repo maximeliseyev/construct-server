@@ -56,7 +56,7 @@ async fn test_get_account_success() {
 
     // Get account information
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.user_address))
+        .get(format!("http://{}/api/v1/account", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -86,7 +86,7 @@ async fn test_get_account_requires_auth() {
 
     // Try to get account without authentication
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.user_address))
+        .get(format!("http://{}/api/v1/account", app.user_address))
         .send()
         .await
         .unwrap();
@@ -103,7 +103,7 @@ async fn test_get_account_invalid_token() {
 
     // Try to get account with invalid token
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.user_address))
+        .get(format!("http://{}/api/v1/account", app.user_address))
         .header("Authorization", "Bearer invalid_token_here")
         .send()
         .await
@@ -125,7 +125,7 @@ async fn test_get_account_without_username() {
 
     // Get account information
     let response = client
-        .get(&format!("http://{}/api/v1/account", app.user_address))
+        .get(format!("http://{}/api/v1/account", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await

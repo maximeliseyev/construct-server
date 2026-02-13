@@ -108,7 +108,7 @@ async fn test_upload_keys_success() {
 
     // Upload key bundle
     let response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .post(format!("http://{}/api/v1/keys/upload", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&bundle)
         .send()
@@ -132,7 +132,7 @@ async fn test_upload_keys_requires_auth() {
     let bundle = create_test_bundle(Some("test-user-id".to_string()));
 
     let response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .post(format!("http://{}/api/v1/keys/upload", app.user_address))
         .json(&bundle)
         .send()
         .await
@@ -162,7 +162,7 @@ async fn test_upload_keys_user_id_mismatch() {
     // Try to upload key bundle with mismatched user_id
     let _user_id = user_id; // Suppress unused variable warning
     let response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .post(format!("http://{}/api/v1/keys/upload", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&bundle)
         .send()
@@ -191,7 +191,7 @@ async fn test_upload_keys_invalid_bundle() {
 
     // Register a user
     let username = generate_test_username("testuser");
-    let (user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
+    let (_user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
 
     // Create an invalid bundle (empty bundle_data)
     let invalid_bundle = json!({
@@ -202,7 +202,7 @@ async fn test_upload_keys_invalid_bundle() {
 
     // Try to upload invalid bundle
     let response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .post(format!("http://{}/api/v1/keys/upload", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&invalid_bundle)
         .send()
@@ -232,7 +232,7 @@ async fn test_upload_keys_update_existing() {
 
     // Upload updated key bundle
     let response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .post(format!("http://{}/api/v1/keys/upload", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&new_bundle)
         .send()
@@ -262,7 +262,7 @@ async fn test_get_public_key_success() {
 
     // Get public key bundle
     let response = client
-        .get(&format!(
+        .get(format!(
             "http://{}/api/v1/users/{}/public-key",
             app.user_address, user_id
         ))
@@ -310,7 +310,7 @@ async fn test_get_public_key_requires_auth() {
 
     // Try to get public key without authentication
     let response = client
-        .get(&format!(
+        .get(format!(
             "http://{}/api/v1/users/{}/public-key",
             app.user_address, user_id
         ))
@@ -339,7 +339,7 @@ async fn test_get_public_key_nonexistent_user() {
     // Try to get public key for nonexistent user
     let nonexistent_user_id = Uuid::new_v4().to_string();
     let response = client
-        .get(&format!(
+        .get(format!(
             "http://{}/api/v1/users/{}/public-key",
             app.user_address, nonexistent_user_id
         ))
@@ -368,7 +368,7 @@ async fn test_get_public_key_invalid_user_id() {
 
     // Try to get public key with invalid user_id format
     let response = client
-        .get(&format!(
+        .get(format!(
             "http://{}/api/v1/users/{}/public-key",
             app.user_address, "invalid-uuid-format"
         ))
@@ -398,7 +398,7 @@ async fn test_get_public_key_after_upload() {
     // Upload a new key bundle
     let new_bundle = create_test_bundle(Some(user_id.clone()));
     let upload_response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .post(format!("http://{}/api/v1/keys/upload", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&new_bundle)
         .send()
@@ -409,7 +409,7 @@ async fn test_get_public_key_after_upload() {
 
     // Get public key bundle (should return the updated bundle)
     let response = client
-        .get(&format!(
+        .get(format!(
             "http://{}/api/v1/users/{}/public-key",
             app.user_address, user_id
         ))
@@ -466,7 +466,7 @@ async fn test_get_key_bundle_includes_signed_prekey_signature() {
     // Get user's key bundle via device API
     // This should return the device's keys including signedPrekeySignature
     let response = client
-        .get(&format!(
+        .get(format!(
             "http://{}/api/v1/users/{}/public-key",
             app.user_address, user_id
         ))
@@ -506,15 +506,14 @@ async fn test_get_key_bundle_includes_signed_prekey_signature() {
     let bundle_data_json: serde_json::Value = serde_json::from_slice(&bundle_data_bytes).unwrap();
 
     // Check that supported_suites contains signed_prekey_signature
-    if let Some(suites) = bundle_data_json["supportedSuites"].as_array() {
-        if let Some(first_suite) = suites.first() {
+    if let Some(suites) = bundle_data_json["supportedSuites"].as_array()
+        && let Some(first_suite) = suites.first() {
             // signedPrekeySignature should be present
             assert!(
                 first_suite.get("signedPrekeySignature").is_some(),
                 "signedPrekeySignature should be present in device key bundle"
             );
         }
-    }
 }
 
 #[tokio::test]
@@ -532,7 +531,7 @@ async fn test_upload_keys_preserves_device_signed_prekey() {
     let new_bundle = create_test_bundle(Some(user_id.clone()));
 
     let upload_response = client
-        .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
+        .post(format!("http://{}/api/v1/keys/upload", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&new_bundle)
         .send()
@@ -544,7 +543,7 @@ async fn test_upload_keys_preserves_device_signed_prekey() {
     // Get public key - should still return device keys (not uploaded bundle)
     // Because device keys take precedence in device-based architecture
     let response = client
-        .get(&format!(
+        .get(format!(
             "http://{}/api/v1/users/{}/public-key",
             app.user_address, user_id
         ))
@@ -588,7 +587,7 @@ async fn test_update_verifying_key_success() {
 
     // Register a user
     let username = generate_test_username("updatekey");
-    let (user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
+    let (_user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
 
     // Generate new verifying key
     let new_signing_key = SigningKey::generate(&mut OsRng);
@@ -601,7 +600,7 @@ async fn test_update_verifying_key_success() {
     });
 
     let response = client
-        .patch(&format!(
+        .patch(format!(
             "http://{}/api/v1/users/me/public-key",
             app.user_address
         ))
@@ -624,7 +623,7 @@ async fn test_update_verifying_key_invalid_format() {
 
     // Register a user
     let username = generate_test_username("invalidkey");
-    let (user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
+    let (_user_id, access_token) = register_user(&client, &app.auth_address, Some(&username)).await;
 
     // Try to update with invalid verifying key (wrong length)
     let update_request = json!({
@@ -633,7 +632,7 @@ async fn test_update_verifying_key_invalid_format() {
     });
 
     let response = client
-        .patch(&format!(
+        .patch(format!(
             "http://{}/api/v1/users/me/public-key",
             app.user_address
         ))

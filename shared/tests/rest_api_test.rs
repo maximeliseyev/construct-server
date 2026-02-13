@@ -28,7 +28,7 @@ async fn test_health_endpoint() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://{}/health", app.address))
+        .get(format!("http://{}/health", app.address))
         .send()
         .await
         .unwrap();
@@ -45,7 +45,7 @@ async fn test_metrics_endpoint() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://{}/metrics", app.address))
+        .get(format!("http://{}/metrics", app.address))
         .send()
         .await
         .unwrap();
@@ -61,7 +61,7 @@ async fn test_metrics_endpoint() {
 
     let body = response.text().await.unwrap();
     // Metrics should contain some basic metrics
-    assert!(body.contains("construct_server") || body.len() > 0);
+    assert!(body.contains("construct_server") || !body.is_empty());
 }
 
 #[tokio::test]
@@ -73,7 +73,7 @@ async fn test_keys_upload_requires_auth() {
 
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("http://{}/keys/upload", app.address))
+        .post(format!("http://{}/keys/upload", app.address))
         .json(&bundle)
         .send()
         .await
@@ -93,7 +93,7 @@ async fn test_keys_get_requires_auth() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://{}/keys/{}", app.address, Uuid::new_v4()))
+        .get(format!("http://{}/keys/{}", app.address, Uuid::new_v4()))
         .send()
         .await
         .unwrap();
@@ -112,7 +112,7 @@ async fn test_messages_send_requires_auth() {
 
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("http://{}/messages/send", app.address))
+        .post(format!("http://{}/messages/send", app.address))
         .json(&serde_json::json!({
             "recipient_id": Uuid::new_v4().to_string(),
             "ciphertext": "test",
@@ -136,7 +136,7 @@ async fn test_well_known_konstruct() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://{}/.well-known/konstruct", app.address))
+        .get(format!("http://{}/.well-known/konstruct", app.address))
         .send()
         .await
         .unwrap();
@@ -157,7 +157,7 @@ async fn test_federation_health() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://{}/federation/health", app.address))
+        .get(format!("http://{}/federation/health", app.address))
         .send()
         .await
         .unwrap();
@@ -176,7 +176,7 @@ async fn test_not_found_endpoint() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://{}/nonexistent", app.address))
+        .get(format!("http://{}/nonexistent", app.address))
         .send()
         .await
         .unwrap();

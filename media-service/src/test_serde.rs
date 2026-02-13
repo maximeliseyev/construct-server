@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::types::*;
-    use serde_json;
+    
 
     #[test]
     fn test_health_response_serialization() {
