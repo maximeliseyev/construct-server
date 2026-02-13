@@ -163,6 +163,31 @@ jobs:
       - name: List binaries
         run: ls -la target/release/
 
+  # Deploy to Fly.io (staging) - only on develop branch
+  deploy-staging:
+    name: Deploy to Fly.io (Staging)
+    runs-on: ubuntu-latest
+    # Only deploy on push to develop (not on PRs)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    needs: [security-audit, fmt, clippy, test, build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only --config ops/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deployment notification
+        run: |
+          echo "✅ Deployed to staging (Fly.io)"
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+
   # Dependency license check (optional, uncomment if needed)
   # licenses:
   #   name: License Check
