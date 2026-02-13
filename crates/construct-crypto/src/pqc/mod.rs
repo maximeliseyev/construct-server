@@ -15,9 +15,14 @@
 //
 // ============================================================================
 
+/// Hybrid post-quantum key encapsulation and signatures
 #[cfg(feature = "post-quantum")]
 pub mod hybrid;
+
+/// Post-quantum cryptography types and constants
 pub mod types;
+
+/// Post-quantum cryptography validation utilities
 pub mod validation;
 
 pub use types::*;

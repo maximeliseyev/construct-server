@@ -26,13 +26,17 @@ impl MessageStatus {
             MessageStatus::Delivered => "DELIVERED",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for MessageStatus {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "PENDING" => Some(MessageStatus::Pending),
-            "CONFIRMED" => Some(MessageStatus::Confirmed),
-            "DELIVERED" => Some(MessageStatus::Delivered),
-            _ => None,
+            "PENDING" => Ok(MessageStatus::Pending),
+            "CONFIRMED" => Ok(MessageStatus::Confirmed),
+            "DELIVERED" => Ok(MessageStatus::Delivered),
+            _ => Err(()),
         }
     }
 }
@@ -122,14 +126,14 @@ mod tests {
         assert_eq!(MessageStatus::Delivered.as_str(), "DELIVERED");
 
         assert_eq!(
-            MessageStatus::from_str("PENDING"),
-            Some(MessageStatus::Pending)
+            "PENDING".parse::<MessageStatus>(),
+            Ok(MessageStatus::Pending)
         );
         assert_eq!(
-            MessageStatus::from_str("CONFIRMED"),
-            Some(MessageStatus::Confirmed)
+            "CONFIRMED".parse::<MessageStatus>(),
+            Ok(MessageStatus::Confirmed)
         );
-        assert_eq!(MessageStatus::from_str("INVALID"), None);
+        assert!("INVALID".parse::<MessageStatus>().is_err());
     }
 
     #[test]

@@ -211,8 +211,8 @@ pub async fn mark_content_hash_processed(
 /// * `state` - Worker state
 /// * `message_id` - Message ID to mark as processed
 /// * `ttl_seconds` - TTL in seconds
-///                   Should be: Kafka retention + safety_margin
-///                   Example: (7 days * 86400) + (2 hours * 3600) = 612,000s
+///   Should be: Kafka retention + safety_margin
+///   Example: (7 days * 86400) + (2 hours * 3600) = 612,000s
 pub async fn mark_message_processed(
     state: &WorkerState,
     message_id: &str,

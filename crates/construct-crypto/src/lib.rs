@@ -19,12 +19,15 @@
 
 pub mod key_sizes;
 
+/// End-to-end encryption primitives (Signal Protocol)
 #[cfg(feature = "e2ee")]
 pub mod e2e;
 
+/// Privacy-preserving delivery acknowledgments with HMAC
 #[cfg(feature = "delivery-ack")]
 pub mod delivery_ack;
 
+/// Post-quantum cryptography (hybrid ECDH + Kyber)
 #[cfg(feature = "pqc")]
 pub mod pqc;
 

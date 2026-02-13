@@ -21,9 +21,8 @@ pub struct MediaConfig {
     pub debug: bool,
 }
 
-impl MediaConfig {
-    /// Create default configuration
-    pub fn default() -> Self {
+impl Default for MediaConfig {
+    fn default() -> Self {
         Self {
             storage_dir: PathBuf::from("./media_storage"),
             max_file_size: 100 * 1024 * 1024, // 100MB (unified with messaging-service)
@@ -33,7 +32,9 @@ impl MediaConfig {
             debug: false,
         }
     }
+}
 
+impl MediaConfig {
     /// Load configuration from environment variables
     pub fn from_env() -> Self {
         Self {

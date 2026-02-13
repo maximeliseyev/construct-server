@@ -29,12 +29,17 @@ pub struct StoredEncryptedMessage {
     pub message_type: MessageType,
 }
 
+/// Message type for routing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageType {
+    /// Regular text message
     TextMessage,
-    PrekeyBundle,  // Для обновления ключей
-    MediaMessage,  // Для зашифрованных медиафайлов
-    SystemMessage, // Системные уведомления
+    /// Prekey bundle for key updates
+    PrekeyBundle,
+    /// Encrypted media file
+    MediaMessage,
+    /// System notification
+    SystemMessage,
 }
 
 /// Server-side validation utilities
@@ -464,6 +469,7 @@ impl ServerCryptoValidator {
     }
 }
 
+/// Decodes a base64 string to bytes
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     general_purpose::STANDARD
         .decode(input)

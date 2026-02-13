@@ -10,6 +10,7 @@
 // federation support.
 // ============================================================================
 
+use std::fmt;
 use uuid::Uuid;
 
 /// Represents a user ID that can be either local or federated
@@ -95,14 +96,6 @@ impl UserId {
         &self.uuid
     }
 
-    /// Convert to string representation
-    pub fn to_string(&self) -> String {
-        match &self.domain {
-            Some(domain) => format!("{}@{}", self.uuid, domain),
-            None => self.uuid.to_string(),
-        }
-    }
-
     /// Check if this user belongs to a specific domain
     pub fn is_from_domain(&self, domain: &str) -> bool {
         match &self.domain {
@@ -131,6 +124,15 @@ impl UserId {
         domain
             .chars()
             .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+    }
+}
+
+impl fmt::Display for UserId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.domain {
+            Some(domain) => write!(f, "{}@{}", self.uuid, domain),
+            None => write!(f, "{}", self.uuid),
+        }
     }
 }
 
