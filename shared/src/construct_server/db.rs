@@ -711,13 +711,29 @@ where
 pub async fn get_device_by_id(pool: &DbPool, device_id: &str) -> Result<Option<Device>> {
     let device = sqlx::query_as::<_, Device>(
         "SELECT device_id, server_hostname, user_id, verifying_key, identity_public, 
-                signed_prekey_public, crypto_suites, registered_at, is_active 
+                signed_prekey_public, signed_prekey_signature, crypto_suites, registered_at, is_active 
          FROM devices WHERE device_id = $1",
     )
     .bind(device_id)
     .fetch_optional(pool)
     .await
-    .context("Failed to fetch device")?;
+    .map_err(|e| {
+        tracing::error!(
+            error = %e,
+            device_id = %device_id,
+            "Database error while fetching device by ID"
+        );
+        
+        match &e {
+            sqlx::Error::ColumnDecode { index, source } => {
+                anyhow::anyhow!(
+                    "Column decode error at index {}: {}. Check Device struct matches database schema.",
+                    index, source
+                )
+            }
+            _ => anyhow::anyhow!("Failed to fetch device '{}': {}", device_id, e)
+        }
+    })?;
 
     Ok(device)
 }
@@ -726,13 +742,20 @@ pub async fn get_device_by_id(pool: &DbPool, device_id: &str) -> Result<Option<D
 pub async fn get_devices_by_user_id(pool: &DbPool, user_id: &Uuid) -> Result<Vec<Device>> {
     let devices = sqlx::query_as::<_, Device>(
         "SELECT device_id, server_hostname, user_id, verifying_key, identity_public, 
-                signed_prekey_public, crypto_suites, registered_at, is_active 
+                signed_prekey_public, signed_prekey_signature, crypto_suites, registered_at, is_active 
          FROM devices WHERE user_id = $1 AND is_active = TRUE ORDER BY registered_at DESC",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await
-    .context("Failed to fetch user devices")?;
+    .map_err(|e| {
+        tracing::error!(
+            error = %e,
+            user_id = %user_id,
+            "Database error while fetching user devices"
+        );
+        anyhow::anyhow!("Failed to fetch devices for user {}: {}", user_id, e)
+    })?;
 
     Ok(devices)
 }
@@ -857,6 +880,7 @@ pub async fn get_user_primary_device(pool: &DbPool, user_id: &Uuid) -> Result<Op
             d.verifying_key,
             d.identity_public,
             d.signed_prekey_public,
+            d.signed_prekey_signature,
             d.crypto_suites,
             d.registered_at,
             d.is_active
@@ -872,7 +896,48 @@ pub async fn get_user_primary_device(pool: &DbPool, user_id: &Uuid) -> Result<Op
     .bind(user_id)
     .fetch_optional(pool)
     .await
-    .context("Failed to get user's primary device")?;
+    .map_err(|e| {
+        // Log detailed error for debugging
+        tracing::error!(
+            error = %e,
+            error_type = ?e,
+            user_id = %user_id,
+            "Database error while fetching user's primary device"
+        );
+        
+        // Provide context based on error type
+        match &e {
+            sqlx::Error::ColumnDecode { index, source } => {
+                anyhow::anyhow!(
+                    "Failed to decode device column at index {}: {}. \
+                    This may indicate a schema mismatch between database and code. \
+                    Check migration 016 (signed_prekey_signature).",
+                    index, source
+                )
+            }
+            sqlx::Error::RowNotFound => {
+                anyhow::anyhow!("Device query returned no rows (unexpected - should return None)")
+            }
+            sqlx::Error::PoolTimedOut => {
+                anyhow::anyhow!(
+                    "Database connection pool timeout. \
+                    The database may be overloaded or network issues exist."
+                )
+            }
+            sqlx::Error::Database(db_err) => {
+                anyhow::anyhow!(
+                    "Database error: {} (code: {:?}). \
+                    Query: get_user_primary_device for user_id={}",
+                    db_err.message(),
+                    db_err.code(),
+                    user_id
+                )
+            }
+            _ => {
+                anyhow::anyhow!("Failed to get user's primary device: {}", e)
+            }
+        }
+    })?;
 
     Ok(device)
 }
