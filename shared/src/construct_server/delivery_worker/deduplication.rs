@@ -286,8 +286,8 @@ pub async fn should_skip_message(
 
         // Mark as processed so we don't check again on next Kafka redeliver
         // Use TTL with safety margin (Kafka retention + 2h)
-        let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY) 
-                        + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR);
+        let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY)
+            + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR);
         if let Err(e) = mark_message_processed(state, message_id, ttl_seconds).await {
             warn!(
                 message_id = %message_id,
@@ -340,8 +340,8 @@ pub async fn should_skip_message_with_content(
 
         // Mark as processed
         // Use TTL with safety margin (Kafka retention + 2h)
-        let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY) 
-                        + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR);
+        let ttl_seconds = (state.config.message_ttl_days * SECONDS_PER_DAY)
+            + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR);
         if let Err(e) = mark_message_processed(state, message_id, ttl_seconds).await {
             warn!(
                 message_id = %message_id,

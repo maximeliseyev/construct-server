@@ -24,5 +24,5 @@
 mod storage;
 mod types;
 
-pub use storage::{PendingMessageStorage, PendingMessageMetrics};
+pub use storage::{PendingMessageMetrics, PendingMessageStorage};
 pub use types::{MessageStatus, PendingMessageData};

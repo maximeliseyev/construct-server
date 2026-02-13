@@ -167,8 +167,12 @@ impl AppError {
             AppError::Forbidden(msg) => format!("Forbidden: {}", msg),
             AppError::Gone(msg) => format!("Gone: {}", msg),
             AppError::Conflict(msg) => format!("Conflict: {}", msg),
-            AppError::InviteExpired => "Invite has expired. Please ask for a new QR code.".to_string(),
-            AppError::InviteInvalidSignature => "Invalid invite signature. This invite may have been tampered with.".to_string(),
+            AppError::InviteExpired => {
+                "Invite has expired. Please ask for a new QR code.".to_string()
+            }
+            AppError::InviteInvalidSignature => {
+                "Invalid invite signature. This invite may have been tampered with.".to_string()
+            }
             AppError::InviteAlreadyUsed => "This invite has already been used.".to_string(),
             AppError::PublicKeyNotFound => "Public key not found for this user.".to_string(),
             #[cfg(feature = "database")]

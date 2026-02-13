@@ -434,7 +434,12 @@ impl MessageQueue {
     }
 
     /// Set a key with expiration (generic string storage)
-    pub async fn set_with_expiry(&mut self, key: &str, value: &str, ttl_seconds: u64) -> Result<()> {
+    pub async fn set_with_expiry(
+        &mut self,
+        key: &str,
+        value: &str,
+        ttl_seconds: u64,
+    ) -> Result<()> {
         use redis::AsyncCommands;
         let _: () = self
             .client

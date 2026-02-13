@@ -12,12 +12,7 @@
 //
 // ============================================================================
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -172,7 +167,6 @@ pub async fn logout(
     TrustedUser(user_id): TrustedUser,
     Json(request): Json<LogoutRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-
     // Extract JTI from current access token
     // We need to decode the token to get JTI
     // For now, we'll invalidate based on user_id and let the token expire naturally

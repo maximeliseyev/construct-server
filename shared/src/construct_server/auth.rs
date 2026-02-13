@@ -155,7 +155,6 @@ impl AuthManager {
     }
 }
 
-
 // Unit tests are in a separate file to avoid embedding keys in source code
 // See: shared/src/construct_server/auth_tests.rs
 

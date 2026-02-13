@@ -198,7 +198,10 @@ mod tests {
     async fn test_trusted_user_valid_header() {
         let user_id = Uuid::new_v4();
         let mut headers = HeaderMap::new();
-        headers.insert(USER_ID_HEADER, HeaderValue::from_str(&user_id.to_string()).unwrap());
+        headers.insert(
+            USER_ID_HEADER,
+            HeaderValue::from_str(&user_id.to_string()).unwrap(),
+        );
 
         let mut parts = Request::builder()
             .uri("/test")
@@ -230,7 +233,10 @@ mod tests {
     async fn test_optional_trusted_user_with_header() {
         let user_id = Uuid::new_v4();
         let mut headers = HeaderMap::new();
-        headers.insert(USER_ID_HEADER, HeaderValue::from_str(&user_id.to_string()).unwrap());
+        headers.insert(
+            USER_ID_HEADER,
+            HeaderValue::from_str(&user_id.to_string()).unwrap(),
+        );
 
         let mut parts = Request::builder()
             .uri("/test")

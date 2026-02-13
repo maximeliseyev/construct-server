@@ -126,8 +126,8 @@ pub async fn process_kafka_message(
     //
     // Example: 7 days retention + 2h margin = 604,800s + 7,200s = 612,000s
     // ========================================================================
-    let ttl_seconds = ((state.config.message_ttl_days * SECONDS_PER_DAY) 
-                      + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR)) as u64;
+    let ttl_seconds = ((state.config.message_ttl_days * SECONDS_PER_DAY)
+        + (state.config.dedup_safety_margin_hours * SECONDS_PER_HOUR)) as u64;
 
     // 4. Route message to user-based stream
     // ========================================================================
@@ -151,7 +151,7 @@ pub async fn process_kafka_message(
         "{}offline:{}",
         state.config.delivery_queue_prefix, recipient_id
     );
-    
+
     push_to_offline_stream_atomic(
         state,
         &stream_key,

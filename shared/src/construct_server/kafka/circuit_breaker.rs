@@ -137,7 +137,7 @@ impl CircuitBreaker {
 
             if let Some(last_failure) = last_failure_time {
                 let elapsed = last_failure.elapsed();
-                
+
                 // Check if we should try half-open
                 if elapsed >= self.config.reset_timeout {
                     tracing::info!(
@@ -192,16 +192,14 @@ impl CircuitBreaker {
         if was_open {
             // In half-open state, need multiple successes to close
             let successes = self.half_open_successes.fetch_add(1, Ordering::Relaxed) + 1;
-            
+
             if successes >= 2 {
                 // Recovered! Close circuit
                 self.is_open.store(false, Ordering::Relaxed);
                 self.failures.store(0, Ordering::Relaxed);
                 self.half_open_successes.store(0, Ordering::Relaxed);
-                
-                tracing::info!(
-                    "Circuit breaker CLOSED - service recovered"
-                );
+
+                tracing::info!("Circuit breaker CLOSED - service recovered");
             } else {
                 tracing::info!(
                     successes = successes,
@@ -228,7 +226,7 @@ impl CircuitBreaker {
         // Check if we should open circuit
         if failures >= self.config.failure_threshold {
             let was_open = self.is_open.swap(true, Ordering::Relaxed);
-            
+
             if !was_open {
                 tracing::error!(
                     failures = failures,
@@ -237,7 +235,7 @@ impl CircuitBreaker {
                     "Circuit breaker OPENED - too many failures"
                 );
             }
-            
+
             // Reset half-open success counter
             self.half_open_successes.store(0, Ordering::Relaxed);
         } else {
@@ -280,10 +278,10 @@ impl CircuitBreaker {
         self.is_open.store(false, Ordering::Relaxed);
         self.failures.store(0, Ordering::Relaxed);
         self.half_open_successes.store(0, Ordering::Relaxed);
-        
+
         let mut last = self.last_failure.write().await;
         *last = None;
-        
+
         tracing::info!("Circuit breaker manually CLOSED");
     }
 
@@ -291,11 +289,12 @@ impl CircuitBreaker {
     #[allow(dead_code)]
     pub async fn force_open(&self) {
         self.is_open.store(true, Ordering::Relaxed);
-        self.failures.store(self.config.failure_threshold, Ordering::Relaxed);
-        
+        self.failures
+            .store(self.config.failure_threshold, Ordering::Relaxed);
+
         let mut last = self.last_failure.write().await;
         *last = Some(Instant::now());
-        
+
         tracing::warn!("Circuit breaker manually OPENED");
     }
 }
@@ -309,8 +308,8 @@ impl Default for CircuitBreaker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicU32;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
 
     #[tokio::test]
     async fn test_circuit_breaker_closed_on_success() {

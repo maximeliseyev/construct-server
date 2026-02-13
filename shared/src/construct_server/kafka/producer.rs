@@ -149,9 +149,10 @@ impl MessageProducer {
 
     /// Internal send implementation (wrapped by circuit breaker)
     async fn send_message_internal(&self, envelope: &KafkaMessageEnvelope) -> Result<(i32, i64)> {
-        let producer = self.producer.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Kafka producer not initialized")
-        })?;
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Kafka producer not initialized"))?;
 
         // Validate envelope before sending
         envelope.validate().context("Invalid message envelope")?;

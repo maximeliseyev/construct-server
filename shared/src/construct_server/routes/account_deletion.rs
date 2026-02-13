@@ -13,12 +13,7 @@
 //
 // ============================================================================
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -114,7 +109,7 @@ pub async fn get_delete_challenge(
             tracing::error!(error = %e, "Failed to check if user exists");
             AppError::Unknown(e)
         })?;
-    
+
     if user_exists.is_none() {
         tracing::warn!(
             user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
@@ -130,7 +125,7 @@ pub async fn get_delete_challenge(
             tracing::error!(error = %e, "Failed to query user's primary device");
             AppError::Unknown(e)
         })?;
-    
+
     // If no device found, this is a user registered without device-based auth
     // (should not happen with current registration flow)
     let device = device_opt.ok_or_else(|| {
@@ -140,7 +135,8 @@ pub async fn get_delete_challenge(
         );
         AppError::Validation(
             "Your account does not have device-based authentication enabled. \
-            Please contact support to enable secure account deletion.".to_string()
+            Please contact support to enable secure account deletion."
+                .to_string(),
         )
     })?;
 
@@ -227,9 +223,8 @@ pub async fn confirm_delete(
     };
 
     let stored: StoredChallenge = match stored_json {
-        Some(json) => serde_json::from_str(&json).map_err(|_| {
-            AppError::Validation("Invalid challenge data".to_string())
-        })?,
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|_| AppError::Validation("Invalid challenge data".to_string()))?,
         None => {
             tracing::warn!(
                 user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
@@ -268,9 +263,7 @@ pub async fn confirm_delete(
             tracing::error!(error = %e, "Failed to get device");
             AppError::Unknown(e)
         })?
-        .ok_or_else(|| {
-            AppError::NotFound("Device not found".to_string())
-        })?;
+        .ok_or_else(|| AppError::NotFound("Device not found".to_string()))?;
 
     // 6. Verify device belongs to user
     if device.user_id != Some(user_id) {

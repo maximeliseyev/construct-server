@@ -306,10 +306,13 @@ pub async fn send_message(
     // This prevents message loss when network fails after Kafka write but before
     // client receives 200 OK response.
     // ============================================================================
-    
+
     // Generate or use provided temp_id for idempotency
-    let temp_id = message.temp_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-    
+    let temp_id = message
+        .temp_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
     // Phase 1: Check if this is a retry (temp_id already exists)
     if let Some(pending_storage) = &app_context.pending_message_storage {
         if let Ok(Some(existing)) = pending_storage.get_pending(&temp_id).await {
@@ -320,7 +323,7 @@ pub async fn send_message(
                 sender_hash = %log_safe_id(&sender_id.to_string(), salt),
                 "Idempotent retry detected - returning existing message_id"
             );
-            
+
             return Ok((
                 StatusCode::OK,
                 Json(json!({
@@ -331,7 +334,7 @@ pub async fn send_message(
                 })),
             ));
         }
-        
+
         // Phase 1: Store PENDING state before Kafka write
         use crate::pending_messages::PendingMessageData;
         let pending_data = PendingMessageData::new(
@@ -340,7 +343,7 @@ pub async fn send_message(
             sender_id.to_string(),
             recipient_id.to_string(),
         );
-        
+
         if let Err(e) = pending_storage.store_pending(&pending_data).await {
             tracing::error!(
                 error = %e,
@@ -382,7 +385,7 @@ pub async fn send_message(
                 }
                 Err(e) => {
                     use crate::kafka::CircuitBreakerError;
-                    
+
                     // Handle circuit breaker errors
                     let error_message = match &e {
                         CircuitBreakerError::Open(elapsed) => {
@@ -401,7 +404,7 @@ pub async fn send_message(
                             "Messaging service unavailable".to_string()
                         }
                     };
-                    
+
                     // SECURITY: Use hashed IDs in error logs
                     tracing::error!(
                         error = %e,
@@ -410,7 +413,7 @@ pub async fn send_message(
                         message_id = %message_id,
                         "Failed to send message to Kafka (circuit breaker)"
                     );
-                    
+
                     // Return 503 Service Unavailable
                     return Err(AppError::MessageQueue(error_message));
                 }
@@ -840,9 +843,7 @@ pub async fn get_messages(
         return Ok((
             StatusCode::OK,
             Json(GetMessagesResponse::new_padded(
-                messages,
-                next_since,
-                false, // TODO: Implement has_more logic
+                messages, next_since, false, // TODO: Implement has_more logic
             )),
         ));
     }
@@ -1239,7 +1240,7 @@ pub async fn confirm_message(
     Json(data): Json<ConfirmMessageRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let sender_id_str = sender_id.to_string();
-    
+
     // Check if 2-phase commit is enabled
     let Some(pending_storage) = &app_context.pending_message_storage else {
         // 2-phase commit disabled, return success (backward compatibility)
@@ -1251,7 +1252,7 @@ pub async fn confirm_message(
             })),
         ));
     };
-    
+
     // Confirm the pending message (Phase 2)
     match pending_storage.confirm_pending(&data.temp_id).await {
         Ok(true) => {
@@ -1260,7 +1261,7 @@ pub async fn confirm_message(
                 sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
                 "Message confirmed (Phase 2)"
             );
-            
+
             Ok((
                 StatusCode::OK,
                 Json(json!({
@@ -1276,7 +1277,7 @@ pub async fn confirm_message(
                 sender_hash = %log_safe_id(&sender_id_str, &app_context.config.logging.hash_salt),
                 "Attempted to confirm non-existent pending message"
             );
-            
+
             // Return success anyway (fire-and-forget, idempotent)
             Ok((
                 StatusCode::OK,
@@ -1293,7 +1294,7 @@ pub async fn confirm_message(
                 temp_id = %data.temp_id,
                 "Failed to confirm pending message"
             );
-            
+
             // Return success anyway (fire-and-forget)
             // Auto-cleanup worker will confirm after 5 minutes
             Ok((
@@ -1307,4 +1308,3 @@ pub async fn confirm_message(
         }
     }
 }
-

@@ -141,7 +141,7 @@ impl MessageRouter {
     /// Route to local Kafka
     async fn route_to_local_kafka(&self, msg: &ChatMessage) -> Result<()> {
         let envelope = crate::kafka::KafkaMessageEnvelope::from(msg);
-        
+
         // Use circuit breaker protection
         if let Err(e) = self.kafka_producer.send_message(&envelope).await {
             tracing::error!(

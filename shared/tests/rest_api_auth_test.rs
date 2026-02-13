@@ -40,7 +40,10 @@ fn create_api_client() -> reqwest::Client {
 
 // Helper function to generate test username
 fn generate_test_username(prefix: &str) -> String {
-    format!("{}_{}",prefix, &Uuid::new_v4().to_string().replace('-', "_")[0..8]
+    format!(
+        "{}_{}",
+        prefix,
+        &Uuid::new_v4().to_string().replace('-', "_")[0..8]
     )
 }
 
@@ -80,9 +83,9 @@ struct RefreshTokenResponse {
 
 // Helper: Solve PoW challenge (simple implementation for tests)
 fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
-    use argon2::{Argon2, ParamsBuilder, Version};
     use argon2::password_hash::{PasswordHasher, SaltString};
-    
+    use argon2::{Argon2, ParamsBuilder, Version};
+
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
         Version::V0x13,
@@ -97,11 +100,11 @@ fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
     for nonce in 0..1_000_000 {
         let input = format!("{}{}", challenge, nonce);
         let salt = SaltString::encode_b64(b"testsalt12345678").unwrap();
-        
+
         if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt) {
             let hash_str = hash.hash.unwrap().to_string();
             let hash_bytes = hash_str.as_bytes();
-            
+
             let mut leading_zeros = 0;
             for byte in hash_bytes {
                 if *byte == b'0' {
@@ -111,13 +114,13 @@ fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
                     break;
                 }
             }
-            
+
             if leading_zeros >= difficulty {
                 return (nonce, hex::encode(hash_bytes));
             }
         }
     }
-    
+
     panic!("Failed to solve PoW within 1M attempts");
 }
 
@@ -132,7 +135,10 @@ async fn test_get_pow_challenge_success() {
     let client = create_api_client();
 
     let response = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap();
@@ -154,7 +160,10 @@ async fn test_get_pow_challenge_rate_limiting() {
     // Make 6 requests (limit is 5 per hour)
     for i in 0..6 {
         let response = client
-            .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+            .get(&format!(
+                "http://{}/api/v1/auth/challenge",
+                app.auth_address
+            ))
             .send()
             .await
             .unwrap();
@@ -193,13 +202,13 @@ async fn test_register_device_success() {
     // 1. Generate keys
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     // Generate signedPrekeySignature
     let prekey_signature = {
         let mut message = Vec::new();
@@ -216,7 +225,10 @@ async fn test_register_device_success() {
 
     // 2. Get PoW challenge
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -246,7 +258,10 @@ async fn test_register_device_success() {
     });
 
     let response = client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await
@@ -273,13 +288,13 @@ async fn test_register_device_duplicate_device_id() {
     // Register first device
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     let prekey_signature = {
         let mut message = Vec::new();
         message.extend_from_slice(b"KonstruktX3DH-v1");
@@ -294,7 +309,10 @@ async fn test_register_device_duplicate_device_id() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -323,7 +341,10 @@ async fn test_register_device_duplicate_device_id() {
 
     // First registration
     let response = client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await
@@ -333,7 +354,10 @@ async fn test_register_device_duplicate_device_id() {
 
     // Second registration with same device_id (get new challenge first)
     let challenge2: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -361,7 +385,10 @@ async fn test_register_device_duplicate_device_id() {
     });
 
     let response2 = client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request2)
         .send()
         .await
@@ -383,10 +410,10 @@ async fn test_register_device_missing_signed_prekey_signature() {
 
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
 
@@ -396,7 +423,10 @@ async fn test_register_device_missing_signed_prekey_signature() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -425,7 +455,10 @@ async fn test_register_device_missing_signed_prekey_signature() {
     });
 
     let response = client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await
@@ -450,13 +483,13 @@ async fn test_authenticate_device_success() {
     // 1. Register device first
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     let prekey_signature = {
         let mut message = Vec::new();
         message.extend_from_slice(b"KonstruktX3DH-v1");
@@ -471,7 +504,10 @@ async fn test_authenticate_device_success() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -499,7 +535,10 @@ async fn test_authenticate_device_success() {
     });
 
     let reg_response = client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await
@@ -544,7 +583,7 @@ async fn test_authenticate_device_nonexistent() {
 
     let signing_key = SigningKey::generate(&mut OsRng);
     let fake_device_id = "0000000000000000"; // Non-existent device
-    
+
     let timestamp = chrono::Utc::now().timestamp();
     let message = format!("{}{}", fake_device_id, timestamp);
     let signature = signing_key.sign(message.as_bytes());
@@ -575,13 +614,13 @@ async fn test_authenticate_device_expired_timestamp() {
     // Register device first (reusing code from success test)
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     let prekey_signature = {
         let mut message = Vec::new();
         message.extend_from_slice(b"KonstruktX3DH-v1");
@@ -596,7 +635,10 @@ async fn test_authenticate_device_expired_timestamp() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -624,7 +666,10 @@ async fn test_authenticate_device_expired_timestamp() {
     });
 
     client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await
@@ -668,19 +713,20 @@ async fn test_refresh_token_success() {
 
     // Register and get tokens
     let username = generate_test_username("testuser");
-    let (user_id, access_token) = test_utils::register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
+    let (user_id, access_token) =
+        test_utils::register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
 
     // Use the helper to get refresh token too - we need to extract it from registration
     // For now, let's register manually to get refresh token
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     let prekey_signature = {
         let mut message = Vec::new();
         message.extend_from_slice(b"KonstruktX3DH-v1");
@@ -695,7 +741,10 @@ async fn test_refresh_token_success() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -723,7 +772,10 @@ async fn test_refresh_token_success() {
     });
 
     let reg_response = client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await
@@ -785,7 +837,8 @@ async fn test_logout_success() {
 
     // Register and login
     let username = generate_test_username("logouttest");
-    let (user_id, access_token) = test_utils::register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
+    let (user_id, access_token) =
+        test_utils::register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
 
     // Logout
     let logout_request = json!({
@@ -802,9 +855,9 @@ async fn test_logout_success() {
 
     // Logout should succeed (or return 401 if refresh token validation is strict)
     assert!(
-        response.status() == reqwest::StatusCode::OK ||
-        response.status() == reqwest::StatusCode::NO_CONTENT ||
-        response.status() == reqwest::StatusCode::UNAUTHORIZED
+        response.status() == reqwest::StatusCode::OK
+            || response.status() == reqwest::StatusCode::NO_CONTENT
+            || response.status() == reqwest::StatusCode::UNAUTHORIZED
     );
 
     cleanup_rate_limits("redis://127.0.0.1:6379").await;
@@ -844,13 +897,13 @@ async fn test_register_device_invalid_device_id_format() {
 
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     let prekey_signature = {
         let mut message = Vec::new();
         message.extend_from_slice(b"KonstruktX3DH-v1");
@@ -860,7 +913,10 @@ async fn test_register_device_invalid_device_id_format() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -872,10 +928,10 @@ async fn test_register_device_invalid_device_id_format() {
 
     // Use invalid device_id (not 16 hex chars)
     let invalid_device_ids = vec![
-        "short",                    // Too short
-        "00000000000000001",         // Too long (17 chars)
-        "zzzzzzzzzzzzzzzz",         // Non-hex characters
-        "0000-0000-0000-0000",      // Contains dashes
+        "short",               // Too short
+        "00000000000000001",   // Too long (17 chars)
+        "zzzzzzzzzzzzzzzz",    // Non-hex characters
+        "0000-0000-0000-0000", // Contains dashes
     ];
 
     for invalid_id in invalid_device_ids {
@@ -897,15 +953,18 @@ async fn test_register_device_invalid_device_id_format() {
         });
 
         let response = client
-            .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+            .post(&format!(
+                "http://{}/api/v1/auth/register-device",
+                app.auth_address
+            ))
             .json(&register_request)
             .send()
             .await
             .unwrap();
 
         assert!(
-            response.status() == reqwest::StatusCode::BAD_REQUEST ||
-            response.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            response.status() == reqwest::StatusCode::BAD_REQUEST
+                || response.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY,
             "Invalid device_id '{}' should be rejected, got status: {}",
             invalid_id,
             response.status()
@@ -924,13 +983,13 @@ async fn test_register_device_invalid_pow_solution() {
 
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     let prekey_signature = {
         let mut message = Vec::new();
         message.extend_from_slice(b"KonstruktX3DH-v1");
@@ -945,7 +1004,10 @@ async fn test_register_device_invalid_pow_solution() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -972,7 +1034,10 @@ async fn test_register_device_invalid_pow_solution() {
     });
 
     let response = client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await
@@ -995,13 +1060,13 @@ async fn test_authenticate_device_invalid_signature() {
     // Register device first
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
-    
+
     let identity_secret = EphemeralSecret::random_from_rng(OsRng);
     let identity_public = X25519PublicKey::from(&identity_secret);
-    
+
     let prekey_secret = EphemeralSecret::random_from_rng(OsRng);
     let prekey_public = X25519PublicKey::from(&prekey_secret);
-    
+
     let prekey_signature = {
         let mut message = Vec::new();
         message.extend_from_slice(b"KonstruktX3DH-v1");
@@ -1016,7 +1081,10 @@ async fn test_authenticate_device_invalid_signature() {
     };
 
     let challenge: ChallengeResponse = client
-        .get(&format!("http://{}/api/v1/auth/challenge", app.auth_address))
+        .get(&format!(
+            "http://{}/api/v1/auth/challenge",
+            app.auth_address
+        ))
         .send()
         .await
         .unwrap()
@@ -1044,7 +1112,10 @@ async fn test_authenticate_device_invalid_signature() {
     });
 
     client
-        .post(&format!("http://{}/api/v1/auth/register-device", app.auth_address))
+        .post(&format!(
+            "http://{}/api/v1/auth/register-device",
+            app.auth_address
+        ))
         .json(&register_request)
         .send()
         .await

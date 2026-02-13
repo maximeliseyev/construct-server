@@ -495,14 +495,16 @@ async fn test_get_key_bundle_includes_signed_prekey_signature() {
     }
 
     let response_data: PublicKeyResponse = response.json().await.unwrap();
-    
+
     // Verify key bundle has signature (this is the bundle signature, not prekey signature)
     assert!(!response_data.key_bundle.signature.is_empty());
-    
+
     // Decode bundle_data to check if it contains signedPrekeySignature
-    let bundle_data_bytes = BASE64.decode(&response_data.key_bundle.bundle_data).unwrap();
+    let bundle_data_bytes = BASE64
+        .decode(&response_data.key_bundle.bundle_data)
+        .unwrap();
     let bundle_data_json: serde_json::Value = serde_json::from_slice(&bundle_data_bytes).unwrap();
-    
+
     // Check that supported_suites contains signed_prekey_signature
     if let Some(suites) = bundle_data_json["supportedSuites"].as_array() {
         if let Some(first_suite) = suites.first() {
@@ -528,7 +530,7 @@ async fn test_upload_keys_preserves_device_signed_prekey() {
 
     // Upload a new key bundle (legacy API)
     let new_bundle = create_test_bundle(Some(user_id.clone()));
-    
+
     let upload_response = client
         .post(&format!("http://{}/api/v1/keys/upload", app.user_address))
         .header("Authorization", format!("Bearer {}", access_token))
@@ -570,7 +572,7 @@ async fn test_upload_keys_preserves_device_signed_prekey() {
     }
 
     let response_data: PublicKeyResponse = response.json().await.unwrap();
-    
+
     // Device keys should be returned (not the uploaded bundle)
     // Verify that verifying_key is the device's verifying key
     assert!(!response_data.verifying_key.is_empty());
@@ -599,7 +601,10 @@ async fn test_update_verifying_key_success() {
     });
 
     let response = client
-        .patch(&format!("http://{}/api/v1/users/me/public-key", app.user_address))
+        .patch(&format!(
+            "http://{}/api/v1/users/me/public-key",
+            app.user_address
+        ))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&update_request)
         .send()
@@ -628,7 +633,10 @@ async fn test_update_verifying_key_invalid_format() {
     });
 
     let response = client
-        .patch(&format!("http://{}/api/v1/users/me/public-key", app.user_address))
+        .patch(&format!(
+            "http://{}/api/v1/users/me/public-key",
+            app.user_address
+        ))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&update_request)
         .send()

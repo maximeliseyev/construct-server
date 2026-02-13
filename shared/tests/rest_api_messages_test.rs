@@ -421,7 +421,7 @@ async fn test_get_messages_with_stream_id_pagination() {
     // Get messages with Stream ID format in since parameter
     // Stream ID format: {timestamp}-{sequence} (e.g., "1707584371151-5")
     let stream_id = "0-0"; // Start from beginning of stream
-    
+
     let response = client
         .get(&format!(
             "http://{}/api/v1/messages?since={}",
@@ -433,7 +433,7 @@ async fn test_get_messages_with_stream_id_pagination() {
         .unwrap();
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    
+
     #[derive(serde::Deserialize, Debug)]
     #[serde(rename_all = "camelCase")]
     struct GetMessagesResponse {
@@ -441,12 +441,15 @@ async fn test_get_messages_with_stream_id_pagination() {
         has_more: bool,
         next_since: Option<String>,
     }
-    
+
     let body: GetMessagesResponse = response.json().await.unwrap();
-    
+
     // nextSince should ALWAYS be returned (even if no messages)
-    assert!(body.next_since.is_some(), "nextSince should always be present");
-    
+    assert!(
+        body.next_since.is_some(),
+        "nextSince should always be present"
+    );
+
     // If no messages, nextSince should echo back the input
     if body.messages.is_empty() {
         assert_eq!(body.next_since.unwrap(), stream_id);
@@ -474,7 +477,7 @@ async fn test_get_messages_next_since_always_returned() {
         .unwrap();
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    
+
     #[derive(serde::Deserialize, Debug)]
     #[serde(rename_all = "camelCase")]
     struct GetMessagesResponse {
@@ -482,10 +485,13 @@ async fn test_get_messages_next_since_always_returned() {
         has_more: bool,
         next_since: Option<String>,
     }
-    
+
     let body: GetMessagesResponse = response.json().await.unwrap();
-    assert!(body.next_since.is_some(), "nextSince should be present even without since parameter");
-    
+    assert!(
+        body.next_since.is_some(),
+        "nextSince should be present even without since parameter"
+    );
+
     // Test 2: Get messages with since parameter
     let since = "0-0";
     let response2 = client
@@ -500,7 +506,10 @@ async fn test_get_messages_next_since_always_returned() {
 
     assert_eq!(response2.status(), reqwest::StatusCode::OK);
     let body2: GetMessagesResponse = response2.json().await.unwrap();
-    assert!(body2.next_since.is_some(), "nextSince should be present with since parameter");
+    assert!(
+        body2.next_since.is_some(),
+        "nextSince should be present with since parameter"
+    );
 }
 
 #[tokio::test]
@@ -550,11 +559,11 @@ async fn test_message_ack_implicit_via_since() {
     }
 
     let body1: GetMessagesResponse = response1.json().await.unwrap();
-    
+
     // Should have received at least one message (or none if delivery worker not running)
     let message_count_first = body1.messages.len();
     let next_since = body1.next_since.expect("nextSince should be present");
-    
+
     // Second request with since parameter = implicit ACK
     // Messages up to this Stream ID should be deleted from Redis
     let response2 = client
@@ -568,7 +577,7 @@ async fn test_message_ack_implicit_via_since() {
         .unwrap();
 
     let body2: GetMessagesResponse = response2.json().await.unwrap();
-    
+
     // If there were messages before, they should be ACKed and not returned again
     // (Unless new messages arrived in the meantime)
     // This test just verifies the API accepts Stream ID format in since parameter
@@ -588,12 +597,7 @@ async fn test_invalid_stream_id_format() {
         register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
 
     // Try with invalid Stream ID format (should fail gracefully)
-    let invalid_since_values = vec![
-        "not-a-stream-id",
-        "123",
-        "abc-def",
-        "",
-    ];
+    let invalid_since_values = vec!["not-a-stream-id", "123", "abc-def", ""];
 
     for invalid_since in invalid_since_values {
         let response = client
@@ -608,8 +612,8 @@ async fn test_invalid_stream_id_format() {
 
         // Should either reject (400 Bad Request) or handle gracefully (200 with empty messages)
         assert!(
-            response.status() == reqwest::StatusCode::OK 
-            || response.status() == reqwest::StatusCode::BAD_REQUEST,
+            response.status() == reqwest::StatusCode::OK
+                || response.status() == reqwest::StatusCode::BAD_REQUEST,
             "Invalid Stream ID '{}' should be handled gracefully, got: {}",
             invalid_since,
             response.status()
@@ -636,7 +640,7 @@ async fn test_message_deduplication() {
 
     // Send same message multiple times (should be deduplicated)
     let message = create_test_message(&recipient_user_id, 1);
-    
+
     // Send message 3 times
     for _ in 0..3 {
         let response = client
@@ -650,7 +654,7 @@ async fn test_message_deduplication() {
         // All requests should succeed (API accepts them)
         assert_eq!(response.status(), reqwest::StatusCode::OK);
     }
-    
+
     // Note: Actual deduplication happens in delivery worker via Redis
     // This test just verifies the API accepts multiple sends without error
 }

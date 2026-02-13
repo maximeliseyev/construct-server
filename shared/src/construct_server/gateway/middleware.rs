@@ -59,10 +59,9 @@ pub async fn jwt_verification(
     if is_public_endpoint(&path) {
         // Add request ID even for public endpoints (useful for tracing)
         if let Ok(value) = HeaderValue::from_str(&request_id) {
-            request.headers_mut().insert(
-                HeaderName::from_static(HEADER_REQUEST_ID),
-                value,
-            );
+            request
+                .headers_mut()
+                .insert(HeaderName::from_static(HEADER_REQUEST_ID), value);
         }
         return Ok(next.run(request).await);
     }
@@ -132,18 +131,16 @@ pub async fn jwt_verification(
 
     // Add X-User-Id header (ALWAYS overwrite to prevent injection attacks)
     if let Ok(value) = HeaderValue::from_str(&user_id.to_string()) {
-        request.headers_mut().insert(
-            HeaderName::from_static(HEADER_USER_ID),
-            value,
-        );
+        request
+            .headers_mut()
+            .insert(HeaderName::from_static(HEADER_USER_ID), value);
     }
 
     // Add X-Request-Id header for distributed tracing
     if let Ok(value) = HeaderValue::from_str(&request_id) {
-        request.headers_mut().insert(
-            HeaderName::from_static(HEADER_REQUEST_ID),
-            value,
-        );
+        request
+            .headers_mut()
+            .insert(HeaderName::from_static(HEADER_REQUEST_ID), value);
     }
 
     tracing::debug!(

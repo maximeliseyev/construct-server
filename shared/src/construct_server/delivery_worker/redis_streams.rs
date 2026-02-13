@@ -122,45 +122,43 @@ pub async fn push_to_offline_stream_atomic(
 
     let max_len = 10000; // Default stream max length
 
-    let stream_id: String = execute_redis_with_retry(state, "push_to_offline_stream_atomic", |conn| {
-        let key = stream_key.to_string();
-        let msg_id = message_id.to_string();
-        let payload = message_bytes.to_vec();
-        let dedup = dedup_key.clone();
-        let ttl = ttl_seconds;
+    let stream_id: String =
+        execute_redis_with_retry(state, "push_to_offline_stream_atomic", |conn| {
+            let key = stream_key.to_string();
+            let msg_id = message_id.to_string();
+            let payload = message_bytes.to_vec();
+            let dedup = dedup_key.clone();
+            let ttl = ttl_seconds;
 
-        Box::pin(async move {
-            // Build atomic transaction using pipeline
-            let mut pipe = pipe();
-            pipe.atomic(); // Enable MULTI/EXEC
+            Box::pin(async move {
+                // Build atomic transaction using pipeline
+                let mut pipe = pipe();
+                pipe.atomic(); // Enable MULTI/EXEC
 
-            // Command 1: XADD to stream
-            pipe.cmd("XADD")
-                .arg(&key)
-                .arg("MAXLEN")
-                .arg("~")
-                .arg(max_len as i64)
-                .arg("*") // Auto-generate stream ID
-                .arg("message_id")
-                .arg(&msg_id)
-                .arg("payload")
-                .arg(&payload);
+                // Command 1: XADD to stream
+                pipe.cmd("XADD")
+                    .arg(&key)
+                    .arg("MAXLEN")
+                    .arg("~")
+                    .arg(max_len as i64)
+                    .arg("*") // Auto-generate stream ID
+                    .arg("message_id")
+                    .arg(&msg_id)
+                    .arg("payload")
+                    .arg(&payload);
 
-            // Command 2: SETEX dedup key
-            pipe.cmd("SETEX")
-                .arg(&dedup)
-                .arg(ttl as i64)
-                .arg("1");
+                // Command 2: SETEX dedup key
+                pipe.cmd("SETEX").arg(&dedup).arg(ttl as i64).arg("1");
 
-            // Execute transaction - returns (stream_id, set_result)
-            let results: (String, String) = pipe.query_async(conn).await?;
-            
-            // Return stream ID from XADD
-            Ok::<String, redis::RedisError>(results.0)
+                // Execute transaction - returns (stream_id, set_result)
+                let results: (String, String) = pipe.query_async(conn).await?;
+
+                // Return stream ID from XADD
+                Ok::<String, redis::RedisError>(results.0)
+            })
         })
-    })
-    .await
-    .context("Failed to atomically push message and mark as processed")?;
+        .await
+        .context("Failed to atomically push message and mark as processed")?;
 
     debug!(
         stream_key = %stream_key,
@@ -231,4 +229,3 @@ pub async fn check_user_online(state: &WorkerState, user_id: &str) -> Result<Opt
 
     Ok(server_instance_id)
 }
-

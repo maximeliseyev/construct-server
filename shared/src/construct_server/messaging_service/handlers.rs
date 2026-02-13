@@ -40,7 +40,13 @@ pub async fn send_message(
     let recipient_id = message.recipient_id.clone();
 
     // Send message (existing handler)
-    let result = messages::send_message(State(app_context), TrustedUser(user_id), headers, Json(message)).await?;
+    let result = messages::send_message(
+        State(app_context),
+        TrustedUser(user_id),
+        headers,
+        Json(message),
+    )
+    .await?;
 
     // ✅ NEW: Send push notification asynchronously (non-blocking)
     if context.config.apns.enabled {
@@ -184,5 +190,11 @@ pub async fn send_control_message(
     Json(data): Json<EndSessionData>,
 ) -> Result<impl IntoResponse, AppError> {
     let app_context = Arc::new(context.to_app_context());
-    messages::send_control_message(State(app_context), TrustedUser(user_id), headers, Json(data)).await
+    messages::send_control_message(
+        State(app_context),
+        TrustedUser(user_id),
+        headers,
+        Json(data),
+    )
+    .await
 }

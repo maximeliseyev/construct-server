@@ -16,7 +16,8 @@ use test_utils::{cleanup_rate_limits, register_user_passwordless, spawn_app};
 
 // Helper function to generate a valid test username
 fn generate_test_username(prefix: &str) -> String {
-    format!("{}_{}",
+    format!(
+        "{}_{}",
         prefix,
         &Uuid::new_v4().to_string().replace('-', "_")[0..8]
     )

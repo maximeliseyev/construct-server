@@ -26,7 +26,7 @@ use construct_server_shared::{
     queue::MessageQueue,
     user_service::{UserServiceContext, handlers as user_handlers},
 };
-use ed25519_dalek::{SigningKey, Signer};
+use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

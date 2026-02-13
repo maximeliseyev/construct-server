@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 pub enum MessageStatus {
     /// Phase 1 complete: Message written to Kafka, awaiting client confirmation
     Pending,
-    
+
     /// Phase 2 complete: Client confirmed receipt, or auto-confirmed by worker
     Confirmed,
-    
+
     /// Message delivered to recipient (optional tracking)
     Delivered,
 }
@@ -26,7 +26,7 @@ impl MessageStatus {
             MessageStatus::Delivered => "DELIVERED",
         }
     }
-    
+
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "PENDING" => Some(MessageStatus::Pending),
@@ -42,28 +42,28 @@ impl MessageStatus {
 pub struct PendingMessageData {
     /// Temporary ID provided by client (for idempotency)
     pub temp_id: String,
-    
+
     /// Actual message ID assigned by server (written to Kafka)
     pub message_id: String,
-    
+
     /// Sender user ID
     pub sender_id: String,
-    
+
     /// Recipient user ID
     pub recipient_id: String,
-    
+
     /// Current status in state machine
     pub status: MessageStatus,
-    
+
     /// Unix timestamp when message was created (Phase 1)
     pub created_at: i64,
-    
+
     /// Unix timestamp when message was confirmed (Phase 2), if confirmed
     pub confirmed_at: Option<i64>,
-    
+
     /// Kafka partition the message was written to
     pub kafka_partition: Option<i32>,
-    
+
     /// Kafka offset within the partition
     pub kafka_offset: Option<i64>,
 }
@@ -87,25 +87,25 @@ impl PendingMessageData {
             kafka_offset: None,
         }
     }
-    
+
     /// Mark as confirmed (Phase 2)
     pub fn confirm(&mut self) {
         self.status = MessageStatus::Confirmed;
         self.confirmed_at = Some(chrono::Utc::now().timestamp());
     }
-    
+
     /// Check if message is expired (for cleanup)
     pub fn is_expired(&self, max_age_seconds: i64) -> bool {
         let now = chrono::Utc::now().timestamp();
         (now - self.created_at) > max_age_seconds
     }
-    
+
     /// Check if message should be auto-confirmed
     pub fn should_auto_confirm(&self, auto_confirm_after_seconds: i64) -> bool {
         if self.status != MessageStatus::Pending {
             return false;
         }
-        
+
         let now = chrono::Utc::now().timestamp();
         (now - self.created_at) >= auto_confirm_after_seconds
     }
@@ -114,18 +114,24 @@ impl PendingMessageData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_message_status_serialization() {
         assert_eq!(MessageStatus::Pending.as_str(), "PENDING");
         assert_eq!(MessageStatus::Confirmed.as_str(), "CONFIRMED");
         assert_eq!(MessageStatus::Delivered.as_str(), "DELIVERED");
-        
-        assert_eq!(MessageStatus::from_str("PENDING"), Some(MessageStatus::Pending));
-        assert_eq!(MessageStatus::from_str("CONFIRMED"), Some(MessageStatus::Confirmed));
+
+        assert_eq!(
+            MessageStatus::from_str("PENDING"),
+            Some(MessageStatus::Pending)
+        );
+        assert_eq!(
+            MessageStatus::from_str("CONFIRMED"),
+            Some(MessageStatus::Confirmed)
+        );
         assert_eq!(MessageStatus::from_str("INVALID"), None);
     }
-    
+
     #[test]
     fn test_pending_message_lifecycle() {
         let mut msg = PendingMessageData::new(
@@ -134,16 +140,16 @@ mod tests {
             "user-a".to_string(),
             "user-b".to_string(),
         );
-        
+
         assert_eq!(msg.status, MessageStatus::Pending);
         assert!(msg.confirmed_at.is_none());
-        
+
         msg.confirm();
-        
+
         assert_eq!(msg.status, MessageStatus::Confirmed);
         assert!(msg.confirmed_at.is_some());
     }
-    
+
     #[test]
     fn test_auto_confirm_logic() {
         let mut msg = PendingMessageData::new(
@@ -152,19 +158,19 @@ mod tests {
             "user-a".to_string(),
             "user-b".to_string(),
         );
-        
+
         // Just created, should not auto-confirm
         assert!(!msg.should_auto_confirm(300)); // 5 minutes
-        
+
         // Simulate 6 minutes ago
         msg.created_at = chrono::Utc::now().timestamp() - 360;
         assert!(msg.should_auto_confirm(300)); // Should auto-confirm
-        
+
         // Already confirmed, should not auto-confirm
         msg.confirm();
         assert!(!msg.should_auto_confirm(300));
     }
-    
+
     #[test]
     fn test_expiration_logic() {
         let mut msg = PendingMessageData::new(
@@ -173,10 +179,10 @@ mod tests {
             "user-a".to_string(),
             "user-b".to_string(),
         );
-        
+
         // Just created, not expired
         assert!(!msg.is_expired(1800)); // 30 minutes
-        
+
         // Simulate 35 minutes ago
         msg.created_at = chrono::Utc::now().timestamp() - 2100;
         assert!(msg.is_expired(1800)); // Expired

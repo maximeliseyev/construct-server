@@ -108,7 +108,7 @@ impl AppContext {
             delivery_ack_manager: None, // Disabled by default
             server_signer,
             public_key_cache: Arc::new(PublicKeyCache::new()),
-            key_management: None, // Disabled by default
+            key_management: None,          // Disabled by default
             pending_message_storage: None, // Disabled by default
         }
     }

@@ -723,7 +723,7 @@ pub async fn get_device_by_id(pool: &DbPool, device_id: &str) -> Result<Option<D
             device_id = %device_id,
             "Database error while fetching device by ID"
         );
-        
+
         match &e {
             sqlx::Error::ColumnDecode { index, source } => {
                 anyhow::anyhow!(
@@ -904,7 +904,7 @@ pub async fn get_user_primary_device(pool: &DbPool, user_id: &Uuid) -> Result<Op
             user_id = %user_id,
             "Database error while fetching user's primary device"
         );
-        
+
         // Provide context based on error type
         match &e {
             sqlx::Error::ColumnDecode { index, source } => {
@@ -912,7 +912,8 @@ pub async fn get_user_primary_device(pool: &DbPool, user_id: &Uuid) -> Result<Op
                     "Failed to decode device column at index {}: {}. \
                     This may indicate a schema mismatch between database and code. \
                     Check migration 016 (signed_prekey_signature).",
-                    index, source
+                    index,
+                    source
                 )
             }
             sqlx::Error::RowNotFound => {
