@@ -314,8 +314,8 @@ async fn test_rate_limit_window_expiry() {
         .expect("Failed to get count");
     assert_eq!(count, 2);
 
-    // Check TTL
-    let rate_key = format!("test_rate:{}", user_id);
+    // Check TTL (key format matches implementation: rate:msg:{})
+    let rate_key = format!("rate:msg:{}", user_id);
     let ttl: i64 = redis_conn.ttl(&rate_key).expect("Failed to get TTL");
 
     assert!(ttl > 0 && ttl <= 3600, "TTL should be set");

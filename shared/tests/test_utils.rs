@@ -15,7 +15,8 @@ use argon2::{
     password_hash::{PasswordHasher, SaltString},
 };
 use axum::Router;
-use axum::routing::{get, post, put};
+use axum::extract::State;
+use axum::routing::{get, patch, post, put};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use construct_config::Config;
 use construct_server_shared::{
@@ -26,6 +27,7 @@ use construct_server_shared::{
     messaging_service::{MessagingServiceContext, handlers as messaging_handlers},
     notification_service::{NotificationServiceContext, handlers as notification_handlers},
     queue::MessageQueue,
+    routes::{health, keys},
     user_service::{UserServiceContext, handlers as user_handlers},
 };
 use ed25519_dalek::{Signer, SigningKey};
@@ -82,9 +84,13 @@ async fn create_test_config(db_name: &str) -> Config {
         std::env::set_var("JWT_PUBLIC_KEY", &public_key);
         // Low PoW difficulty for fast tests (1 leading zero bit = instant)
         std::env::set_var("POW_DIFFICULTY", "1");
-        // Disable rate limiting for tests
-        std::env::set_var("MAX_POW_CHALLENGES_PER_HOUR", "0");
-        std::env::set_var("MAX_REGISTRATIONS_PER_HOUR", "0");
+        // Disable rate limiting for tests (unless already set by specific test)
+        if std::env::var("MAX_POW_CHALLENGES_PER_HOUR").is_err() {
+            std::env::set_var("MAX_POW_CHALLENGES_PER_HOUR", "0");
+        }
+        if std::env::var("MAX_REGISTRATIONS_PER_HOUR").is_err() {
+            std::env::set_var("MAX_REGISTRATIONS_PER_HOUR", "0");
+        }
     }
 
     let mut config = Config::from_env().expect("Failed to read base config from .env.test");
@@ -193,6 +199,14 @@ async fn spawn_auth_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> String
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route(
+            "/health/ready",
+            get(|State(ctx): State<Arc<AuthServiceContext>>| async move {
+                let app_ctx = Arc::new(ctx.to_app_context());
+                health::readiness_check(State(app_ctx)).await
+            }),
+        )
+        .route("/health/live", get(health::liveness_check))
         // Passwordless device-based authentication endpoints
         .route(
             "/api/v1/auth/challenge",
@@ -208,6 +222,9 @@ async fn spawn_auth_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> String
         )
         .route("/api/v1/auth/refresh", post(auth_handlers::refresh_token))
         .route("/api/v1/auth/logout", post(auth_handlers::logout))
+        // Legacy endpoints (for backward compatibility with tests)
+        .route("/auth/refresh", post(auth_handlers::refresh_token))
+        .route("/auth/logout", post(auth_handlers::logout))
         .with_state(context);
 
     tokio::spawn(async move {
@@ -239,6 +256,14 @@ async fn spawn_user_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> String
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route(
+            "/health/ready",
+            get(|State(ctx): State<Arc<UserServiceContext>>| async move {
+                let app_ctx = Arc::new(ctx.to_app_context());
+                health::readiness_check(State(app_ctx)).await
+            }),
+        )
+        .route("/health/live", get(health::liveness_check))
         .route("/api/v1/account", get(user_handlers::get_account))
         .route("/api/v1/account", put(user_handlers::update_account))
         // Note: DELETE /api/v1/account removed - use device-signed deletion
@@ -246,6 +271,15 @@ async fn spawn_user_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> String
         .route(
             "/api/v1/users/:user_id/public-key",
             get(user_handlers::get_public_key_bundle),
+        )
+        .route(
+            "/api/v1/users/me/public-key",
+            patch(
+                |State(ctx): State<Arc<UserServiceContext>>, user, headers, body| async move {
+                    let app_ctx = Arc::new(ctx.to_app_context());
+                    keys::update_verifying_key(State(app_ctx), user, headers, body).await
+                },
+            ),
         )
         .with_state(context);
 
@@ -290,6 +324,16 @@ async fn spawn_messaging_service(config: Arc<Config>, db_pool: Arc<PgPool>) -> S
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route(
+            "/health/ready",
+            get(
+                |State(ctx): State<Arc<MessagingServiceContext>>| async move {
+                    let app_ctx = Arc::new(ctx.to_app_context());
+                    health::readiness_check(State(app_ctx)).await
+                },
+            ),
+        )
+        .route("/health/live", get(health::liveness_check))
         .route("/api/v1/messages", post(messaging_handlers::send_message))
         .route("/api/v1/messages", get(messaging_handlers::get_messages))
         .with_state(context);
@@ -333,6 +377,16 @@ async fn spawn_notification_service(config: Arc<Config>, db_pool: Arc<PgPool>) -
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route(
+            "/health/ready",
+            get(
+                |State(ctx): State<Arc<NotificationServiceContext>>| async move {
+                    let app_ctx = Arc::new(ctx.to_app_context());
+                    health::readiness_check(State(app_ctx)).await
+                },
+            ),
+        )
+        .route("/health/live", get(health::liveness_check))
+        .route(
             "/api/v1/notifications/register-device",
             post(notification_handlers::register_device),
         )
@@ -371,6 +425,48 @@ pub async fn spawn_app() -> TestApp {
 
     // Give services time to start
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    TestApp {
+        address: auth_address.clone(), // Legacy compatibility
+        auth_address,
+        user_address,
+        messaging_address,
+        notification_address,
+        db_pool,
+        config,
+    }
+}
+
+/// Spawn all microservices with rate limiting enabled (for rate limit tests)
+pub async fn spawn_app_with_rate_limiting() -> TestApp {
+    // Temporarily enable rate limiting
+    unsafe {
+        std::env::set_var("MAX_POW_CHALLENGES_PER_HOUR", "10");
+        std::env::set_var("MAX_REGISTRATIONS_PER_HOUR", "5");
+    }
+
+    let db_name = format!(
+        "construct_test_{}",
+        Uuid::new_v4().to_string().replace("-", "_")
+    );
+    let db_pool = setup_test_database(&db_name).await;
+    let config = Arc::new(create_test_config(&db_name).await);
+    let db_pool_arc = Arc::new(db_pool.clone());
+
+    let auth_address = spawn_auth_service(config.clone(), db_pool_arc.clone()).await;
+    let user_address = spawn_user_service(config.clone(), db_pool_arc.clone()).await;
+    let messaging_address = spawn_messaging_service(config.clone(), db_pool_arc.clone()).await;
+    let notification_address =
+        spawn_notification_service(config.clone(), db_pool_arc.clone()).await;
+
+    // Give services time to start
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Restore default (disabled)
+    unsafe {
+        std::env::set_var("MAX_POW_CHALLENGES_PER_HOUR", "0");
+        std::env::set_var("MAX_REGISTRATIONS_PER_HOUR", "0");
+    }
 
     TestApp {
         address: auth_address.clone(), // Legacy compatibility

@@ -19,7 +19,7 @@ pub struct HealthStatus {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentStatus {
-    pub status: String, // "ok" or "error"
+    pub status: String, // "healthy" or "error"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -62,15 +62,15 @@ pub async fn readiness_check(
     let mut health = HealthStatus {
         status: "healthy".to_string(),
         database: ComponentStatus {
-            status: "ok".to_string(),
+            status: "healthy".to_string(),
             error: None,
         },
         redis: ComponentStatus {
-            status: "ok".to_string(),
+            status: "healthy".to_string(),
             error: None,
         },
         kafka: ComponentStatus {
-            status: "ok".to_string(),
+            status: "healthy".to_string(),
             error: None,
         },
     };
@@ -78,7 +78,7 @@ pub async fn readiness_check(
     // Check database
     match sqlx::query("SELECT 1").execute(pool).await {
         Ok(_) => {
-            health.database.status = "ok".to_string();
+            health.database.status = "healthy".to_string();
         }
         Err(e) => {
             health.status = "unhealthy".to_string();
@@ -90,7 +90,7 @@ pub async fn readiness_check(
     // Check Redis
     match queue.lock().await.ping().await {
         Ok(_) => {
-            health.redis.status = "ok".to_string();
+            health.redis.status = "healthy".to_string();
         }
         Err(e) => {
             health.status = "unhealthy".to_string();
@@ -105,15 +105,15 @@ pub async fn readiness_check(
             // Kafka producer is initialized and connected
             // The producer will fail on first send if broker is unreachable
             // For readiness, we just check if it's enabled and initialized
-            health.kafka.status = "ok".to_string();
+            health.kafka.status = "healthy".to_string();
             tracing::debug!("Kafka producer is enabled and initialized");
         } else {
             // Kafka is not enabled, mark as ok (not required)
-            health.kafka.status = "ok".to_string();
+            health.kafka.status = "healthy".to_string();
         }
     } else {
         // Kafka producer not available, mark as ok (not required)
-        health.kafka.status = "ok".to_string();
+        health.kafka.status = "healthy".to_string();
         tracing::debug!("Kafka producer not available");
     }
 
@@ -133,17 +133,17 @@ pub async fn liveness_check() -> Result<HealthStatus> {
     // Liveness check is minimal - just verify the process is running
     // No external dependencies checked
     Ok(HealthStatus {
-        status: "healthy".to_string(),
+        status: "alive".to_string(),
         database: ComponentStatus {
-            status: "ok".to_string(),
+            status: "healthy".to_string(),
             error: None,
         },
         redis: ComponentStatus {
-            status: "ok".to_string(),
+            status: "healthy".to_string(),
             error: None,
         },
         kafka: ComponentStatus {
-            status: "ok".to_string(),
+            status: "healthy".to_string(),
             error: None,
         },
     })

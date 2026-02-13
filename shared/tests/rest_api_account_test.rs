@@ -54,13 +54,13 @@ async fn test_get_account_success() {
 
     // Register a user (device-based)
     let username = generate_test_username("testuser");
-    let (user_id, access_token) =
+    let (user_id, _access_token) =
         register_user_passwordless(&client, &app.auth_address, Some(&username)).await;
 
-    // Get account information
+    // Get account information (using X-User-Id header for microservices behind Gateway)
     let response = client
         .get(format!("http://{}/api/v1/account", app.user_address))
-        .header("Authorization", format!("Bearer {}", access_token))
+        .header("X-User-Id", &user_id)
         .send()
         .await
         .unwrap();
@@ -123,13 +123,13 @@ async fn test_get_account_without_username() {
     let client = create_api_client();
 
     // Register a user WITHOUT username (privacy-focused)
-    let (user_id, access_token) =
+    let (user_id, _access_token) =
         register_user_passwordless(&client, &app.auth_address, None).await;
 
-    // Get account information
+    // Get account information (using X-User-Id header for microservices behind Gateway)
     let response = client
         .get(format!("http://{}/api/v1/account", app.user_address))
-        .header("Authorization", format!("Bearer {}", access_token))
+        .header("X-User-Id", &user_id)
         .send()
         .await
         .unwrap();

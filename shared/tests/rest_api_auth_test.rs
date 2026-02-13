@@ -25,7 +25,7 @@ use uuid::Uuid;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
 mod test_utils;
-use test_utils::{cleanup_rate_limits, spawn_app};
+use test_utils::{cleanup_rate_limits, spawn_app, spawn_app_with_rate_limiting};
 
 // Helper function to create HTTP client with API headers
 fn create_api_client() -> reqwest::Client {
@@ -85,34 +85,36 @@ struct RefreshTokenResponse {
     expires_at: i64,
 }
 
-// Helper: Solve PoW challenge (simple implementation for tests)
+// Helper: Solve PoW challenge (matches server parameters)
 fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
     use argon2::password_hash::{PasswordHasher, SaltString};
     use argon2::{Argon2, ParamsBuilder, Version};
 
-    let argon2 = Argon2::new(
-        argon2::Algorithm::Argon2id,
-        Version::V0x13,
-        ParamsBuilder::new()
-            .m_cost(16)
-            .t_cost(1)
-            .p_cost(1)
-            .build()
-            .unwrap(),
-    );
+    // Derive salt from challenge (same as server)
+    let derived_salt = format!("kpow2:{}", &challenge[..16.min(challenge.len())]);
+
+    let params = ParamsBuilder::new()
+        .m_cost(32 * 1024) // 32 MB (same as server)
+        .t_cost(2) // 2 iterations (same as server)
+        .p_cost(1) // 1 thread (same as server)
+        .output_len(32) // 32 bytes (same as server)
+        .build()
+        .unwrap();
+
+    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
 
     for nonce in 0..1_000_000 {
         let input = format!("{}{}", challenge, nonce);
-        let salt = SaltString::encode_b64(b"testsalt12345678").unwrap();
+        let salt = SaltString::encode_b64(derived_salt.as_bytes()).unwrap();
 
         if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt) {
-            let hash_str = hash.hash.unwrap().to_string();
-            let hash_bytes = hash_str.as_bytes();
+            let hash_bytes = hash.hash.unwrap().as_bytes().to_vec();
 
+            // Count leading zero bits
             let mut leading_zeros = 0;
-            for byte in hash_bytes {
-                if *byte == b'0' {
-                    leading_zeros += 4;
+            for byte in &hash_bytes {
+                if *byte == 0 {
+                    leading_zeros += 8;
                 } else {
                     leading_zeros += byte.leading_zeros();
                     break;
@@ -120,7 +122,7 @@ fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
             }
 
             if leading_zeros >= difficulty {
-                return (nonce, hex::encode(hash_bytes));
+                return (nonce, hex::encode(&hash_bytes));
             }
         }
     }
@@ -158,11 +160,11 @@ async fn test_get_pow_challenge_success() {
 #[serial]
 async fn test_get_pow_challenge_rate_limiting() {
     cleanup_rate_limits("redis://127.0.0.1:6379").await;
-    let app = spawn_app().await;
+    let app = spawn_app_with_rate_limiting().await;
     let client = create_api_client();
 
-    // Make 6 requests (limit is 5 per hour)
-    for i in 0..6 {
+    // Make 11 requests (limit is 10 per hour)
+    for i in 0..11 {
         let response = client
             .get(&format!(
                 "http://{}/api/v1/auth/challenge",
@@ -172,7 +174,7 @@ async fn test_get_pow_challenge_rate_limiting() {
             .await
             .unwrap();
 
-        if i < 5 {
+        if i < 10 {
             assert_eq!(
                 response.status(),
                 reqwest::StatusCode::OK,
@@ -271,7 +273,11 @@ async fn test_register_device_success() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    let status = response.status();
+    if status != reqwest::StatusCode::CREATED {
+        let error_text = response.text().await.unwrap();
+        panic!("Registration failed with status {}: {}", status, error_text);
+    }
 
     let auth_response: RegisterDeviceResponse = response.json().await.unwrap();
     assert!(!auth_response.user_id.is_empty());
@@ -799,7 +805,11 @@ async fn test_refresh_token_success() {
         .await
         .unwrap();
 
-    assert_eq!(refresh_response.status(), reqwest::StatusCode::OK);
+    let status = refresh_response.status();
+    if status != reqwest::StatusCode::OK {
+        let error_text = refresh_response.text().await.unwrap();
+        panic!("Refresh failed with status {}: {}", status, error_text);
+    }
 
     let refresh_data: RefreshTokenResponse = refresh_response.json().await.unwrap();
     assert!(!refresh_data.access_token.is_empty());

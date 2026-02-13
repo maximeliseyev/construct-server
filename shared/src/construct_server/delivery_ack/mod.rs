@@ -378,15 +378,24 @@ mod tests {
 
     #[test]
     fn test_config_validation() {
-        // Valid 32-byte key
+        // Valid 32-byte key with good entropy (16 different hex characters)
+        let valid_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         unsafe {
-            std::env::set_var("DELIVERY_SECRET_KEY", "0".repeat(64));
+            std::env::set_var("DELIVERY_ACK_MODE", "postgres");
+            std::env::set_var("DELIVERY_SECRET_KEY", valid_key);
             std::env::set_var("DELIVERY_EXPIRY_DAYS", "7");
         }
 
         let config = DeliveryAckConfig::from_env().unwrap();
         assert_eq!(config.expiry_days, 7);
         assert_eq!(config.secret_key.len(), 32);
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("DELIVERY_ACK_MODE");
+            std::env::remove_var("DELIVERY_SECRET_KEY");
+            std::env::remove_var("DELIVERY_EXPIRY_DAYS");
+        }
     }
 
     #[test]

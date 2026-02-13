@@ -25,7 +25,7 @@ pub mod csrf; // Made public for gateway middleware
 pub mod devices; // Device-based passwordless authentication
 pub mod extractors; // Made public for auth-service, user-service, messaging-service, and notification-service
 mod federation;
-mod health;
+pub mod health; // Made public for tests
 pub mod invites; // Phase 5: Dynamic invite tokens (one-time QR codes) - Made public for user-service
 pub mod keys; // Made public for user-service
 pub mod media; // Made public for messaging-service

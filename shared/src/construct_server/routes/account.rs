@@ -33,8 +33,9 @@ use construct_error::AppError;
 pub struct AccountInfo {
     /// User ID (UUID)
     pub user_id: String,
-    /// Username
-    pub username: String,
+    /// Username (optional in passwordless architecture)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
     /// Account creation timestamp (if available)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
@@ -55,8 +56,8 @@ pub async fn get_account(
 ) -> Result<impl IntoResponse, AppError> {
     let user_id = user.0;
 
-    // Fetch user from database
-    let user_record = db::get_legacy_user_by_id(&app_context.db_pool, &user_id)
+    // Fetch user from database (using get_user_by_id for passwordless auth)
+    let user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
         .await
         .map_err(|e| {
             tracing::error!(
@@ -125,8 +126,8 @@ pub async fn update_account(
 ) -> Result<impl IntoResponse, AppError> {
     let user_id = user.0;
 
-    // Fetch current user
-    let user_record = db::get_legacy_user_by_id(&app_context.db_pool, &user_id)
+    // Fetch current user (passwordless)
+    let _user_record = db::get_user_by_id(&app_context.db_pool, &user_id)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to fetch user");
@@ -145,7 +146,7 @@ pub async fn update_account(
 
         // Check if username is already taken
         if let Ok(Some(existing_user)) =
-            db::get_legacy_user_by_username(&app_context.db_pool, new_username).await
+            db::get_user_by_username(&app_context.db_pool, new_username).await
             && existing_user.id != user_id
         {
             return Err(AppError::Validation(
@@ -164,50 +165,15 @@ pub async fn update_account(
         ));
     }
 
-    // Update password if provided
-    if let Some(new_password) = &request.new_password {
-        if new_password.len() < 8 {
-            return Err(AppError::Validation(
-                "Password must be at least 8 characters long".to_string(),
-            ));
-        }
-
-        // Verify old password
-        let old_password = request.old_password.ok_or_else(|| {
-            AppError::Validation("Old password is required to change password".to_string())
-        })?;
-
-        let password_valid = db::verify_password(&user_record, &old_password)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to verify password");
-                AppError::Unknown(e)
-            })?;
-
-        if !password_valid {
-            tracing::warn!(
-                user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-                "Invalid old password during password update"
-            );
-            return Err(AppError::Auth("Invalid old password".to_string()));
-        }
-
-        // Update password
-        db::update_user_password(&app_context.db_pool, &user_id, new_password)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to update password");
-                AppError::Unknown(e)
-            })?;
-
-        tracing::info!(
-            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-            "Password updated successfully"
-        );
+    // Password updates are not supported in passwordless architecture
+    if request.new_password.is_some() || request.old_password.is_some() {
+        return Err(AppError::Validation(
+            "Password updates are not supported in passwordless authentication".to_string(),
+        ));
     }
 
     // If no updates were requested
-    if request.username.is_none() && request.new_password.is_none() {
+    if request.username.is_none() {
         return Err(AppError::Validation(
             "No update fields provided".to_string(),
         ));

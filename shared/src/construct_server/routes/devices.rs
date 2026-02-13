@@ -281,9 +281,7 @@ pub async fn register_device_v2(
             device_id = %request.device_id,
             "Attempted to register existing device_id"
         );
-        return Err(AppError::Validation(
-            "Device already registered".to_string(),
-        ));
+        return Err(AppError::Conflict("Device already exists".to_string()));
     }
 
     // 6. Verify PoW solution
@@ -389,13 +387,28 @@ pub async fn register_device_v2(
             AppError::Unknown(e)
         })?;
 
-    let (refresh_token, _, _) = app_context
+    let (refresh_token, refresh_jti, _) = app_context
         .auth_manager
         .create_refresh_token(&user.id)
         .map_err(|e| {
-            tracing::error!(error = %e, "Failed to create refresh token");
-            AppError::Unknown(e)
-        })?;
+        tracing::error!(error = %e, "Failed to create refresh token");
+        AppError::Unknown(e)
+    })?;
+
+    // Store refresh token in Redis
+    {
+        let mut queue = app_context.queue.lock().await;
+        let refresh_ttl_seconds =
+            app_context.config.refresh_token_ttl_days * construct_config::SECONDS_PER_DAY;
+
+        if let Err(e) = queue
+            .store_refresh_token(&refresh_jti, &user.id.to_string(), refresh_ttl_seconds)
+            .await
+        {
+            tracing::error!(error = %e, "Failed to store refresh token");
+            // Continue anyway - token was created, just not tracked
+        }
+    }
 
     let now = chrono::Utc::now().timestamp();
     let expires_in = (exp_timestamp - now) as u64;
@@ -512,13 +525,28 @@ pub async fn authenticate_device(
             AppError::Unknown(e)
         })?;
 
-    let (refresh_token, _, _) = app_context
+    let (refresh_token, refresh_jti, _) = app_context
         .auth_manager
         .create_refresh_token(&user_id)
         .map_err(|e| {
-            tracing::error!(error = %e, "Failed to create refresh token");
-            AppError::Unknown(e)
-        })?;
+        tracing::error!(error = %e, "Failed to create refresh token");
+        AppError::Unknown(e)
+    })?;
+
+    // Store refresh token in Redis
+    {
+        let mut queue = app_context.queue.lock().await;
+        let refresh_ttl_seconds =
+            app_context.config.refresh_token_ttl_days * construct_config::SECONDS_PER_DAY;
+
+        if let Err(e) = queue
+            .store_refresh_token(&refresh_jti, &user_id.to_string(), refresh_ttl_seconds)
+            .await
+        {
+            tracing::error!(error = %e, "Failed to store refresh token");
+            // Continue anyway - token was created, just not tracked
+        }
+    }
 
     let expires_in = (exp_timestamp - now) as u64;
 
@@ -636,7 +664,7 @@ pub async fn get_pow_challenge(
             .map_err(|e| AppError::Internal(format!("Failed to check rate limit: {}", e)))?;
 
         if count >= max_challenges as i64 {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::TooManyRequests(format!(
                 "Rate limit exceeded: max {} challenges per hour",
                 max_challenges
             )));
