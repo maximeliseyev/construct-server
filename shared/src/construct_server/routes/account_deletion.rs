@@ -107,24 +107,40 @@ pub async fn get_delete_challenge(
 ) -> Result<impl IntoResponse, AppError> {
     let user_id = user.0;
 
+    // First, verify user exists (in case they were already deleted)
+    let user_exists = db::get_user_by_id(&app_context.db_pool, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to check if user exists");
+            AppError::Unknown(e)
+        })?;
+    
+    if user_exists.is_none() {
+        tracing::warn!(
+            user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
+            "User not found (already deleted?)"
+        );
+        return Err(AppError::NotFound("User not found".to_string()));
+    }
+
     // Get user's primary device
     let device_opt = db::get_user_primary_device(&app_context.db_pool, &user_id)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "Failed to get user's primary device");
+            tracing::error!(error = %e, "Failed to query user's primary device");
             AppError::Unknown(e)
         })?;
     
-    // TEMPORARY FIX: If no device found, this is a legacy user without device registration
-    // Return helpful error message suggesting they contact support or re-register
+    // If no device found, this is a user registered without device-based auth
+    // (should not happen with current registration flow)
     let device = device_opt.ok_or_else(|| {
         tracing::warn!(
             user_hash = %log_safe_id(&user_id.to_string(), &app_context.config.logging.hash_salt),
-            "No device found for user - legacy account without device"
+            "No device found for user - account without device registration"
         );
         AppError::Validation(
-            "Your account was created before device-based authentication. \
-            Please contact support or create a new account to enable secure deletion.".to_string()
+            "Your account does not have device-based authentication enabled. \
+            Please contact support to enable secure account deletion.".to_string()
         )
     })?;
 
