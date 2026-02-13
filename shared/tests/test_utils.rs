@@ -150,21 +150,22 @@ pub async fn cleanup_rate_limits(redis_url: &str) {
 
     let client = redis::Client::open(redis_url).ok();
     if let Some(client) = client
-        && let Ok(mut conn) = client.get_multiplexed_async_connection().await {
-            let patterns = vec![
-                "rate:*",
-                "rate:login:*",
-                "rate:register:*",
-                "rate:combined:*",
-            ];
+        && let Ok(mut conn) = client.get_multiplexed_async_connection().await
+    {
+        let patterns = vec![
+            "rate:*",
+            "rate:login:*",
+            "rate:register:*",
+            "rate:combined:*",
+        ];
 
-            for pattern in patterns {
-                let keys: Vec<String> = conn.keys(pattern).await.unwrap_or_default();
-                if !keys.is_empty() {
-                    let _: Result<(), _> = conn.del(&keys).await;
-                }
+        for pattern in patterns {
+            let keys: Vec<String> = conn.keys(pattern).await.unwrap_or_default();
+            if !keys.is_empty() {
+                let _: Result<(), _> = conn.del(&keys).await;
             }
         }
+    }
 }
 
 /// Spawn auth service
@@ -508,14 +509,15 @@ fn solve_pow(challenge: &str, difficulty: u32) -> (u64, String) {
         let input = format!("{}{}", challenge, nonce);
 
         if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt)
-            && let Some(h) = hash.hash {
-                let hash_bytes = h.as_bytes();
-                let leading_zeros = count_leading_zero_bits(hash_bytes);
+            && let Some(h) = hash.hash
+        {
+            let hash_bytes = h.as_bytes();
+            let leading_zeros = count_leading_zero_bits(hash_bytes);
 
-                if leading_zeros >= difficulty {
-                    return (nonce, hex::encode(hash_bytes));
-                }
+            if leading_zeros >= difficulty {
+                return (nonce, hex::encode(hash_bytes));
             }
+        }
     }
 
     unreachable!("PoW should always find a solution")

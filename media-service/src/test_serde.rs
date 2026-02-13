@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use crate::types::*;
-    
 
     #[test]
     fn test_health_response_serialization() {

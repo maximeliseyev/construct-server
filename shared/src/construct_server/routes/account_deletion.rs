@@ -399,9 +399,10 @@ async fn perform_account_deletion(
 
     // 2. Delete delivery ACK data (GDPR compliance)
     if let Some(ack_manager) = &app_context.delivery_ack_manager
-        && let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await {
-            tracing::warn!(error = %e, "Failed to delete delivery ACK data");
-        }
+        && let Err(e) = ack_manager.delete_user_data(&user_id.to_string()).await
+    {
+        tracing::warn!(error = %e, "Failed to delete delivery ACK data");
+    }
 
     // 3. Untrack user online status
     {

@@ -372,15 +372,15 @@ pub async fn send_message(
                         && let Err(e) = pending_storage
                             .update_kafka_info(&temp_id, partition, offset)
                             .await
-                        {
-                            tracing::warn!(
-                                error = %e,
-                                temp_id = %temp_id,
-                                partition = partition,
-                                offset = offset,
-                                "Failed to update pending message with Kafka info"
-                            );
-                        }
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            temp_id = %temp_id,
+                            partition = partition,
+                            offset = offset,
+                            "Failed to update pending message with Kafka info"
+                        );
+                    }
                 }
                 Err(e) => {
                     use crate::kafka::CircuitBreakerError;

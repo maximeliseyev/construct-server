@@ -296,27 +296,28 @@ mod tests {
             let salt = SaltString::encode_b64(derived_salt.as_bytes()).unwrap();
 
             if let Ok(hash) = argon2.hash_password(input.as_bytes(), &salt)
-                && let Some(h) = hash.hash {
-                    let hash_bytes = h.as_bytes();
-                    let leading_zeros = count_leading_zero_bits(hash_bytes);
+                && let Some(h) = hash.hash
+            {
+                let hash_bytes = h.as_bytes();
+                let leading_zeros = count_leading_zero_bits(hash_bytes);
 
-                    if leading_zeros >= 4 {
-                        let hash_hex = hex::encode(hash_bytes);
+                if leading_zeros >= 4 {
+                    let hash_hex = hex::encode(hash_bytes);
 
-                        // Verify our verification function works
-                        assert!(verify_pow_solution(challenge, test_nonce, &hash_hex, 4));
-                        assert!(!verify_pow_solution(
-                            challenge,
-                            test_nonce + 1,
-                            &hash_hex,
-                            4
-                        ));
-                        assert!(!verify_pow_solution(challenge, test_nonce, &hash_hex, 12));
+                    // Verify our verification function works
+                    assert!(verify_pow_solution(challenge, test_nonce, &hash_hex, 4));
+                    assert!(!verify_pow_solution(
+                        challenge,
+                        test_nonce + 1,
+                        &hash_hex,
+                        4
+                    ));
+                    assert!(!verify_pow_solution(challenge, test_nonce, &hash_hex, 12));
 
-                        println!("Found valid nonce: {} (hash: {})", test_nonce, hash_hex);
-                        return;
-                    }
+                    println!("Found valid nonce: {} (hash: {})", test_nonce, hash_hex);
+                    return;
                 }
+            }
         }
 
         // If we didn't find a nonce in 1000 attempts, that's OK for difficulty 4

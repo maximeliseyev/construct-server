@@ -507,13 +507,14 @@ async fn test_get_key_bundle_includes_signed_prekey_signature() {
 
     // Check that supported_suites contains signed_prekey_signature
     if let Some(suites) = bundle_data_json["supportedSuites"].as_array()
-        && let Some(first_suite) = suites.first() {
-            // signedPrekeySignature should be present
-            assert!(
-                first_suite.get("signedPrekeySignature").is_some(),
-                "signedPrekeySignature should be present in device key bundle"
-            );
-        }
+        && let Some(first_suite) = suites.first()
+    {
+        // signedPrekeySignature should be present
+        assert!(
+            first_suite.get("signedPrekeySignature").is_some(),
+            "signedPrekeySignature should be present in device key bundle"
+        );
+    }
 }
 
 #[tokio::test]
