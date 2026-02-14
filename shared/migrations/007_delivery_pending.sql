@@ -30,12 +30,12 @@ CREATE TABLE IF NOT EXISTS delivery_pending (
 
     -- Expiration timestamp (UTC)
     -- Messages older than DELIVERY_EXPIRY_DAYS (default 7) are automatically cleaned
-    expires_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
 
     -- Creation timestamp (UTC) for audit/debugging
     -- NOTE: This could leak timing correlation metadata
     -- Consider removing in production for maximum privacy
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 -- Index for efficient expiry cleanup

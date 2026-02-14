@@ -195,8 +195,11 @@ build:
 	@echo "$(COLOR_SUCCESS)✅ Build complete$(COLOR_RESET)"
 
 test:
+	@echo "$(COLOR_INFO)🔑 Generating test keys...$(COLOR_RESET)"
+	@./scripts/generate_test_keys.sh
 	@echo "$(COLOR_INFO)🧪 Running tests...$(COLOR_RESET)"
-	@cargo test --workspace --lib
+	@cargo test --all-targets -- --test-threads=1 || (EXIT_CODE=$$?; ./scripts/cleanup_test_keys.sh; exit $$EXIT_CODE)
+	@./scripts/cleanup_test_keys.sh
 	@echo "$(COLOR_SUCCESS)✅ Tests passed$(COLOR_RESET)"
 
 check:

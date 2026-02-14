@@ -126,11 +126,18 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Generate test keys
+        run: ./scripts/generate_test_keys.sh
+
       - name: Build
         run: cargo build --all-targets
 
       - name: Run tests
         run: cargo test --all-targets -- --test-threads=1
+
+      - name: Cleanup test keys
+        if: always()
+        run: ./scripts/cleanup_test_keys.sh
 
   # Build all binaries
   build:
