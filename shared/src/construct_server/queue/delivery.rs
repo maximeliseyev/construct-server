@@ -119,21 +119,63 @@ impl<'a> DeliveryManager<'a> {
             .map(|entry| (entry.id, entry.fields))
             .collect();
 
-        // After reading, delete messages from the stream if since_id was provided
-        // This means the client is acknowledging receipt up to this point
-        if since_id.is_some() && !messages.is_empty() {
-            let message_ids: Vec<&str> = messages.iter().map(|(id, _)| id.as_str()).collect();
-            let deleted_count = self
-                .client
-                .xdel(stream_key, &message_ids)
-                .await
-                .context("Failed to delete messages from stream after reading")?;
+        // After reading new messages, delete old acknowledged messages from the stream
+        // The since_id represents the last message ID the client received in the PREVIOUS request
+        // This means the client is acknowledging receipt of all messages UP TO AND INCLUDING since_id
+        //
+        // IMPORTANT: We delete acknowledged messages (≤ since_id), NOT the newly read messages
+        // This allows the client to process messages before they are deleted
+        if let Some(ack_id) = since_id {
+            // Use XTRIM with MINID to efficiently remove old messages
+            // Format: XTRIM stream MINID <id> - keeps messages with ID >= id
+            // We want to keep messages AFTER ack_id, so use next ID after ack_id
 
-            tracing::debug!(
-                stream_key = %stream_key,
-                deleted_count,
-                "Deleted messages from Redis stream after client acknowledged"
-            );
+            let next_id_after_ack = if let Some((ts_str, seq_str)) = ack_id.split_once('-') {
+                if let (Ok(ts), Ok(_seq)) = (ts_str.parse::<u64>(), seq_str.parse::<u64>()) {
+                    // Next ID is either same timestamp with seq+1, or next timestamp with seq 0
+                    // Since we don't know if there are more messages at same timestamp,
+                    // use (timestamp+1)-0 to be safe
+                    format!("{}-0", ts + 1)
+                } else {
+                    // Invalid format, skip deletion
+                    tracing::warn!(stream_key = %stream_key, ack_id = %ack_id, "Invalid stream ID format");
+                    return Ok(messages);
+                }
+            } else {
+                tracing::warn!(stream_key = %stream_key, ack_id = %ack_id, "Invalid stream ID format (no dash)");
+                return Ok(messages);
+            };
+
+            // Use raw Redis command for XTRIM MINID
+            let trim_result: Result<i64, redis::RedisError> = redis::cmd("XTRIM")
+                .arg(stream_key)
+                .arg("MINID")
+                .arg(&next_id_after_ack)
+                .query_async(self.client.connection_mut())
+                .await;
+
+            match trim_result {
+                Ok(deleted_count) => {
+                    if deleted_count > 0 {
+                        tracing::debug!(
+                            stream_key = %stream_key,
+                            ack_id = %ack_id,
+                            min_id_kept = %next_id_after_ack,
+                            deleted_count,
+                            "Trimmed acknowledged messages from Redis stream"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        stream_key = %stream_key,
+                        ack_id = %ack_id,
+                        "Failed to trim acknowledged messages from stream (non-fatal)"
+                    );
+                    // Non-fatal - messages will accumulate but delivery still works
+                }
+            }
         }
 
         Ok(messages)

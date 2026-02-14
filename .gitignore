@@ -33,6 +33,7 @@ venv/
 # RSA/PEM Keys
 *.pem
 shared/tests/keys/
+prkeys/
 
 # IDE
 .vscode/
