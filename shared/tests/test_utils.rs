@@ -96,10 +96,16 @@ async fn create_test_config(db_name: &str) -> Config {
     let mut config = Config::from_env().expect("Failed to read base config from .env.test");
 
     // Override database for test isolation (unique DB per test)
-    config.database_url = format!(
-        "postgres://construct:construct_dev_password@localhost:5432/{}",
-        db_name
-    );
+    // Use DATABASE_URL from env or fallback to local dev credentials
+    let base_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://construct:construct_dev_password@localhost:5432/postgres".to_string()
+    });
+
+    config.database_url = if let Some(pos) = base_url.rfind('/') {
+        format!("{}/{}", &base_url[..pos], db_name)
+    } else {
+        format!("{}/{}", base_url, db_name)
+    };
 
     config
 }
@@ -119,11 +125,21 @@ fn try_read_key_file(paths: &[&str]) -> Result<String, std::io::Error> {
 
 /// Create test database
 async fn setup_test_database(db_name: &str) -> PgPool {
-    let mut connection = PgConnection::connect(
-        "postgres://construct:construct_dev_password@localhost:5432/postgres",
-    )
-    .await
-    .expect("Failed to connect to Postgres");
+    // Use DATABASE_URL from env or fallback to local dev credentials
+    let base_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://construct:construct_dev_password@localhost:5432/postgres".to_string()
+    });
+
+    // Extract base connection info (without database name)
+    let base_url_without_db = if let Some(pos) = base_url.rfind('/') {
+        format!("{}/postgres", &base_url[..pos])
+    } else {
+        base_url.clone()
+    };
+
+    let mut connection = PgConnection::connect(&base_url_without_db)
+        .await
+        .expect("Failed to connect to Postgres");
 
     // Drop if exists and create fresh
     let _ = connection
@@ -135,10 +151,12 @@ async fn setup_test_database(db_name: &str) -> PgPool {
         .await
         .expect("Failed to create database");
 
-    let db_url = format!(
-        "postgres://construct:construct_dev_password@localhost:5432/{}",
-        db_name
-    );
+    // Build database URL using same credentials
+    let db_url = if let Some(pos) = base_url.rfind('/') {
+        format!("{}/{}", &base_url[..pos], db_name)
+    } else {
+        format!("{}/{}", base_url, db_name)
+    };
 
     let db_pool = PgPool::connect(&db_url)
         .await
