@@ -29,7 +29,8 @@ fn start_service(package_name: &str, port: u16) -> Child {
         .env("PORT", port.to_string())
         .env(
             "DATABASE_URL",
-            "postgres://construct:construct_dev_password@localhost:5432/construct_test",
+            std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgres://construct:construct_dev_password@localhost:5432/construct_test".to_string()),
         )
         .env("REDIS_URL", "redis://localhost:6379")
         .env("JWT_SECRET", "test_jwt_secret_for_microservices_testing")

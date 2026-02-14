@@ -28,11 +28,20 @@ use uuid::Uuid;
 
 /// Helper to create test database
 async fn setup_test_database(db_name: &str) -> PgPool {
-    let mut connection = PgConnection::connect(
-        "postgres://construct:construct_dev_password@localhost:5432/postgres",
-    )
-    .await
-    .expect("Failed to connect to Postgres");
+    // Use DATABASE_URL from env or fallback to local dev credentials
+    let base_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://construct:construct_dev_password@localhost:5432/postgres".to_string());
+    
+    // Extract base connection info (without database name)
+    let base_url_without_db = if let Some(pos) = base_url.rfind('/') {
+        format!("{}/postgres", &base_url[..pos])
+    } else {
+        base_url.clone()
+    };
+    
+    let mut connection = PgConnection::connect(&base_url_without_db)
+        .await
+        .expect("Failed to connect to Postgres");
 
     // Drop existing test database (ignore errors if doesn't exist)
     let _ = connection
@@ -46,10 +55,12 @@ async fn setup_test_database(db_name: &str) -> PgPool {
         .expect("Failed to create test database");
 
     // Connect to test database
-    let db_url = format!(
-        "postgres://construct:construct_dev_password@localhost:5432/{}",
-        db_name
-    );
+    let db_url = if let Some(pos) = base_url.rfind('/') {
+        format!("{}/{}", &base_url[..pos], db_name)
+    } else {
+        format!("{}/{}", base_url, db_name)
+    };
+    
     let pool = PgPool::connect(&db_url)
         .await
         .expect("Failed to connect to test database");
